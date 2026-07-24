@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    // Node runs the .ts sources directly via type stripping, so tsc is a
+    // checker only. These two keep the sources runnable as-is.
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": [
+    "engine/**/*.ts",
+    "scenario/**/*.ts",
+    "scheduler/**/*.ts",
+    "harness/**/*.ts",
+    "scripts/**/*.ts"
+  ],
+  "exclude": ["node_modules", "web"]
+}

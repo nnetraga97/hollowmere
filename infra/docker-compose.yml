@@ -1,0 +1,49 @@
+name: hollowmere
+
+# Local 3-node CockroachDB cluster.
+# Three nodes are required (not one) so the node-kill resilience demo and the
+# concurrent-contention tests exercise real multi-node behaviour.
+
+x-crdb: &crdb
+  image: cockroachdb/cockroach:v26.2.4
+  restart: unless-stopped
+  volumes:
+    - type: tmpfs
+      target: /cockroach/cockroach-data
+
+services:
+  crdb1:
+    <<: *crdb
+    container_name: hollowmere-crdb1
+    hostname: crdb1
+    command: start --insecure --advertise-addr=crdb1 --join=crdb1,crdb2,crdb3
+    ports:
+      - "26257:26257" # SQL
+      - "8080:8080" # DB console
+
+  crdb2:
+    <<: *crdb
+    container_name: hollowmere-crdb2
+    hostname: crdb2
+    command: start --insecure --advertise-addr=crdb2 --join=crdb1,crdb2,crdb3
+    ports:
+      - "26258:26257"
+
+  crdb3:
+    <<: *crdb
+    container_name: hollowmere-crdb3
+    hostname: crdb3
+    command: start --insecure --advertise-addr=crdb3 --join=crdb1,crdb2,crdb3
+    ports:
+      - "26259:26257"
+
+  # Runs once to initialise the cluster, then exits.
+  init:
+    image: cockroachdb/cockroach:v26.2.4
+    container_name: hollowmere-crdb-init
+    command: init --insecure --host=crdb1
+    depends_on:
+      - crdb1
+      - crdb2
+      - crdb3
+    restart: on-failure

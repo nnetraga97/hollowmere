@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.local
+*.log
+
+# Scratch / generated
+.superpowers/
+dist/
+.next/
+coverage/
+
+# macOS
+.DS_Store
+
+# Downloaded installers and other stray binaries
+*.pkg
+*.dmg

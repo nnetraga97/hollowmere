@@ -1,0 +1,36 @@
+{
+  "name": "hollowmere",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A visual stress test for persistent multi-agent memory, misinformation propagation, and transactional consistency on CockroachDB.",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "engine",
+    "scheduler",
+    "harness"
+  ],
+  "scripts": {
+    "preflight": "./scripts/preflight.sh",
+    "db:up": "docker compose -f infra/docker-compose.yml up -d",
+    "db:down": "docker compose -f infra/docker-compose.yml down",
+    "db:sql": "docker exec -it hollowmere-crdb1 ./cockroach sql --insecure",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --env-file-if-exists=.env --test \"engine/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test",
+    "check:bedrock": "node --env-file-if-exists=.env scripts/check-bedrock.ts",
+    "seed": "node --env-file-if-exists=.env scripts/seed.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.700.0",
+    "pg": "^8.13.1"
+  }
+}

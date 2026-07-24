@@ -1,0 +1,289 @@
+{
+  "schemaVersion": 1,
+  "version": "hollowmere-v1",
+  "name": "Hollowmere: The Prince at the Chapel Steps",
+
+  "factions": [
+    {
+      "key": "aldreth",
+      "name": "House Aldreth",
+      "ideology": "The sea feeds Hollowmere. Those who build and sail its ships built this town, and the harbour must not answer to the plough.",
+      "leader": "maren_aldreth",
+      "belligerent": true
+    },
+    {
+      "key": "corvane",
+      "name": "House Corvane",
+      "ideology": "Bread outlasts trade. The land and the mills fed Hollowmere through every famine, and no harbour lord may set himself above the fields.",
+      "leader": "alric_corvane",
+      "belligerent": true
+    },
+    {
+      "key": "unaligned",
+      "name": "The Unaligned",
+      "ideology": "Law, medicine, and mercy serve the town, not a house. They hold beliefs, and they carry gossip, but they take no side.",
+      "leader": "veranne_thule",
+      "belligerent": false
+    }
+  ],
+
+  "districts": [
+    { "key": "harbour", "name": "The Harbour", "controlledBy": "aldreth" },
+    { "key": "millfields", "name": "The Millfields", "controlledBy": "corvane" },
+    { "key": "market", "name": "Market Square", "controlledBy": null },
+    { "key": "chapelward", "name": "The Chapelward", "controlledBy": null },
+    { "key": "tavernrow", "name": "Tavern Row", "controlledBy": null },
+    { "key": "residences", "name": "The Rows", "controlledBy": null }
+  ],
+
+  "locations": [
+    { "key": "market_square", "district": "market", "name": "Market Square", "x": 30, "y": 30, "gossipBonus": 3000 },
+    { "key": "quay", "district": "harbour", "name": "The Quay", "x": 10, "y": 20, "gossipBonus": 1500 },
+    { "key": "shipyard", "district": "harbour", "name": "The Shipyard", "x": 10, "y": 38, "gossipBonus": 1000 },
+    { "key": "mill", "district": "millfields", "name": "The Great Mill", "x": 56, "y": 20, "gossipBonus": 1000 },
+    { "key": "granary", "district": "millfields", "name": "The Granary", "x": 56, "y": 36, "gossipBonus": 1500 },
+    { "key": "fields", "district": "millfields", "name": "The Open Fields", "x": 68, "y": 28, "gossipBonus": 500 },
+    { "key": "chapel", "district": "chapelward", "name": "The Chapel", "x": 30, "y": 8, "gossipBonus": 1200 },
+    { "key": "plaza", "district": "chapelward", "name": "The Chapel Plaza", "x": 30, "y": 18, "gossipBonus": 2500 },
+    { "key": "tavern", "district": "tavernrow", "name": "The Drowned Bell", "x": 18, "y": 46, "gossipBonus": 5000 },
+    { "key": "high_row", "district": "residences", "name": "High Row", "x": 42, "y": 46, "gossipBonus": 800 },
+    { "key": "low_row", "district": "residences", "name": "Low Row", "x": 30, "y": 50, "gossipBonus": 2000 }
+  ],
+
+  "routes": [
+    { "from": "market_square", "to": "quay", "cost": 1 },
+    { "from": "market_square", "to": "shipyard", "cost": 1 },
+    { "from": "market_square", "to": "plaza", "cost": 1 },
+    { "from": "market_square", "to": "tavern", "cost": 1 },
+    { "from": "market_square", "to": "low_row", "cost": 1 },
+    { "from": "market_square", "to": "granary", "cost": 1 },
+    { "from": "quay", "to": "shipyard", "cost": 1 },
+    { "from": "plaza", "to": "chapel", "cost": 1 },
+    { "from": "granary", "to": "mill", "cost": 1 },
+    { "from": "mill", "to": "fields", "cost": 1 },
+    { "from": "granary", "to": "fields", "cost": 1 },
+    { "from": "tavern", "to": "low_row", "cost": 1 },
+    { "from": "low_row", "to": "high_row", "cost": 1 },
+    { "from": "high_row", "to": "plaza", "cost": 1 }
+  ],
+
+  "routineStyles": {
+    "tradesman": { "morning": "@work", "midday": "@work", "evening": "tavern", "night": "@home" },
+    "labourer": { "morning": "@work", "midday": "@work", "evening": "tavern", "night": "@home" },
+    "marketer": { "morning": "market_square", "midday": "market_square", "evening": "tavern", "night": "@home" },
+    "noble": { "morning": "@home", "midday": "plaza", "evening": "high_row", "night": "@home" },
+    "devout": { "morning": "chapel", "midday": "@work", "evening": "chapel", "night": "@home" },
+    "homebody": { "morning": "@home", "midday": "@work", "evening": "@home", "night": "@home" },
+    "watchman": { "morning": "plaza", "midday": "market_square", "evening": "tavern", "night": "plaza" },
+    "wanderer": { "morning": "market_square", "midday": "quay", "evening": "tavern", "night": "low_row" }
+  },
+
+  "agents": [
+    { "key": "edryc_aldreth", "name": "Prince Edryc Aldreth", "faction": "aldreth", "home": "high_row", "work": "plaza", "routine": "noble", "status": "dead",
+      "summary": "The Aldreth heir, found dead at the chapel steps before dawn. He had spent his last week quietly auditing the granary accounts.",
+      "traits": ["careful", "unpopular with the millers"], "credulity": 4000, "talkativeness": 3000 },
+    { "key": "maren_aldreth", "name": "Lady Maren Aldreth", "faction": "aldreth", "home": "high_row", "work": "plaza", "routine": "noble",
+      "summary": "Edryc's younger sister and now the heir of House Aldreth. Grieving in public, calculating in private, and unsure whether she wants justice or advantage.",
+      "traits": ["composed", "ambitious", "grieving"], "credulity": 3000, "talkativeness": 6000 },
+    { "key": "tobias_reeve", "name": "Tobias Reeve", "faction": "aldreth", "home": "low_row", "work": "quay", "routine": "tradesman",
+      "summary": "Harbourmaster. Keeps the tide tables and the ledgers, and believes any death has a paper trail if you look hard enough.",
+      "traits": ["methodical", "stubborn"], "credulity": 2500, "talkativeness": 5000 },
+    { "key": "sella_dorn", "name": "Sella Dorn", "faction": "aldreth", "home": "low_row", "work": "shipyard", "routine": "tradesman",
+      "summary": "Master shipwright. Loyal to the House that pays her yard, and quick to read insult into any Corvane word.",
+      "traits": ["proud", "hot-tempered"], "credulity": 6000, "talkativeness": 7000 },
+    { "key": "garrick_vell", "name": "Garrick Vell", "faction": "aldreth", "home": "low_row", "work": "shipyard", "routine": "tradesman",
+      "summary": "Shipwright and Sella's rival for the yard. Would happily see her discredited, which makes him unusually willing to believe bad news.",
+      "traits": ["envious", "watchful"], "credulity": 7500, "talkativeness": 6500 },
+    { "key": "ilsa_kenner", "name": "Ilsa Kenner", "faction": "aldreth", "home": "low_row", "work": "shipyard", "routine": "tradesman",
+      "summary": "Ropemaker. Hears everything in the yard and repeats most of it, usually improved.",
+      "traits": ["talkative", "warm"], "credulity": 7000, "talkativeness": 9000 },
+    { "key": "bram_atwell", "name": "Bram Atwell", "faction": "aldreth", "home": "low_row", "work": "quay", "routine": "labourer",
+      "summary": "Dockhand with a bad shoulder and a long memory for slights from the mill road.",
+      "traits": ["resentful", "loyal"], "credulity": 8000, "talkativeness": 6000 },
+    { "key": "ned_quilley", "name": "Ned Quilley", "faction": "aldreth", "home": "low_row", "work": "quay", "routine": "labourer",
+      "summary": "Dockhand. Cheerful, credulous, and the fastest route from the quay to the tavern for any piece of news.",
+      "traits": ["cheerful", "gullible"], "credulity": 9000, "talkativeness": 9500 },
+    { "key": "oriel_faskin", "name": "Oriel Faskin", "faction": "aldreth", "home": "low_row", "work": "shipyard", "routine": "tradesman",
+      "summary": "Sailmaker. Sews in silence, listens closely, and speaks only when she is certain — which makes people believe her.",
+      "traits": ["quiet", "credible"], "credulity": 3000, "talkativeness": 2500 },
+    { "key": "perrin_slate", "name": "Perrin Slate", "faction": "aldreth", "home": "low_row", "work": "quay", "routine": "tradesman",
+      "summary": "Cooper. Supplies barrels to both the harbour and the granary, so he is trusted by neither side entirely.",
+      "traits": ["pragmatic", "between worlds"], "credulity": 4500, "talkativeness": 5500 },
+    { "key": "wyn_thatcher", "name": "Wyn Thatcher", "faction": "aldreth", "home": "low_row", "work": "market_square", "routine": "marketer",
+      "summary": "Fishwife with the loudest stall in the square. What she says at dawn is what the town believes by dusk.",
+      "traits": ["loud", "shrewd"], "credulity": 6500, "talkativeness": 9500 },
+    { "key": "caleb_mord", "name": "Caleb Mord", "faction": "aldreth", "home": "low_row", "work": "quay", "routine": "labourer",
+      "summary": "Ferryman. Was on the water the night the prince died and has not said what he saw.",
+      "traits": ["secretive", "uneasy"], "credulity": 4000, "talkativeness": 2000 },
+    { "key": "annet_pike", "name": "Annet Pike", "faction": "aldreth", "home": "low_row", "work": "quay", "routine": "labourer",
+      "summary": "Netmender. Widowed young, sharp with money, and the person others go to when they want a rumour tested.",
+      "traits": ["sceptical", "practical"], "credulity": 2000, "talkativeness": 4500 },
+    { "key": "rusk_baelen", "name": "Rusk Baelen", "faction": "aldreth", "home": "high_row", "work": "quay", "routine": "tradesman",
+      "summary": "Customs clerk. Knows exactly which cargoes never appeared in the ledgers, and knows what that knowledge is worth.",
+      "traits": ["calculating", "compromised"], "credulity": 3000, "talkativeness": 3500 },
+    { "key": "jory_vance", "name": "Jory Vance", "faction": "aldreth", "home": "low_row", "work": "shipyard", "routine": "labourer",
+      "summary": "Shipyard apprentice, sixteen and desperate to matter. Repeats whatever the older hands say, louder.",
+      "traits": ["eager", "impressionable"], "credulity": 9500, "talkativeness": 8000 },
+    { "key": "fen_marrow", "name": "Fen Marrow", "faction": "aldreth", "home": "low_row", "work": "plaza", "routine": "watchman",
+      "summary": "Lamplighter. Walks every street after dark and therefore sees more of Hollowmere at night than anyone alive.",
+      "traits": ["observant", "nocturnal"], "credulity": 3500, "talkativeness": 5000 },
+
+    { "key": "alric_corvane", "name": "Lord Alric Corvane", "faction": "corvane", "home": "high_row", "work": "plaza", "routine": "noble",
+      "summary": "Head of House Corvane. Old, land-proud, and genuinely uncertain whether his own son had a hand in the prince's death.",
+      "traits": ["imperious", "privately afraid"], "credulity": 3500, "talkativeness": 5500 },
+    { "key": "rowan_corvane", "name": "Rowan Corvane", "faction": "corvane", "home": "high_row", "work": "mill", "routine": "noble",
+      "summary": "Alric's son. Was seen near the quay the night of the death and refuses to explain why, which he considers a matter of honour and everyone else considers guilt.",
+      "traits": ["proud", "evasive"], "credulity": 3000, "talkativeness": 3000 },
+    { "key": "mabel_thorn", "name": "Mabel Thorn", "faction": "corvane", "home": "low_row", "work": "mill", "routine": "tradesman",
+      "summary": "Head miller. Runs the Great Mill and considers the harbour a parasite on honest grain.",
+      "traits": ["blunt", "hard-working"], "credulity": 5000, "talkativeness": 7000 },
+    { "key": "osric_gale", "name": "Osric Gale", "faction": "corvane", "home": "low_row", "work": "mill", "routine": "tradesman",
+      "summary": "Second miller. Devout, anxious, and inclined to read a death at the chapel steps as judgement rather than murder.",
+      "traits": ["devout", "anxious"], "credulity": 8500, "talkativeness": 5000 },
+    { "key": "dunstan_reed", "name": "Dunstan Reed", "faction": "corvane", "home": "low_row", "work": "fields", "routine": "labourer",
+      "summary": "Tenant farmer. Owes the Corvanes more than he can repay, so his loyalty is not entirely voluntary.",
+      "traits": ["indebted", "weary"], "credulity": 7000, "talkativeness": 4000 },
+    { "key": "tamsin_vye", "name": "Tamsin Vye", "faction": "corvane", "home": "low_row", "work": "fields", "routine": "labourer",
+      "summary": "Farmer. Lost a brother to a harbour brawl years ago and has never let it go.",
+      "traits": ["bitter", "unforgiving"], "credulity": 8000, "talkativeness": 6500 },
+    { "key": "cuthbert_ash", "name": "Cuthbert Ash", "faction": "corvane", "home": "low_row", "work": "granary", "routine": "tradesman",
+      "summary": "Granary keeper. The prince was auditing his books the week he died, a fact Cuthbert would prefer stayed quiet.",
+      "traits": ["nervous", "meticulous"], "credulity": 5000, "talkativeness": 3000 },
+    { "key": "edda_lyle", "name": "Edda Lyle", "faction": "corvane", "home": "low_row", "work": "market_square", "routine": "marketer",
+      "summary": "Baker. Everyone in Hollowmere passes her counter each morning, and she remembers what each of them said.",
+      "traits": ["motherly", "retentive"], "credulity": 6000, "talkativeness": 9000 },
+    { "key": "silas_wren", "name": "Silas Wren", "faction": "corvane", "home": "low_row", "work": "granary", "routine": "labourer",
+      "summary": "Carter. Hauls grain to the quay daily and is therefore the main conduit of gossip between the two houses.",
+      "traits": ["chatty", "neutral by trade"], "credulity": 7000, "talkativeness": 9000 },
+    { "key": "petra_holm", "name": "Petra Holm", "faction": "corvane", "home": "low_row", "work": "fields", "routine": "labourer",
+      "summary": "Dairymaid. Young, sharp-eyed, and quietly courting a shipwright, which she cannot afford anyone to learn.",
+      "traits": ["secretive", "torn"], "credulity": 5500, "talkativeness": 4000 },
+    { "key": "gideon_stack", "name": "Gideon Stack", "faction": "corvane", "home": "low_row", "work": "granary", "routine": "labourer",
+      "summary": "Thresher. Enormous, slow to anger, and the man both sides would want holding a cudgel if it came to that.",
+      "traits": ["strong", "slow to anger"], "credulity": 6500, "talkativeness": 3000 },
+    { "key": "lark_penn", "name": "Lark Penn", "faction": "corvane", "home": "low_row", "work": "fields", "routine": "homebody",
+      "summary": "Shepherd. Spends days alone above the fields and comes down with strange certainties nobody can source.",
+      "traits": ["solitary", "odd"], "credulity": 9000, "talkativeness": 3500 },
+    { "key": "bertram_croy", "name": "Bertram Croy", "faction": "corvane", "home": "low_row", "work": "market_square", "routine": "tradesman",
+      "summary": "Blacksmith. Shoes horses for both houses and has lately been asked to forge things he would rather not describe.",
+      "traits": ["taciturn", "uneasy"], "credulity": 4000, "talkativeness": 3000 },
+    { "key": "iris_fenn", "name": "Iris Fenn", "faction": "corvane", "home": "low_row", "work": "market_square", "routine": "marketer",
+      "summary": "Weaver. Sells in the square, listens to both sides, and has grown skilled at agreeing with whoever is in front of her.",
+      "traits": ["diplomatic", "evasive"], "credulity": 5000, "talkativeness": 7500 },
+    { "key": "hollis_barrow", "name": "Hollis Barrow", "faction": "corvane", "home": "high_row", "work": "granary", "routine": "tradesman",
+      "summary": "Corvane steward. Manages the House's affairs and would burn a ledger before letting it reach the magistrate.",
+      "traits": ["loyal", "ruthless"], "credulity": 2500, "talkativeness": 4000 },
+    { "key": "clem_ottery", "name": "Clem Ottery", "faction": "corvane", "home": "low_row", "work": "high_row", "routine": "labourer",
+      "summary": "Stablehand at High Row. Sees which nobles ride out at night and to where, and has not yet realised what that is worth.",
+      "traits": ["naive", "well-placed"], "credulity": 8500, "talkativeness": 7000 },
+
+    { "key": "veranne_thule", "name": "Magistrate Veranne Thule", "faction": "unaligned", "home": "high_row", "work": "plaza", "routine": "watchman",
+      "summary": "The town magistrate. Legally obliged to find the truth, politically obliged to survive whichever house wins.",
+      "traits": ["cautious", "principled under pressure"], "credulity": 2000, "talkativeness": 4000 },
+    { "key": "father_ansel", "name": "Father Ansel", "faction": "unaligned", "home": "chapel", "work": "chapel", "routine": "devout",
+      "summary": "Chapel priest. Found the body. Preaches restraint to a town that is rapidly losing interest in restraint.",
+      "traits": ["gentle", "frightened"], "credulity": 5500, "talkativeness": 6000 },
+    { "key": "ambrose_kyte", "name": "Ambrose Kyte", "faction": "unaligned", "home": "high_row", "work": "chapel", "routine": "homebody",
+      "summary": "Physician. Examined the prince's body and recorded a cause of death he is no longer willing to repeat aloud.",
+      "traits": ["precise", "compromised"], "credulity": 2000, "talkativeness": 2000 },
+    { "key": "hester_lowe", "name": "Hester Lowe", "faction": "unaligned", "home": "tavern", "work": "tavern", "routine": "homebody",
+      "summary": "Keeps The Drowned Bell. Serves both houses, hears every version of every story, and sells none of them cheaply.",
+      "traits": ["shrewd", "unshockable"], "credulity": 3000, "talkativeness": 8000 },
+    { "key": "widow_sable", "name": "Widow Sable", "faction": "unaligned", "home": "low_row", "work": "market_square", "routine": "marketer",
+      "summary": "Has outlived three husbands and every previous scandal in Hollowmere. Treats a good rumour as a civic duty.",
+      "traits": ["relentless", "delighted"], "credulity": 8500, "talkativeness": 10000 },
+    { "key": "coran_pell", "name": "Coran Pell", "faction": "unaligned", "home": "low_row", "work": "market_square", "routine": "watchman",
+      "summary": "Town crier. Whatever reaches him becomes official, which is a great deal of power for a man who does not check.",
+      "traits": ["officious", "uncritical"], "credulity": 8000, "talkativeness": 9500 },
+    { "key": "morna_dell", "name": "Morna Dell", "faction": "unaligned", "home": "low_row", "work": "market_square", "routine": "marketer",
+      "summary": "Herbalist. Sold a sleeping draught the week the prince died and has been counting her jars ever since.",
+      "traits": ["watchful", "afraid"], "credulity": 4500, "talkativeness": 3500 },
+    { "key": "jenna_ryle", "name": "Jenna Ryle", "faction": "unaligned", "home": "low_row", "work": "market_square", "routine": "wanderer",
+      "summary": "An orphan of eleven who goes everywhere unnoticed and consequently knows more than any adult in Hollowmere.",
+      "traits": ["invisible", "quick"], "credulity": 7000, "talkativeness": 6000 }
+  ],
+
+  "claims": [
+    { "key": "corvane_ordered_death", "text": "House Corvane ordered the prince's killing to stop his audit of the granary.", "subject": "alric_corvane", "truth": "unknown", "severity": 9500 },
+    { "key": "rowan_at_the_quay", "text": "Rowan Corvane was seen near the quay the night the prince died.", "subject": "rowan_corvane", "truth": "true", "severity": 6000 },
+    { "key": "prince_died_of_sickness", "text": "The prince died of a wasting sickness, and there was never any blade at all.", "subject": "edryc_aldreth", "truth": "unknown", "severity": 2000 },
+    { "key": "maren_welcomed_it", "text": "Lady Maren welcomed her brother's death and moved on the inheritance within the day.", "subject": "maren_aldreth", "truth": "false", "severity": 8000 },
+    { "key": "physician_was_paid", "text": "The physician was paid to leave the wound out of his record.", "subject": "ambrose_kyte", "truth": "unknown", "severity": 8500 },
+    { "key": "granary_books_false", "text": "The granary books have been falsified for years, and the prince had found it.", "subject": "cuthbert_ash", "truth": "true", "severity": 7500 },
+    { "key": "millers_poison_grain", "text": "The millers have been mixing blight into the grain sold to the harbour.", "subject": "mabel_thorn", "truth": "false", "severity": 9000 },
+    { "key": "shipwrights_smuggle_arms", "text": "The shipyard has been landing arms by night for House Aldreth.", "subject": "sella_dorn", "truth": "true", "severity": 7000 },
+    { "key": "magistrate_protects_guilty", "text": "The magistrate already knows who did it and is protecting them.", "subject": "veranne_thule", "truth": "unknown", "severity": 7500 },
+    { "key": "ferryman_saw_it", "text": "The ferryman was on the water that night and saw who came down to the steps.", "subject": "caleb_mord", "truth": "true", "severity": 6500 }
+  ],
+
+  "triggers": [
+    {
+      "key": "prince_laid_to_rest",
+      "condition": { "fact": "tick", "op": "gte", "value": 24 },
+      "effects": [
+        { "verb": "emit_event", "description": "The prince is laid to rest beneath the chapel. Neither House sends word to the other." },
+        { "verb": "add_global_tension", "amount": 600 }
+      ],
+      "priority": 10,
+      "once": true
+    },
+    {
+      "key": "granary_burns",
+      "condition": {
+        "all": [
+          { "fact": "global_tension", "op": "gte", "value": 5500 },
+          { "fact": "stage", "op": "neq", "value": "war" }
+        ]
+      },
+      "effects": [
+        { "verb": "emit_event", "description": "Fire takes the eastern granary before dawn. Nobody will say who was seen leaving it." },
+        { "verb": "seed_rumor", "claim": "millers_poison_grain", "heat": 7000, "valence": -7000 },
+        { "verb": "add_faction_tension", "faction": "corvane", "amount": 1500 },
+        { "verb": "add_global_tension", "amount": 900 }
+      ],
+      "priority": 20,
+      "once": true
+    },
+    {
+      "key": "magistrate_opens_inquiry",
+      "condition": { "fact": "stage", "op": "eq", "value": "trials" },
+      "effects": [
+        { "verb": "emit_event", "description": "Magistrate Thule opens a formal inquiry and summons both Houses to the plaza." },
+        { "verb": "set_negotiation", "faction": "aldreth", "willing": true },
+        { "verb": "set_negotiation", "faction": "corvane", "willing": true }
+      ],
+      "priority": 15,
+      "once": true
+    },
+    {
+      "key": "aldreth_heir_slain",
+      "condition": { "fact": "agent_status", "agent": "maren_aldreth", "op": "eq", "value": "dead" },
+      "effects": [
+        { "verb": "emit_event", "description": "Lady Maren Aldreth is killed. Whatever the cause, the harbour will not hear of an inquiry now." },
+        { "verb": "set_stage", "stage": "war" }
+      ],
+      "priority": 100,
+      "once": true
+    },
+    {
+      "key": "corvane_lord_slain",
+      "condition": { "fact": "agent_status", "agent": "alric_corvane", "op": "eq", "value": "dead" },
+      "effects": [
+        { "verb": "emit_event", "description": "Lord Alric Corvane is killed. The millfields arm themselves before the body is cold." },
+        { "verb": "set_stage", "stage": "war" }
+      ],
+      "priority": 100,
+      "once": true
+    }
+  ],
+
+  "opening": {
+    "location": "plaza",
+    "description": "Prince Edryc Aldreth is found dead at the foot of the chapel steps before dawn. Father Ansel will say only that the body was cold when he reached it.",
+    "seedRumors": [
+      { "claim": "corvane_ordered_death", "heat": 8000, "valence": -8000 },
+      { "claim": "prince_died_of_sickness", "heat": 3500, "valence": 1000 },
+      { "claim": "rowan_at_the_quay", "heat": 5000, "valence": -5000 }
+    ]
+  }
+}
