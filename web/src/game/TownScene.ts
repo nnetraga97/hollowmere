@@ -43,7 +43,13 @@ export class TownScene extends Phaser.Scene {
   private locations = new Map<string, { x: number; y: number }>();
   private hearingMarkers: Phaser.GameObjects.GameObject[] = [];
   private obstacles?: Phaser.Physics.Arcade.StaticGroup;
-  private keys?: Record<'up' | 'down' | 'left' | 'right' | 'interact', Phaser.Input.Keyboard.Key>;
+  private keys?: {
+    up: readonly Phaser.Input.Keyboard.Key[];
+    down: readonly Phaser.Input.Keyboard.Key[];
+    left: readonly Phaser.Input.Keyboard.Key[];
+    right: readonly Phaser.Input.Keyboard.Key[];
+    interact: Phaser.Input.Keyboard.Key;
+  };
   private nearestAgent: string | null = null;
   private overlayCaptured = false;
   private domInputCaptured = false;
@@ -68,22 +74,19 @@ export class TownScene extends Phaser.Scene {
     this.cameras.main.setZoom(1.2);
     this.obstacles = this.physics.add.staticGroup();
     if (this.input.keyboard) {
-      const cursors = this.input.keyboard.createCursorKeys();
+      const key = (code: number) => this.input.keyboard!.addKey(code, false);
       this.keys = {
-        up: this.input.keyboard.addKey('W'),
-        down: this.input.keyboard.addKey('S'),
-        left: this.input.keyboard.addKey('A'),
-        right: this.input.keyboard.addKey('D'),
-        interact: this.input.keyboard.addKey('E'),
+        up: [key(Phaser.Input.Keyboard.KeyCodes.W), key(Phaser.Input.Keyboard.KeyCodes.UP)],
+        down: [key(Phaser.Input.Keyboard.KeyCodes.S), key(Phaser.Input.Keyboard.KeyCodes.DOWN)],
+        left: [key(Phaser.Input.Keyboard.KeyCodes.A), key(Phaser.Input.Keyboard.KeyCodes.LEFT)],
+        right: [key(Phaser.Input.Keyboard.KeyCodes.D), key(Phaser.Input.Keyboard.KeyCodes.RIGHT)],
+        interact: key(Phaser.Input.Keyboard.KeyCodes.E),
       };
-      this.keys.up.on('down', () => undefined);
-      this.input.keyboard.on('keydown-E', () => {
+      this.keys.interact.on('down', () => {
         if (!this.inputCaptured && this.nearestAgent) {
           EventBus.emit('talk-agent', { agentKey: this.nearestAgent });
         }
       });
-      // Arrow keys join WASD in update without replacing the typed keys.
-      this.registry.set('cursors', cursors);
     }
     this.unlisten.push(
       EventBus.on('bootstrap', ({ map, game }) => this.bootstrap(map, game)),
@@ -98,14 +101,13 @@ export class TownScene extends Phaser.Scene {
 
   override update(): void {
     if (!this.player || !this.keys) return;
-    const cursors = this.registry.get('cursors') as Phaser.Types.Input.Keyboard.CursorKeys;
     const body = this.player.body as Phaser.Physics.Arcade.Body;
     body.setVelocity(0);
     if (!this.inputCaptured) {
-      if (this.keys.left.isDown || cursors.left.isDown) body.setVelocityX(-150);
-      if (this.keys.right.isDown || cursors.right.isDown) body.setVelocityX(150);
-      if (this.keys.up.isDown || cursors.up.isDown) body.setVelocityY(-150);
-      if (this.keys.down.isDown || cursors.down.isDown) body.setVelocityY(150);
+      if (this.keys.left.some((key) => key.isDown)) body.setVelocityX(-150);
+      if (this.keys.right.some((key) => key.isDown)) body.setVelocityX(150);
+      if (this.keys.up.some((key) => key.isDown)) body.setVelocityY(-150);
+      if (this.keys.down.some((key) => key.isDown)) body.setVelocityY(150);
       body.velocity.normalize().scale(150);
     }
     this.player.setFlipX(body.velocity.x < 0);
@@ -134,8 +136,11 @@ export class TownScene extends Phaser.Scene {
 
   private syncKeyboardCapture(): void {
     if (!this.input.keyboard) return;
-    if (this.inputCaptured) this.input.keyboard.resetKeys();
-    this.input.keyboard.enabled = !this.inputCaptured;
+    // Keep Phaser listening so key-up events cannot queue or leave a movement
+    // key stuck. Movement and interaction are gated by inputCaptured instead.
+    // The keys themselves are registered without browser-level capture, so
+    // textarea input keeps Space, WASD, arrows, and E.
+    this.input.keyboard.resetKeys();
   }
 
   private get inputCaptured(): boolean {

@@ -19,6 +19,7 @@
     "db:down": "docker compose -f infra/docker-compose.yml down",
     "db:sql": "docker exec -it hollowmere-crdb1 ./cockroach sql --insecure",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
+    "db:reset": "node --env-file-if-exists=.env scripts/reset-local-db.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --env-file-if-exists=.env --test-timeout=60000 --test \"engine/**/*.test.ts\"",
     "test:full": "HOLLOWMERE_SLOW_TESTS=1 node --env-file-if-exists=.env --test-timeout=900000 --test \"engine/**/*.test.ts\"",
@@ -30,8 +31,8 @@
     "sim": "node --env-file-if-exists=.env harness/sim.ts",
     "repl": "node --env-file-if-exists=.env harness/repl.ts",
     "scheduler": "node --env-file-if-exists=.env scheduler/worker.ts",
-    "dashboard": "npm --workspace @hollowmere/web run dev",
-    "web": "npm --workspace @hollowmere/web run dev",
+    "dashboard": "node scripts/web.ts dev",
+    "web": "node scripts/web.ts dev",
     "web:build": "npm --workspace @hollowmere/web run build",
     "web:typecheck": "npm --workspace @hollowmere/web run typecheck"
   },
