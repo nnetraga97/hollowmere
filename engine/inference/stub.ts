@@ -20,6 +20,7 @@ import {
   type CompletionResponse,
   type EmbeddingResponse,
   type InferenceClient,
+  type StreamUsage,
 } from './types.ts';
 
 export const STUB_MODEL_ID = 'stub-reasoning-v1';
@@ -282,12 +283,21 @@ export function createStubClient(options: StubOptions = {}): InferenceClient {
       };
     },
 
-    async *stream(request: CompletionRequest): AsyncIterable<string> {
+    async *stream(request: CompletionRequest): AsyncGenerator<string, StreamUsage, void> {
       await delay();
+      const text = respond(request);
       // Chunked by word so consumers exercise real incremental assembly.
-      for (const word of respond(request).split(' ')) {
+      for (const word of text.split(' ')) {
         yield `${word} `;
       }
+      // Counted the same way `complete` counts, so budget logic is exercised on
+      // the streamed path too. Priced at zero, like all stub usage.
+      return {
+        tokensIn: Math.ceil((request.system.length + request.user.length) / 4),
+        tokensOut: Math.ceil(text.length / 4),
+        modelId: STUB_MODEL_ID,
+        latencyMs,
+      };
     },
 
     async embed(texts: readonly string[]): Promise<EmbeddingResponse> {

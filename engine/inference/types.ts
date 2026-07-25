@@ -71,6 +71,24 @@ export interface EmbeddingResponse {
   latencyMs: number;
 }
 
+/**
+ * What a streamed call cost, delivered as the generator's *return* value once
+ * the last token has been yielded.
+ *
+ * It has to arrive this way rather than as a resolved promise alongside the
+ * stream, because the token counts do not exist until the model says it is
+ * finished — Bedrock reports them on the closing chunk. A caller that only
+ * wants the text can still `for await` and ignore this; a caller that has to
+ * bill for it drives the iterator and reads `done.value`, which is why
+ * `streamWithUsage` exists.
+ */
+export interface StreamUsage {
+  tokensIn: number;
+  tokensOut: number;
+  modelId: string;
+  latencyMs: number;
+}
+
 export interface InferenceClient {
   readonly mode: InferenceMode;
   readonly reasoningModelId: string;
@@ -79,8 +97,32 @@ export interface InferenceClient {
 
   complete(request: CompletionRequest): Promise<CompletionResponse>;
   /** Token-by-token output for player-facing dialogue. */
-  stream(request: CompletionRequest): AsyncIterable<string>;
+  stream(request: CompletionRequest): AsyncGenerator<string, StreamUsage, void>;
   embed(texts: readonly string[]): Promise<EmbeddingResponse>;
+}
+
+/**
+ * Consume a stream to completion, forwarding each token and returning both the
+ * assembled text and what it cost.
+ *
+ * `for await ... of` silently discards a generator's return value, so every
+ * caller that needs the usage would otherwise have to hand-roll the same
+ * `while (!done)` loop — and one that forgot would under-report spend without
+ * failing anything. Having a single helper is what keeps that from happening.
+ */
+export async function streamWithUsage(
+  client: InferenceClient,
+  request: CompletionRequest,
+  onToken?: (token: string) => void,
+): Promise<{ text: string; usage: StreamUsage }> {
+  const stream = client.stream(request);
+  let text = '';
+  for (;;) {
+    const next = await stream.next();
+    if (next.done) return { text, usage: next.value };
+    text += next.value;
+    onToken?.(next.value);
+  }
 }
 
 /** Thrown when a model returns something the engine cannot use. */

@@ -21,17 +21,78 @@ Do this when you want real inference, not before.
 
 ### 1. Enable model access
 
-Model access is per-account **and per-region**, and it is off by default. In the
-AWS console:
+> The **Model access** page has been retired. Access now happens through the
+> **Model catalog**, and the two models we need are enabled by two *different*
+> mechanisms. Both must be done in the console — neither can be completed from
+> the CLI.
 
-1. Go to **Amazon Bedrock** → **Model access** (left sidebar, under Configure).
-2. Choose **Modify model access**.
-3. Enable **Anthropic → Claude Haiku** and **Amazon → Titan Text Embeddings V2**.
-4. Submit. Anthropic models ask for a short use-case description; approval is
-   usually immediate.
+Access is per-account **and per-region**. Confirm the console's region selector
+matches the region you will use; granting access in `us-east-1` does nothing for
+`eu-west-1`.
 
-Confirm the region selector in the console matches the region you will use.
-Access granted in `us-east-1` does nothing for `eu-west-1`.
+Console: **Amazon Bedrock → Model catalog**
+(`https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/model-catalog`)
+
+**Claude Haiku — requires a use-case form.** Open the model, choose *Request
+model access*, and complete the form (company, website, intended use, whether
+output is customer-facing). Approval is usually immediate.
+
+This form is mandatory and cannot be skipped. Attempting the CLI path first
+fails explicitly:
+
+```
+$ aws bedrock create-foundation-model-agreement --model-id anthropic.claude-... --offer-token ...
+AccessDeniedException: You have not filled out the request form.
+                       Fill out the form before getting access.
+```
+
+`list-foundation-model-agreement-offers` will happily return a valid
+`offerToken` beforehand, which makes the CLI route look viable when it is not.
+Fill in the form first; accepting the agreement afterwards can be done either
+way.
+
+**Titan Text Embeddings V2 — requires one invocation from the console.** Amazon's
+own models have no agreement to sign — `list-foundation-model-agreement-offers`
+returns *"Agreement not supported for this model"*. They enable themselves on
+first invocation, but an API call from your own code does **not** appear to
+trigger it. Open the model in the **Playground** and send any input once.
+
+**Grant Haiku in all three profile regions, not just one.** `BEDROCK_REASONING_MODEL`
+is a cross-region inference profile, and the profile decides where each request
+actually lands:
+
+```
+$ aws bedrock get-inference-profile \
+    --inference-profile-identifier us.anthropic.claude-haiku-4-5-20251001-v1:0 \
+    --region us-east-1
+"Routes requests to Anthropic Claude Haiku 4.5 in us-east-1, us-east-2 and us-west-2."
+```
+
+Grant access in only `us-east-1` and roughly two thirds of calls land in a region
+that has not authorised the model. That surfaces as an intermittent
+`AccessDeniedException` under load and nothing at all when you test it once by
+hand — it reads as a flaky bug rather than a config gap. Repeat the console step
+with the region selector on each of `us-east-1`, `us-east-2`, `us-west-2`.
+
+Titan is invoked by its bare model id, so it only needs the region in `AWS_REGION`.
+
+### Confirming it took
+
+`get-foundation-model-availability` is the ground truth, and it is free:
+
+```bash
+for r in us-east-1 us-east-2 us-west-2; do
+  echo -n "$r "
+  aws bedrock get-foundation-model-availability \
+    --model-id anthropic.claude-haiku-4-5-20251001-v1:0 \
+    --region $r --query authorizationStatus --output text
+done
+```
+
+`AUTHORIZED` in all three means the profile is safe to use. Note that
+`entitlementAvailability: AVAILABLE` does **not** mean you have access — it means
+the account *could* have it. Only `authorizationStatus` answers the question, and
+until it flips, every call fails with `ValidationException: Operation not allowed`.
 
 ### 2. Provide credentials
 

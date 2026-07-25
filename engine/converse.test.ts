@@ -156,6 +156,99 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
   });
 
+  test('a reply that fails after the effects commit is not re-applied on retry', async () => {
+    const { worldId, sessionId } = await freshWorld(304);
+
+    // The failure that matters is the one *between* the effects committing and
+    // the reply being persisted — a throttle, a dropped socket, a model the
+    // account is not authorised for. Everything social has already landed, so a
+    // retry that re-runs the whole exchange seeds the rumor twice and moves
+    // belief twice while still looking, to the caller, like one accusation.
+    const stub = createStubClient();
+    const refusesToSpeak = {
+      ...stub,
+      // eslint-disable-next-line require-yield
+      async *stream(): AsyncGenerator<string, never, void> {
+        throw new Error('bedrock closed the stream');
+      },
+    };
+
+    const options = {
+      worldId, sessionId, agentKey: 'tobias_reeve',
+      text: 'Corvane ordered the killing. They are guilty and you know it.',
+      idempotencyKey: 'key-half-done',
+    };
+
+    await assert.rejects(() => converse({ ...options, inference: refusesToSpeak as never }));
+
+    const afterFailure = await query<{ tension: number }>(
+      `SELECT global_tension AS tension FROM world_state WHERE world_id = $1`, [worldId]);
+    const rumorsAfterFailure = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM world_rumors WHERE world_id = $1`, [worldId]);
+    // An accusation moves belief for more than one person, so what matters is
+    // that the retry adds none — not the absolute count.
+    const beliefsAfterFailure = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM belief_updates WHERE world_id = $1`, [worldId]);
+
+    // The retry succeeds, and must report the act and effects that really
+    // happened rather than producing a second set.
+    const retry = await converse({ ...options, inference: stub });
+    assert.equal(retry.replayed, true, 'the effects already landed; the retry must not redo them');
+    assert.equal(retry.act, 'accuse');
+
+    const rumorsAfterRetry = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM world_rumors WHERE world_id = $1`, [worldId]);
+    assert.equal(
+      rumorsAfterRetry[0]!.count, rumorsAfterFailure[0]!.count,
+      'the accusation seeded one rumor, not two',
+    );
+
+    const afterRetry = await query<{ tension: number }>(
+      `SELECT global_tension AS tension FROM world_state WHERE world_id = $1`, [worldId]);
+    assert.equal(
+      afterRetry[0]!.tension, afterFailure[0]!.tension,
+      'tension was raised once, not once per attempt',
+    );
+
+    const beliefsAfterRetry = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM belief_updates WHERE world_id = $1`, [worldId]);
+    assert.equal(
+      beliefsAfterRetry[0]!.count, beliefsAfterFailure[0]!.count,
+      'belief moved once, not once per attempt',
+    );
+
+    // Every player write still sits in its own band, including the resumed one.
+    const stray = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM world_events
+        WHERE world_id = $1 AND seq < $2 AND kind IN ('player_command','dialogue')`,
+      [worldId, PLAYER_SEQ_BASE]);
+    assert.equal(stray[0]!.count, 0, 'a resumed command never writes below the player band');
+
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
+  });
+
+  test('conversation is charged to the world budget', async () => {
+    const { worldId, sessionId } = await freshWorld(305);
+
+    await converse({
+      worldId, sessionId, agentKey: 'tobias_reeve',
+      text: 'What happened at the quay?',
+      idempotencyKey: 'key-budget', inference: createStubClient(),
+    });
+
+    // Two calls per exchange: one classification, one reply. Without this the
+    // per-world cap sees only the scheduler's cognition and a player can talk
+    // for free — forever, on a world anyone can create.
+    const budget = await query<{ calls: number; tokens_in: number; tokens_out: number }>(
+      `SELECT inference_calls AS calls, tokens_in, tokens_out
+         FROM world_budget WHERE world_id = $1`, [worldId]);
+    assert.equal(budget[0]!.calls, 2, 'classification and reply are both counted');
+    assert.ok(budget[0]!.tokens_in > 0, 'input tokens are attributed');
+    assert.ok(budget[0]!.tokens_out > 0, 'the streamed reply reports its output tokens');
+
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
+  });
+
   test('an accusation is carried onward by whoever heard it', async () => {
     const { worldId, sessionId } = await freshWorld(303);
     const inference = createStubClient();

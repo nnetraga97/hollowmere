@@ -4,7 +4,7 @@
 
 ## STATUS — 2026-07-25
 
-**Phase 1 (engine): 12 of 12 milestones complete. 177 tests passing, typecheck clean.**
+**Phase 1 (engine): 12 of 12 milestones complete. 179 tests passing, typecheck clean.**
 
 | # | Milestone | State | Evidence |
 |---|---|---|---|
@@ -17,7 +17,7 @@
 | 7 | Gossip + beliefs | **done** | 18 tests incl. polarization + misinformation |
 | 8 | Tension / stages / peace / triggers | **done** | 20 tests — monotonic stages, rules-only peace, hard triggers |
 | 9 | `runTick` + scheduler | **done** | 14 tests — canonical arc, split-brain, cross-world determinism |
-| 10 | `converse` | **done** | 13 tests — idempotency, peace path, injection corpus, contention |
+| 10 | `converse` | **done** | 15 tests — idempotency incl. resume-after-failure, budget accounting, peace path, injection corpus, contention |
 | 11 | Harness | **done** | `harness/sim.ts` headless runner, `harness/repl.ts` |
 | 12 | Debug dashboard | **done** | `web/` read-only server + single-page instrument |
 
@@ -97,10 +97,66 @@ Items 1–8 are unchanged from the previous status. New in this phase:
 
 ### Blocked / waiting
 
-- **Bedrock model access.** Unchanged: credentials, IAM, region, and
-  entitlement all verify clean; only `authorizationStatus` is `NOT_AUTHORIZED`,
-  which is fresh-account propagation. Retry `npm run check:bedrock`. Phase 1 is
-  complete on `INFERENCE_MODE=stub`, which is why this still blocks nothing.
+- **Bedrock model access.** Credentials and IAM verify clean
+  (`AmazonBedrockFullAccess`), and entitlement is `AVAILABLE` for both models;
+  only `authorizationStatus` is `NOT_AUTHORIZED`. This is *not* propagation —
+  it is two console steps that cannot be done from the CLI, now written up in
+  `docs/aws-setup.md`. Haiku needs the use-case form in **all three regions the
+  `us.` inference profile routes to** (us-east-1, us-east-2, us-west-2); Titan
+  needs one Playground invocation. Phase 1 is complete on `INFERENCE_MODE=stub`,
+  which is why this still blocks nothing.
+
+### Cloud integration audit — 2026-07-24
+
+Reviewed before starting Phase 2, on the grounds that Phase 2 is entirely built
+on the conversation path. Four defects found and fixed; all were invisible under
+`INFERENCE_MODE=stub` and would have surfaced only once Bedrock was live.
+
+18. **A failed reply used to re-apply the whole conversation.** `converse` wrote
+    the command's outcome payload only *after* the reply streamed, so any failure
+    between the effects committing and the reply landing — a throttle, a dropped
+    socket, an unauthorised model — left a command row that still looked
+    unprocessed. The retry re-seeded the rumor, re-raised tension, and re-moved
+    belief, while reporting itself as one accusation. The payload is now stamped
+    with the act inside the same transaction that applies the effects, so the
+    idempotency guard sees them together. The retry-after-failure path also
+    resumed under `commandSeq: -1, tick: 0`, writing history below
+    `PLAYER_SEQ_BASE` at tick zero where two such retries collided; it now
+    resumes on the command's own sequence at the world's real tick.
+19. **Conversation was not charged to the budget.** `recordUsage` was called only
+    from cognition. The per-world cap — the thing that makes a public deployment
+    safe — was metering the scheduler's calls, which are already bounded by
+    spotlight size, and ignoring the one path a player can drive at will. Both
+    the classification and the reply are now counted, each inside the transaction
+    it belongs to (safe under `40001` retry, since a rollback undoes the
+    increment). An exhausted budget degrades conversation to the stub rather than
+    refusing it, matching how cognition already behaves.
+20. **`stream` reported no token counts.** It yielded text and dropped Bedrock's
+    `amazon-bedrock-invocationMetrics` closing chunk, so dialogue spend was not
+    merely uncharged but unmeasurable. `stream` now returns a `StreamUsage` as
+    the generator's return value; `streamWithUsage` is the helper that keeps
+    callers from silently discarding it with a bare `for await`.
+21. **The Bedrock client had no timeouts.** `NodeHttpHandler` defaults to waiting
+    forever, so a hung call inside `runTick` step 4 would stall the tick while the
+    scheduler still held that world's lease — on Fargate, a task stuck with no
+    error to show for it. Connect/request timeouts and `maxAttempts` are now set
+    explicitly and are env-overridable.
+
+### Cloud items still open
+
+- **Nova Lite fallback** (§2, and §13's throttling mitigation) does not exist.
+  Cognition degrades on budget exhaustion but not on throttling, and `converse`
+  simply throws. Worth having before the video is recorded against live Bedrock.
+- **TLS to CockroachDB Cloud.** `engine/db.ts` builds the pool from
+  `DATABASE_URL` with no `ssl` config, and `pg-connection-string` maps
+  `sslmode=require` to `rejectUnauthorized: false` — unverified TLS that looks
+  secure. Use `verify-full` with the Cloud CA explicitly in Phase 3.
+- **`db/read-only-role.sql` creates a passwordless `LOGIN` role.** Cloud requires
+  password auth, so the dashboard and the MCP Town Investigator cannot connect as
+  written.
+- **`scripts/migrate.ts` applies all of `schema.sql` in one `client.query()`** —
+  a single implicit transaction over 32 tables plus vector indexes. Fine locally;
+  worth splitting before meeting Cloud's schema-change limits on the day.
 
 ### Known gaps to address next
 

@@ -281,18 +281,28 @@ export async function think(
 
     const beliefs = await loadActionableBeliefs(client, ctx.worldId, agent.agentId);
     const destinations = reachableLocationKeys(ctx, agent);
+    // Exact inputs only. The recalled memory ids are deliberately *not* in here
+    // — see hashInputs.
     const inputHash = hashInputs({
       agentKey: agent.agentKey,
       tick: ctx.tick,
       stage: ctx.stage,
       situationText,
-      memories: memories.map((m) => m.memoryId),
       destinations,
       beliefs: beliefs.map((b) => b.claimKey),
     });
+    const recalledIds = memories.map((m) => m.memoryId);
 
     const recorded = ctx.replay
-      ? await loadRecordedDecision(client, ctx.worldId, ctx.tick, agent.agentId, inputHash)
+      ? await loadRecordedDecision(client, {
+          worldId: ctx.worldId,
+          tick: ctx.tick,
+          agentId: agent.agentId,
+          agentKey: agent.agentKey,
+          inputHash,
+          promptVersion: PLAN_PROMPT_VERSION,
+          recalledIds,
+        })
       : null;
 
     let planned: PlannedAction;
@@ -773,30 +783,59 @@ function reachableLocationKeys(ctx: ThinkContext, agent: SpotlightAgent): string
   return [agent.locationKey, ...neighbours].slice(0, 8);
 }
 
+/**
+ * Hash of the inputs a decision was made from — the *exact* ones only.
+ *
+ * The recalled memory ids used to be in here, and they are the reason replay
+ * could only ever warn. They come from an approximate index, so they can differ
+ * between two runs of an unchanged world; folding them in made the hash unstable
+ * for a reason that is not a real change, which meant a mismatch could not be
+ * treated as an error — and that in turn meant a genuinely changed prompt or a
+ * genuinely diverged world produced nothing but a log line.
+ *
+ * Everything named here is a deterministic rule output, so it must reproduce
+ * exactly when the same world is replayed. That is what lets `loadRecordedDecision`
+ * refuse rather than warn, which is the whole value of a recording: a run you can
+ * only replay approximately is not a run you can trust to stand in for the real
+ * one after the credits, or the model access, are gone.
+ *
+ * Memory drift is still reported — separately, from `decision.recalled` — because
+ * it is a real signal about index recall. It is just no longer conflated with
+ * "these are different inputs".
+ */
 function hashInputs(inputs: unknown): string {
   return createHash('sha256').update(JSON.stringify(inputs)).digest('hex');
+}
+
+interface ReplayLookup {
+  worldId: string;
+  tick: number;
+  agentId: string;
+  agentKey: string;
+  inputHash: string;
+  promptVersion: string;
+  recalledIds: readonly string[];
 }
 
 /**
  * The decision this agent made at this tick, if it was recorded.
  *
- * Matched on `(world, tick, agent)` and *compared* on the input hash rather
- * than matched on it. Replay's promise is that a recorded run re-runs with zero
- * model calls, and hash-matching would break that promise for a reason that is
- * not a real change: the hash covers the recalled memory ids, which come from
- * an approximate index and can legitimately differ between runs. A drifted hash
- * is still worth knowing about — a genuinely changed prompt looks the same —
- * so it is reported rather than swallowed.
+ * Matched on `(world, tick, agent)`, then verified. A mismatch on the exact
+ * inputs or on the prompt version is refused, not reported: replaying a
+ * recording against inputs it was not made from produces a plausible-looking run
+ * that is quietly wrong, which is worse than no run at all.
  */
 async function loadRecordedDecision(
   client: Client,
-  worldId: string,
-  tick: number,
-  agentId: string,
-  inputHash: string,
+  lookup: ReplayLookup,
 ): Promise<PlannedAction | null> {
-  const result = await client.query<{ decision: PlannedAction; input_hash: string }>(
-    `SELECT decision, input_hash FROM cognition_records
+  const { worldId, tick, agentId, agentKey } = lookup;
+  const result = await client.query<{
+    decision: PlannedAction & { recalled?: string[] };
+    input_hash: string;
+    prompt_version: string;
+  }>(
+    `SELECT decision, input_hash, prompt_version FROM cognition_records
       WHERE world_id = $1 AND tick = $2 AND agent_id = $3
       ORDER BY record_id
       LIMIT 1`,
@@ -805,13 +844,43 @@ async function loadRecordedDecision(
 
   const row = result.rows[0];
   if (!row) return null;
-  if (row.input_hash !== inputHash) {
+
+  // Reported before the hash check, because a changed prompt also changes the
+  // hash and "the prompt moved" is the more useful of the two messages.
+  if (row.prompt_version !== lookup.promptVersion) {
+    throw new Error(
+      `replay: agent ${agentKey} at tick ${tick} was recorded under prompt ` +
+        `${row.prompt_version}, but this build uses ${lookup.promptVersion}. ` +
+        `The recording cannot stand in for a run of these prompts; re-record it.`,
+    );
+  }
+
+  if (row.input_hash !== lookup.inputHash) {
+    throw new Error(
+      `replay: agent ${agentKey} at tick ${tick} was recorded from different inputs ` +
+        `(recorded ${row.input_hash.slice(0, 12)}, current ${lookup.inputHash.slice(0, 12)}). ` +
+        `The replayed world has diverged from the recorded one — every input to this ` +
+        `hash is a deterministic rule output, so this is a real difference, not index drift.`,
+    );
+  }
+
+  // Advisory: the ANN index returned a different candidate set than it did when
+  // this was recorded. The decision still stands — it was made from the memories
+  // named in the record, not from these — but a persistent drift here is worth
+  // knowing about, because it is how recall variability announces itself.
+  const recorded = row.decision.recalled;
+  if (recorded && !sameIds(recorded, lookup.recalledIds)) {
     console.warn(JSON.stringify({
-      level: 'warn', event: 'replay_input_drift', worldId, tick, agentId,
-      recorded: row.input_hash.slice(0, 12), current: inputHash.slice(0, 12),
+      level: 'warn', event: 'replay_recall_drift', worldId, tick, agentId,
+      recordedCount: recorded.length, currentCount: lookup.recalledIds.length,
     }));
   }
+
   return row.decision;
+}
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
 export type { BudgetState };

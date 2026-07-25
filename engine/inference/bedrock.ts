@@ -19,13 +19,51 @@ import {
   type CompletionResponse,
   type EmbeddingResponse,
   type InferenceClient,
+  type StreamUsage,
 } from './types.ts';
 
 const ANTHROPIC_VERSION = 'bedrock-2023-05-31';
 
+/**
+ * Timeouts, because the SDK ships without them.
+ *
+ * `NodeHttpHandler` defaults both of these to 0, meaning "wait forever". A
+ * Bedrock call that never answers would then hang inside `runTick` step 4 while
+ * the scheduler still holds that world's lease — the world stops advancing and
+ * nothing times out to say so. On Fargate that is a stuck task, not an error.
+ *
+ * `requestTimeout` is socket *inactivity*, not total duration, so it bounds a
+ * hung connection without cutting off a long stream that is still producing
+ * tokens.
+ */
+const CONNECT_TIMEOUT_MS = Number(process.env.BEDROCK_CONNECT_TIMEOUT_MS ?? 5_000);
+const REQUEST_TIMEOUT_MS = Number(process.env.BEDROCK_REQUEST_TIMEOUT_MS ?? 30_000);
+/** Total attempts, not retries. The SDK backs off on throttling between them. */
+const MAX_ATTEMPTS = Number(process.env.BEDROCK_MAX_ATTEMPTS ?? 4);
+
 interface ClaudeResponse {
   content?: { type: string; text?: string }[];
   usage?: { input_tokens?: number; output_tokens?: number };
+}
+
+/**
+ * The shapes of the streamed chunks we care about.
+ *
+ * Token counts arrive twice and in two different vocabularies: Anthropic's own
+ * `message_start` / `message_delta` usage, and the `amazon-bedrock-invocationMetrics`
+ * block Bedrock appends to the final chunk. The Bedrock block is preferred
+ * because it is what the account is billed on; the Anthropic fields are the
+ * fallback for when it is absent.
+ */
+interface StreamChunk {
+  type?: string;
+  delta?: { type?: string; text?: string };
+  message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+  usage?: { input_tokens?: number; output_tokens?: number };
+  'amazon-bedrock-invocationMetrics'?: {
+    inputTokenCount?: number;
+    outputTokenCount?: number;
+  };
 }
 
 interface TitanResponse {
@@ -66,7 +104,17 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
     'amazon.titan-embed-text-v2:0';
   const dimensions = options.dimensions ?? Number(process.env.BEDROCK_EMBEDDING_DIM ?? 1024);
 
-  const client = new BedrockRuntimeClient({ region });
+  const client = new BedrockRuntimeClient({
+    region,
+    maxAttempts: MAX_ATTEMPTS,
+    // Passed as plain options rather than a constructed NodeHttpHandler so this
+    // module does not have to import @smithy/node-http-handler, which is only a
+    // transitive dependency here.
+    requestHandler: {
+      connectionTimeout: CONNECT_TIMEOUT_MS,
+      requestTimeout: REQUEST_TIMEOUT_MS,
+    },
+  });
   const decoder = new TextDecoder();
 
   const buildBody = (request: CompletionRequest): string =>
@@ -122,7 +170,8 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
       }
     },
 
-    async *stream(request: CompletionRequest): AsyncIterable<string> {
+    async *stream(request: CompletionRequest): AsyncGenerator<string, StreamUsage, void> {
+      const startedAt = Date.now();
       let response;
       try {
         response = await client.send(
@@ -137,17 +186,41 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
         throw new InferenceError(request.task, describe(error), { cause: error });
       }
 
-      for await (const event of response.body ?? []) {
-        const bytes = event.chunk?.bytes;
-        if (!bytes) continue;
-        const chunk = JSON.parse(decoder.decode(bytes)) as {
-          type?: string;
-          delta?: { type?: string; text?: string };
-        };
-        if (chunk.type === 'content_block_delta' && chunk.delta?.text) {
-          yield chunk.delta.text;
+      let tokensIn = 0;
+      let tokensOut = 0;
+
+      try {
+        for await (const event of response.body ?? []) {
+          const bytes = event.chunk?.bytes;
+          if (!bytes) continue;
+          const chunk = JSON.parse(decoder.decode(bytes)) as StreamChunk;
+
+          if (chunk.type === 'content_block_delta' && chunk.delta?.text) {
+            yield chunk.delta.text;
+            continue;
+          }
+
+          // Anthropic's own accounting: input once at the top, output as it
+          // revises the running total on each message_delta.
+          if (chunk.message?.usage?.input_tokens) tokensIn = chunk.message.usage.input_tokens;
+          if (chunk.usage?.output_tokens) tokensOut = chunk.usage.output_tokens;
+
+          // Bedrock's block, on the final chunk. Last word, because it is the
+          // one the bill is computed from.
+          const metrics = chunk['amazon-bedrock-invocationMetrics'];
+          if (metrics) {
+            tokensIn = metrics.inputTokenCount ?? tokensIn;
+            tokensOut = metrics.outputTokenCount ?? tokensOut;
+          }
         }
+      } catch (error) {
+        // A mid-stream failure was previously raw. The caller distinguishes
+        // inference failures from engine failures by type, so it has to be
+        // wrapped here as well as at the initial send.
+        throw new InferenceError(request.task, describe(error), { cause: error });
       }
+
+      return { tokensIn, tokensOut, modelId: reasoningModelId, latencyMs: Date.now() - startedAt };
     },
 
     async embed(texts: readonly string[]): Promise<EmbeddingResponse> {
