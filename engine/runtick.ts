@@ -185,7 +185,11 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
       rng: tickRng(seed, tick, 'gossip'),
       seq,
       inference: options.inference,
-      allowDistortion: options.allowDistortion,
+      // Never on replay. Rewording a retelling is a model call, and unlike
+      // cognition it is recorded nowhere — so a replayed tick with distortion on
+      // would reach a live model for text it cannot reproduce anyway. Replay's
+      // whole promise is that it needs no provider.
+      allowDistortion: options.replay ? false : options.allowDistortion,
     });
 
     const accusations = await runAccusations(client, {

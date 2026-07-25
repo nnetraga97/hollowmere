@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { closePool, query } from './db.ts';
 import { createStubClient } from './inference/index.ts';
 import { runTick } from './runtick.ts';
+import { rewindWorld } from './rewind.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
 
@@ -37,14 +38,16 @@ describe('replay', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
   });
 
   /** Runs a world far enough for at least one cognition round to be recorded. */
-  const recordedWorld = async (seed: number): Promise<{ worldId: string; tick: number }> => {
+  const recordedWorld = async (
+    seed: number, ticks = 12,
+  ): Promise<{ worldId: string; tick: number }> => {
     const world = await instantiateWorld({
       scenarioVersionId, seed, sessionId: `replay-${seed}-${Date.now()}`,
     });
     const inference = createStubClient();
 
     let recordedTick = 0;
-    for (let tick = 1; tick <= 12; tick++) {
+    for (let tick = 1; tick <= ticks; tick++) {
       await runTick({ worldId: world.worldId, inference, allowDistortion: false });
       const records = await query<{ tick: number }>(
         `SELECT tick FROM cognition_records WHERE world_id = $1 ORDER BY tick LIMIT 1`,
@@ -53,6 +56,41 @@ describe('replay', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
     }
     assert.ok(recordedTick > 0, 'the world should have thought at least once');
     return { worldId: world.worldId, tick: recordedTick };
+  };
+
+  interface Snapshot {
+    tick: number; tension: number; stage: string; memories: number; records: number;
+  }
+
+  const snapshot = async (worldId: string): Promise<Snapshot> => {
+    const [state] = await query<{ tick: number; tension: number; stage: string }>(
+      `SELECT w.current_tick AS tick, s.global_tension AS tension,
+              s.escalation_stage AS stage
+         FROM worlds w JOIN world_state s ON s.world_id = w.world_id
+        WHERE w.world_id = $1`, [worldId]);
+    const [counts] = await query<{ memories: number; records: number }>(
+      `SELECT (SELECT count(*) FROM world_memories WHERE world_id = $1)::INT8 AS memories,
+              (SELECT count(*) FROM cognition_records WHERE world_id = $1)::INT8 AS records`,
+      [worldId]);
+    return { ...state!, ...counts! };
+  };
+
+  /** Refuses every call of every kind — what a replay must be able to run against. */
+  const strictReplayClient = (): { client: unknown; calls: () => number } => {
+    let calls = 0;
+    const stub = createStubClient();
+    return {
+      client: {
+        ...stub,
+        complete: async () => { calls++; throw new Error('replay made a reasoning call'); },
+        stream: async function* (): AsyncGenerator<string, never, void> {
+          calls++;
+          throw new Error('replay made a reasoning call');
+        },
+        embed: async () => { calls++; throw new Error('replay made an embedding call'); },
+      },
+      calls: () => calls,
+    };
   };
 
   /**
@@ -123,6 +161,48 @@ describe('replay', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
       /^Error: replay:/,
       'without a rewind, replay must refuse rather than reconstruct a different run',
     );
+
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
+  });
+
+  test('a rewound world replays its recording with no model calls at all', async () => {
+    const TICKS = 14;
+    const { worldId } = await recordedWorld(410, TICKS);
+
+    const live = await snapshot(worldId);
+    assert.ok(live.records > 0, 'the world thought at least once');
+    assert.ok(live.memories > 0, 'and formed memories while it did');
+
+    const rewound = await rewindWorld(worldId);
+    assert.equal(rewound.fromTick, TICKS);
+    assert.equal(rewound.recordsKept, live.records, 'the recording survives the rewind');
+
+    const cleared = await snapshot(worldId);
+    assert.equal(cleared.tick, 0, 'the world is back at the start');
+    assert.equal(cleared.memories, 0, 'and has forgotten everything it learned');
+    assert.equal(cleared.tension, 0);
+    assert.equal(cleared.stage, 'calm');
+
+    // The whole point: no reasoning call, no embedding call, for any tick.
+    const { client, calls } = strictReplayClient();
+    for (let tick = 1; tick <= TICKS; tick++) {
+      await runTick({ worldId, replay: true, inference: client as never });
+    }
+    assert.equal(calls(), 0, 'a replay must reach no model, of any kind');
+
+    const replayed = await snapshot(worldId);
+    assert.equal(replayed.tick, TICKS);
+    assert.equal(replayed.stage, live.stage, 'the same stage was reached');
+    assert.equal(replayed.tension, live.tension, 'along the same tension curve');
+    assert.equal(replayed.memories, live.memories, 'and the same memories were formed');
+
+    // Vectors come from the record, so the memories are genuinely retrievable —
+    // not rows with a NULL embedding that would silently fall out of every ANN
+    // query later.
+    const unembedded = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM world_memories
+        WHERE world_id = $1 AND embedding IS NULL`, [worldId]);
+    assert.equal(unembedded[0]!.count, 0, 'every replayed memory kept its vector');
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
   });

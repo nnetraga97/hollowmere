@@ -28,7 +28,7 @@ import type { Client } from './db.ts';
 import { BELIEF, COGNITION } from './config.ts';
 import { readBudget, recordUsage, type BudgetState } from './budget.ts';
 import { accuseByClaimKey } from './accusations.ts';
-import { recall } from './retrieval.ts';
+import { recall, recordAccesses } from './retrieval.ts';
 import type { RouteGraph } from './movement.ts';
 import { clampUnit, type Fixed } from './fixedpoint.ts';
 import type { Rng } from './rng.ts';
@@ -255,29 +255,31 @@ export async function think(
     );
   }
 
+  const replaying = ctx.replay === true;
+
   // One embedding call for the whole round rather than one per agent. At two to
   // six agents a round this is the difference between 6 calls and 1.
+  //
+  // Skipped entirely on replay. Its only product is the query vector for
+  // `recall`, and a replayed round does not retrieve: the decision comes from
+  // the record, and the memories that fed it are named there. Retrieving again
+  // would cost an embedding call to re-derive — approximately — a list already
+  // stored exactly.
   const situationTexts = situations.map(describeSituation);
-  const situationEmbeddings = await ctx.inference.embed(situationTexts);
-  let tokensIn = situationEmbeddings.tokensIn;
+  const situationEmbeddings = replaying ? null : await ctx.inference.embed(situationTexts);
+  let tokensIn = situationEmbeddings?.tokensIn ?? 0;
   let tokensOut = 0;
-  let calls = 1;
+  let calls = replaying ? 0 : 1;
 
   const decisions: CognitionDecision[] = [];
   const memoryTexts: string[] = [];
+  /** Decisions whose memories still need vectors, in memoryTexts order. */
+  const pendingEmbed: CognitionDecision[] = [];
 
   for (let index = 0; index < agents.length; index++) {
     const agent = agents[index] as SpotlightAgent;
     const situation = situations[index] as SituationRow;
     const situationText = situationTexts[index] as string;
-
-    const memories = await recall(client, {
-      worldId: ctx.worldId,
-      agentId: agent.agentId,
-      queryVector: situationEmbeddings.vectors[index] as readonly number[],
-      tick: ctx.tick,
-      limit: 8,
-    });
 
     const beliefs = await loadActionableBeliefs(client, ctx.worldId, agent.agentId);
     const destinations = reachableLocationKeys(ctx, agent);
@@ -291,9 +293,8 @@ export async function think(
       destinations,
       beliefs: beliefs.map((b) => b.claimKey),
     });
-    const recalledIds = memories.map((m) => m.memoryId);
 
-    const recorded = ctx.replay
+    const recorded = replaying
       ? await loadRecordedDecision(client, {
           worldId: ctx.worldId,
           tick: ctx.tick,
@@ -301,22 +302,53 @@ export async function think(
           agentKey: agent.agentKey,
           inputHash,
           promptVersion: PLAN_PROMPT_VERSION,
-          recalledIds,
         })
       : null;
+
+    // Reported before anything tries to use the missing record. Retrieval needs
+    // a query vector, and on replay there is none to give it — so reaching the
+    // recall below with no record in hand surfaced as a TypeError deep in the
+    // vector literal rather than as the replay failure it actually is.
+    if (replaying && !recorded) {
+      throw new Error(
+        `replay: no cognition record for agent ${agent.agentKey} at tick ${ctx.tick} ` +
+          `matching input hash ${inputHash.slice(0, 12)}`,
+      );
+    }
+
+    // Live: retrieve, which also marks the memories accessed. Replay: take the
+    // recorded ids and mark exactly those, reproducing the original access
+    // pattern rather than approximating it through the index a second time.
+    let memories: Awaited<ReturnType<typeof recall>> = [];
+    let recalledIds: readonly string[];
+    if (recorded) {
+      recalledIds = recorded.recalled;
+      await recordAccesses(client, ctx.worldId, recalledIds, ctx.tick);
+    } else {
+      memories = await recall(client, {
+        worldId: ctx.worldId,
+        agentId: agent.agentId,
+        queryVector: situationEmbeddings?.vectors[index] as readonly number[],
+        tick: ctx.tick,
+        limit: 8,
+      });
+      recalledIds = memories.map((m) => m.memoryId);
+    }
 
     let planned: PlannedAction;
     let modelId: string;
     let latencyMs = 0;
 
+    // Drawn whether or not the model is called, for the same reason the
+    // reflection draw below is unconditional: a replayed round skips the call,
+    // and consuming the generator differently from the recorded run shifts every
+    // later draw in the tick. The world then diverges from its own recording —
+    // decision 13's failure mode, arriving by a different route.
+    const planSeed = ctx.rng.nextU32();
+
     if (recorded) {
-      planned = recorded;
+      planned = recorded.plan;
       modelId = 'replay';
-    } else if (ctx.replay) {
-      throw new Error(
-        `replay: no cognition record for agent ${agent.agentKey} at tick ${ctx.tick} ` +
-          `matching input hash ${inputHash.slice(0, 12)}`,
-      );
     } else {
       const response = await ctx.inference.complete({
         task: 'plan',
@@ -324,7 +356,7 @@ export async function think(
         system: PLAN_SYSTEM,
         user: planPrompt(agent, situationText, memories.map((m) => m.content), ctx.stage),
         maxTokens: 220,
-        seed: ctx.rng.nextU32(),
+        seed: planSeed,
         choices: {
           locations: destinations,
           acts: SPEECH_CHOICES[ctx.stage],
@@ -353,29 +385,39 @@ export async function think(
     const wantsReflection = ctx.rng.chance(REFLECTION_CHANCE);
     const memoryCount = await countMemories(client, ctx.worldId, agent.agentId);
 
+    // Same discipline as the plan seed: the draw is decided by `willReflect`,
+    // which a replay reproduces exactly, and is taken in both modes so the two
+    // consume the generator identically.
+    const willReflect = wantsReflection && memoryCount >= 4;
+    const reflectSeed = willReflect ? ctx.rng.nextU32() : 0;
+
     let reflection: string | null = null;
-    if (!recorded && wantsReflection && memoryCount >= 4) {
+    if (!recorded && willReflect) {
       const response = await ctx.inference.complete({
         task: 'reflect',
         promptVersion: REFLECT_PROMPT_VERSION,
         system: REFLECT_SYSTEM,
         user: memories.map((m) => `- ${m.content}`).join('\n'),
         maxTokens: 120,
-        seed: ctx.rng.nextU32(),
+        seed: reflectSeed,
       });
       calls++;
       tokensIn += response.tokensIn;
       tokensOut += response.tokensOut;
       reflection = response.text.trim() || null;
     } else if (recorded) {
-      reflection = recorded.reflection;
+      reflection = recorded.plan.reflection;
     }
 
     const observation = observationText(agent, situation);
-    memoryTexts.push(observation);
-    if (reflection) memoryTexts.push(reflection);
+    // Only a live round needs these embedded; a replayed one already has its
+    // vectors in the record.
+    if (!recorded) {
+      memoryTexts.push(observation);
+      if (reflection) memoryTexts.push(reflection);
+    }
 
-    decisions.push({
+    const decision: CognitionDecision = {
       agentId: agent.agentId,
       agentKey: agent.agentKey,
       intention: planned.intention,
@@ -384,9 +426,9 @@ export async function think(
       accuseClaimKey: planned.accuseClaimKey,
       reflection,
       observation,
-      observationVector: null,
-      reflectionVector: null,
-      recalledMemoryIds: memories.map((m) => m.memoryId),
+      observationVector: recorded?.observationVector ?? null,
+      reflectionVector: recorded?.reflectionVector ?? null,
+      recalledMemoryIds: recalledIds,
       inputHash,
       modelId,
       promptVersion: PLAN_PROMPT_VERSION,
@@ -394,17 +436,23 @@ export async function think(
       tokensOut: 0,
       latencyMs,
       degraded: false,
-    });
+    };
+    decisions.push(decision);
+    if (!recorded) pendingEmbed.push(decision);
   }
 
   // Embed everything the round produced in one more call, then hand the vectors
   // back to their decisions.
+  //
+  // `pendingEmbed` rather than `decisions`, because a replayed round contributes
+  // no texts: its vectors came out of the record. Walking all the decisions with
+  // a shared cursor would then hand the wrong vector to the wrong memory.
   if (memoryTexts.length > 0) {
     const embeddings = await ctx.inference.embed(memoryTexts);
     calls++;
     tokensIn += embeddings.tokensIn;
     let cursor = 0;
-    for (const decision of decisions) {
+    for (const decision of pendingEmbed) {
       decision.observationVector = embeddings.vectors[cursor++] as readonly number[];
       if (decision.reflection) {
         decision.reflectionVector = embeddings.vectors[cursor++] as readonly number[];
@@ -567,8 +615,8 @@ export async function applyCognition(
     await client.query(
       `INSERT INTO cognition_records
          (world_id, tick, agent_id, input_hash, decision, model_id, prompt_version,
-          tokens_in, tokens_out, latency_ms)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          tokens_in, tokens_out, latency_ms, observation_vector, reflection_vector)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         ctx.worldId, ctx.tick, decision.agentId, decision.inputHash,
         JSON.stringify({
@@ -582,6 +630,8 @@ export async function applyCognition(
         }),
         decision.modelId, decision.promptVersion,
         decision.tokensIn, decision.tokensOut, decision.latencyMs,
+        toVectorLiteral(decision.observationVector),
+        toVectorLiteral(decision.reflectionVector),
       ],
     );
     applied.records++;
@@ -642,6 +692,43 @@ export async function applyCognition(
   return applied;
 }
 
+/** CockroachDB's VECTOR input format. Null passes straight through. */
+function toVectorLiteral(vector: readonly number[] | null): string | null {
+  return vector ? `[${vector.join(',')}]` : null;
+}
+
+/**
+ * A memory's id, derived from its position rather than drawn at random.
+ *
+ * `gen_random_uuid()` makes a memory unreplayable. A recorded decision names the
+ * memories it was made from, and those names have to still mean something after
+ * a rewind — but a replayed run re-inserting the same memory would mint a fresh
+ * id, leaving every recorded reference dangling. The first symptom is a foreign
+ * key violation on `memory_accesses`; the quieter one is a recording that refers
+ * to memories nobody can find.
+ *
+ * `(world_id, tick, seq)` is already declared UNIQUE on this table — a memory's
+ * identity is its position — so hashing it yields the same id for the same
+ * memory in every run, and different ids for different worlds.
+ *
+ * This is not the sequential id schema convention 1 rules out. The rationale
+ * there is range hotspots, and a hash is uniformly distributed across the
+ * keyspace exactly as `gen_random_uuid()` is; it simply happens to be
+ * reproducible.
+ */
+export function memoryId(worldId: string, tick: number, seq: number): string {
+  const digest = createHash('sha256').update(`${worldId}:${tick}:${seq}`).digest();
+  const bytes = Buffer.from(digest.subarray(0, 16));
+  // Stamp UUID version 8 (custom) and the RFC 4122 variant.
+  bytes[6] = ((bytes[6] as number) & 0x0f) | 0x80;
+  bytes[8] = ((bytes[8] as number) & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return [
+    hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+    hex.slice(16, 20), hex.slice(20, 32),
+  ].join('-');
+}
+
 async function insertMemory(
   client: Client,
   ctx: ApplyContext,
@@ -651,13 +738,14 @@ async function insertMemory(
     subjectAgentId?: string | null; claimId?: string | null;
   },
 ): Promise<void> {
+  const seq = ctx.seq.next();
   await client.query(
     `INSERT INTO world_memories
        (world_id, memory_id, agent_id, tick, seq, kind, content, embedding, importance,
         subject_agent_id, claim_id)
-     VALUES ($1, gen_random_uuid(), $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
-      ctx.worldId, agentId, ctx.tick, ctx.seq.next(),
+      ctx.worldId, memoryId(ctx.worldId, ctx.tick, seq), agentId, ctx.tick, seq,
       memory.kind, memory.content, `[${memory.vector.join(',')}]`, memory.importance,
       memory.subjectAgentId ?? null, memory.claimId ?? null,
     ],
@@ -682,10 +770,17 @@ async function loadSituation(
     [ctx.worldId, agent.locationId, Math.max(0, ctx.tick - 8)],
   );
 
+  // Tie-broken on claim_key, not rumor_id. Two rumors heard on the same tick
+  // were previously ordered by a random UUID, which put them in the prompt — and
+  // therefore in the input hash — in an order that changed whenever the rumor
+  // rows were recreated. Decision 12's rule, applied to the one query that still
+  // broke it: ordering keys are scenario keys, never UUIDs.
   const rumors = await client.query<{ distorted_text: string }>(
     `SELECT s.distorted_text FROM world_rumor_spread s
+       JOIN world_rumors r ON r.world_id = s.world_id AND r.rumor_id = s.rumor_id
+       JOIN world_claims c ON c.world_id = r.world_id AND c.claim_id = r.claim_id
       WHERE s.world_id = $1 AND s.agent_id = $2 AND s.received_tick >= $3
-      ORDER BY s.received_tick DESC, s.rumor_id
+      ORDER BY s.received_tick DESC, c.claim_key
       LIMIT 3`,
     [ctx.worldId, agent.agentId, Math.max(0, ctx.tick - 8)],
   );
@@ -814,7 +909,18 @@ interface ReplayLookup {
   agentKey: string;
   inputHash: string;
   promptVersion: string;
-  recalledIds: readonly string[];
+}
+
+/**
+ * A recorded decision, with everything a replay needs to re-apply it without
+ * reaching a model: the plan, the memories it was made from, and the vectors
+ * for the memories it formed.
+ */
+interface RecordedDecision {
+  plan: PlannedAction;
+  recalled: readonly string[];
+  observationVector: readonly number[] | null;
+  reflectionVector: readonly number[] | null;
 }
 
 /**
@@ -828,14 +934,17 @@ interface ReplayLookup {
 async function loadRecordedDecision(
   client: Client,
   lookup: ReplayLookup,
-): Promise<PlannedAction | null> {
+): Promise<RecordedDecision | null> {
   const { worldId, tick, agentId, agentKey } = lookup;
   const result = await client.query<{
     decision: PlannedAction & { recalled?: string[] };
     input_hash: string;
     prompt_version: string;
+    observation_vector: string | null;
+    reflection_vector: string | null;
   }>(
-    `SELECT decision, input_hash, prompt_version FROM cognition_records
+    `SELECT decision, input_hash, prompt_version, observation_vector, reflection_vector
+       FROM cognition_records
       WHERE world_id = $1 AND tick = $2 AND agent_id = $3
       ORDER BY record_id
       LIMIT 1`,
@@ -864,23 +973,24 @@ async function loadRecordedDecision(
     );
   }
 
-  // Advisory: the ANN index returned a different candidate set than it did when
-  // this was recorded. The decision still stands — it was made from the memories
-  // named in the record, not from these — but a persistent drift here is worth
-  // knowing about, because it is how recall variability announces itself.
-  const recorded = row.decision.recalled;
-  if (recorded && !sameIds(recorded, lookup.recalledIds)) {
-    console.warn(JSON.stringify({
-      level: 'warn', event: 'replay_recall_drift', worldId, tick, agentId,
-      recordedCount: recorded.length, currentCount: lookup.recalledIds.length,
-    }));
-  }
-
-  return row.decision;
+  return {
+    plan: row.decision,
+    // Older recordings predate the vector columns. They still replay, they just
+    // cannot re-form their memories — so say which recording is at fault rather
+    // than letting a world quietly come out short.
+    recalled: row.decision.recalled ?? [],
+    observationVector: parseVector(row.observation_vector),
+    reflectionVector: parseVector(row.reflection_vector),
+  };
 }
 
-function sameIds(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((id, index) => id === b[index]);
+/** CockroachDB returns a VECTOR as its text form, `[1,2,3]`. */
+function parseVector(value: string | null): readonly number[] | null {
+  if (!value) return null;
+  const parsed = JSON.parse(value) as unknown;
+  return Array.isArray(parsed) && parsed.every((n) => typeof n === 'number')
+    ? (parsed as number[])
+    : null;
 }
 
 export type { BudgetState };

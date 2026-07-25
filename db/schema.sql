@@ -548,9 +548,26 @@ CREATE TABLE IF NOT EXISTS cognition_records (
   tokens_in      INT8 NOT NULL DEFAULT 0,
   tokens_out     INT8 NOT NULL DEFAULT 0,
   latency_ms     INT8 NOT NULL DEFAULT 0,
+  -- Vectors for the memories this decision formed, so a replay can write those
+  -- memories without calling an embedding model. Without them a recording is
+  -- not self-contained: replaying it would require the provider that made it to
+  -- still be reachable, which is the dependency replay exists to remove.
+  --
+  -- Deliberately real VECTOR columns rather than numbers inside `decision`:
+  -- 1024 floats as JSON text is several times the size, for no gain.
+  -- NULL when the decision formed no memory — a degraded round, or a
+  -- reflection that was not taken.
+  observation_vector VECTOR(1024) NULL,
+  reflection_vector  VECTOR(1024) NULL,
   PRIMARY KEY (world_id, record_id),
   FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
 );
+
+-- For databases created before the vectors were recorded.
+ALTER TABLE cognition_records
+  ADD COLUMN IF NOT EXISTS observation_vector VECTOR(1024) NULL;
+ALTER TABLE cognition_records
+  ADD COLUMN IF NOT EXISTS reflection_vector VECTOR(1024) NULL;
 
 CREATE INDEX IF NOT EXISTS cognition_records_replay_idx
   ON cognition_records (world_id, tick, agent_id);

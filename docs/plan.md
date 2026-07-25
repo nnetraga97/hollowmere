@@ -4,7 +4,7 @@
 
 ## STATUS — 2026-07-25
 
-**Phase 1 (engine): 12 of 12 milestones complete. 179 tests passing, typecheck clean.**
+**Phase 1 (engine): 12 of 12 milestones complete. 183 tests passing, typecheck clean.**
 
 | # | Milestone | State | Evidence |
 |---|---|---|---|
@@ -158,19 +158,65 @@ on the conversation path. Four defects found and fixed; all were invisible under
   a single implicit transaction over 32 tables plus vector indexes. Fine locally;
   worth splitting before meeting Cloud's schema-change limits on the day.
 
+### Replay, made real — 2026-07-25
+
+Narrowing the input hash to exact inputs (decision 22) was meant to be small
+hardening. It surfaced that replay had never worked and could not have: the old
+hash covered ANN-derived memory ids, so a mismatch could only ever be a warning,
+and a warning is what it produced instead of the failures underneath. There were
+also no end-to-end replay tests — §11 lists the acceptance test, nothing
+implemented it.
+
+`engine/replay.test.ts` now records a world, rewinds it, and replays it against a
+client that throws on **every** call, asserting the same stage, tension, and
+memories come back. §11's "zero Bedrock calls" is true as of this change, having
+been false since it was written.
+
+Getting there needed `engine/rewind.ts` plus three determinism fixes (23–25).
+The rewind was the easy half; the three bugs were only visible once something
+actually compared a run against its own recording.
+
+22. **The input hash covers exact inputs only.** Recalled memory ids are out of
+    it; a mismatch on `(agentKey, tick, stage, situationText, destinations,
+    beliefs)` or on `prompt_version` is now refused with a message naming which,
+    rather than warned about. Replay no longer retrieves at all, so there is no
+    "current" recall set to compare against — the recorded ids are used directly.
+23. **Cognition's RNG draws are unconditional, including the model seeds.** The
+    plan and reflect seeds were drawn *inside* the branch that calls the model,
+    so a replayed round — which skips the call — consumed the generator
+    differently and shifted every later draw in the tick. This is (13)'s failure
+    mode reached by a different route: the rule was already written down for the
+    reflection draw and simply not applied to the seeds. Both are now taken in
+    both modes, gated on conditions a replay reproduces exactly.
+24. **Memory ids are derived from position, not drawn at random.** `memory_id`
+    defaulted to `gen_random_uuid()`, so a replayed run minted different ids than
+    the recording and every recorded reference dangled — surfacing as a foreign
+    key violation on `memory_accesses`, and quietly as a recording naming
+    memories nobody can find. The id is now a hash of `(world_id, tick, seq)`,
+    which the table already declares UNIQUE: a memory's identity *is* its
+    position. This is not the sequential id convention 1 forbids — that rule is
+    about range hotspots, and a hash is as uniformly distributed as
+    `gen_random_uuid()`, just reproducible.
+25. **The last query ordering on a UUID.** `loadSituation` tie-broke an agent's
+    recent rumors on `rumor_id`, so two heard on the same tick entered the prompt
+    in an order that changed whenever the rumor rows were recreated. Now ordered
+    on `claim_key`. Worth noting this was never only a replay bug: it meant the
+    prompt an agent saw was not in fact deterministic across two worlds built
+    from one seed, which is a property the determinism contract claims. (12)'s
+    rule, applied to the query that had escaped it.
+
 ### Known gaps to address next
 
 - `loadListeners` still runs one query per rumor-holder per tick, now bounded by
   `GOSSIP.maxTellersPerRumor`. A tick costs ~500 ms locally at 40 agents; this
   is the first thing to batch if that matters.
 - Distortion is capped by `GOSSIP.distortionChance` and skippable, but still not
-  wired to the per-world budget — only cognition checks it.
-- `retrieval.ts` breaks score ties on `memory_id`, a random UUID. Deterministic
-  within a world, not across two worlds built from the same seed. No rule
-  currently depends on the tie order, but it is the same class of bug as (12).
-- Replay tolerates input-hash drift with a warning rather than refusing, because
-  the hash covers ANN-derived memory ids. Worth narrowing to inputs that are
-  exact.
+  wired to the per-world budget — only cognition checks it. It is forced off
+  during replay, since distortions are recorded nowhere.
+- `retrieval.ts` breaks score ties on `memory_id`. Now that memory ids are
+  derived from `(world_id, tick, seq)` this is deterministic within a world *and*
+  stable across a rewind, but it is still not comparable across two worlds built
+  from the same seed, because `world_id` is in the hash.
 
 ---
 
