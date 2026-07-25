@@ -23,10 +23,10 @@
 
 ### The canonical arc, measured
 
-An unattended stub run under seed 42 reaches `war` at **tick 240** (192–288 is
-the window the plan fixes; seeds 7 and 1234 land at 240 and 238). It passes
-through every stage in order — suspicion t36, accusations t85, trials t142,
-first_blood t195, war t240 — and ends with a claim the engine *knows to be
+An unattended stub run under seed 42 reaches `war` at **tick 239** (192–288 is
+the window the plan fixes). It passes through every stage in order — suspicion
+t36, accusations t83, trials t141, first_blood t194, war t239 — and ends with a
+claim the engine *knows to be
 false* believed by a quarter of the town.
 
 ### Verified against the real cluster (CockroachDB v26.2.4)
@@ -35,8 +35,9 @@ Everything from the previous milestones, plus:
 
 - Two schedulers racing one world → **one commit per tick, no duplicated
   effects, no gaps**, both as a direct race and through two live scheduler loops.
-- Eight concurrent conversations plus a tick on the same `world_state` row →
-  **no lost update**, and a gapless command log.
+- Starting a conversation and a scheduler tick on the same world serialize on
+  the world row; while the durable hold exists the scheduler makes **zero model
+  calls and commits no tick**.
 - The same seed in two different worlds → **identical chronicle, identical
   belief table, identical tension curve** (a different seed diverges).
 - A murder at `suspicion` → straight to `war`, with tension still far below the
@@ -73,11 +74,9 @@ Items 1–8 are unchanged from the previous status. New in this phase:
     rumors by `rumor_id`, agents by `agent_id`, and route adjacency by
     `location_id`. Each produced correct results and a different town. Ordering
     is now on `claim_key` / `agent_key` / `location_key` throughout.
-13. **The RNG stream must never depend on an approximate result.** Reflection
-    was gated on how many memories the ANN index returned; under load the index
-    returned a different count, the generator was consumed differently, and two
-    runs of one seed diverged. The draw is now unconditional and tested against
-    an exact count.
+13. **Reflection is driven by accumulated importance, not ANN recall or chance.**
+    Observations and conversations add to a rebuildable per-agent accumulator;
+    reflection runs only after its exact threshold and then resets it.
 14. **Player writes use a disjoint sequence band.** A tick and a conversation
     both write `world_events` at the same tick, and `(world_id, tick, seq)` is
     unique. Rather than share a counter across two services, conversations
@@ -550,9 +549,15 @@ Phaser 3 over the same engine API. CC0 assets (Kenney.nl / LPC) — **not** Star
 **Implemented on `codex/phase-2-phaser`:** Next.js 16 + Phaser 3.90 workspace,
 signed session-scoped worlds, route-validated movement, colocated SSE dialogue,
 the playable Hollowmere map, agent inspection, graph/chronicle/claim/tension
-instruments, safe pause/speed/restart controls, and opt-in Engine Truth. Evidence
-and hearing views follow the instigator spec and remain capability-gated until
-the parallel engine implementation is committed and merged.
+instruments, safe pause/speed/restart controls, and opt-in Engine Truth.
+
+**Conversation integration:** walk-up dialogue is now a durable multi-turn
+session. The world clock is held while the window is open; each validated turn
+uses one structured inference call, and the server commits the authoritative
+reply before releasing it over SSE. Ending the exchange creates target and
+observer memories, updates the player's persistent relationship with that NPC,
+and charges 1–3 immediate ticks. NPC↔NPC dialogue is a two-sided exchange, and
+evidence/hearing effects still pass through the engine's allowlisted rules.
 
 ### Phase 3 — Cloud + AWS
 `ccloud` provisioning · migrate to CockroachDB Cloud · **Managed MCP + Town Investigator** (read-only role) · ECS/Fargate web + scheduler · optional S3 chronicle exports.

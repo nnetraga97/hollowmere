@@ -26,6 +26,7 @@ import { addActiveRuntime, sweepWorlds } from '../engine/lifecycle.ts';
 import { SCALE } from '../engine/fixedpoint.ts';
 import { query } from '../engine/db.ts';
 import type { InferenceClient } from '../engine/inference/index.ts';
+import { sweepExpiredConversations } from '../engine/conversation.ts';
 
 export interface SchedulerOptions {
   inference: InferenceClient;
@@ -104,6 +105,11 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
         durationMs: report.durationMs,
       });
 
+      if (report.skipped === 'conversation_held') {
+        const swept = await sweepExpiredConversations();
+        if (swept > 0) log({ level: 'info', event: 'conversation_timeout', worldId, swept });
+      }
+
       if (report.ending || report.skipped === 'not_active' || report.skipped === 'tick_ceiling') {
         log({ level: 'info', event: 'world_finished', worldId, ending: report.ending });
         break;
@@ -114,6 +120,20 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
       if (!(await renewLease(worldId, { owner: options.owner, ttlMs: leaseTtlMs }))) {
         log({ level: 'warn', event: 'lease_lost', worldId });
         break;
+      }
+
+      // A conversation accrues durable time debt. Drain it immediately after
+      // the next successful cadence tick; normal cadence never consumes debt.
+      if (report.committed) {
+        while (running && await readTimeDebt(worldId) > 0) {
+          const charged = await runTick({ worldId, inference: options.inference, debtTick: true });
+          log({
+            level: 'info', event: 'conversation_tick', worldId, tick: charged.tick,
+            committed: charged.committed, skipped: charged.skipped,
+          });
+          if (!charged.committed || charged.ending) break;
+          if (!(await renewLease(worldId, { owner: options.owner, ttlMs: leaseTtlMs }))) break;
+        }
       }
 
       if (!options.only && Date.now() - lastSweep > 60_000) {
@@ -188,6 +208,13 @@ async function readTimeScale(worldId: string): Promise<number> {
     `SELECT time_scale FROM worlds WHERE world_id = $1`, [worldId],
   );
   return rows[0]?.time_scale ?? SCALE;
+}
+
+async function readTimeDebt(worldId: string): Promise<number> {
+  const rows = await query<{ time_debt_ticks: number }>(
+    `SELECT time_debt_ticks FROM worlds WHERE world_id = $1`, [worldId],
+  );
+  return rows[0]?.time_debt_ticks ?? 0;
 }
 
 function sleep(ms: number): Promise<void> {

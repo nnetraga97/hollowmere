@@ -2,14 +2,15 @@ import { createHash } from 'node:crypto';
 
 import { BELIEF, DIALOGUE, GOSSIP } from './config.ts';
 import { recordBelief, shiftConfidence } from './beliefs.ts';
-import { readBudget, recordUsage } from './budget.ts';
+import { estimateCostMicros, readBudget, recordUsage } from './budget.ts';
 import type { Client } from './db.ts';
 import { recordTelling } from './gossip.ts';
 import type { InferenceClient } from './inference/index.ts';
 import type { Rng } from './rng.ts';
 import type { Seq } from './seq.ts';
+import { stableId } from './ids.ts';
 
-export const SPEECH_PROMPT_VERSION = 'speech-v1';
+export const SPEECH_PROMPT_VERSION = 'speech-v2';
 
 export interface DialogueDecision {
   fromAgentId: string;
@@ -24,6 +25,7 @@ export interface DialogueDecision {
   claimKey: string;
   claimText: string;
   line: string;
+  response: string;
   tactic: string | null;
   inputHash: string;
   modelId: string;
@@ -78,24 +80,26 @@ export async function thinkDialogue(
 
   const budget = await readBudget(client, input.worldId);
   if (budget.exhausted) {
-    return makeDecision(pair, inputHash, `I heard ${pair.claim_text.toLowerCase()}`, 'deterministic-fallback');
+    return makeDecision(pair, inputHash, `I heard ${pair.claim_text.toLowerCase()}`,
+      'I will remember what you said.', 'deterministic-fallback');
   }
 
   const response = await input.inference.complete({
-    task: 'dialogue',
+    task: 'npc_conversation',
     promptVersion: SPEECH_PROMPT_VERSION,
     system:
-      `You are ${pair.from_name}, speaking publicly to ${pair.to_name}. ` +
-      'Say one brief sentence carrying the supplied claim. Do not name a source unless directed. ' +
-      'The private reason for this conversation is not available in this context.',
+      `Write a brief exchange between ${pair.from_name} and ${pair.to_name}. ` +
+      'Return JSON only: {"utterance":string,"response":string}. The first speaker carries ' +
+      'the supplied claim. Do not name a source unless directed.',
     user: pair.tactic
       ? `Directive: ${pair.tactic}. Claim to convey: ${pair.claim_text}`
       : `Claim to convey: ${pair.claim_text}`,
     maxTokens: 100,
     seed: draw,
   });
+  const exchange = parseExchange(response.text, pair.claim_text);
   return {
-    ...makeDecision(pair, inputHash, response.text.trim() || pair.claim_text, response.modelId),
+    ...makeDecision(pair, inputHash, exchange.utterance, exchange.response, response.modelId),
     tokensIn: response.tokensIn,
     tokensOut: response.tokensOut,
     latencyMs: response.latencyMs,
@@ -145,6 +149,14 @@ export async function applyDialogue(
       }),
       `${decision.fromName}: ${decision.line}`,
     ],
+  );
+  await client.query(
+    `INSERT INTO world_events
+       (world_id, tick, seq, location_id, actor_agent_id, kind, payload, description)
+     VALUES ($1, $2, $3, $4, $5, 'dialogue', $6, $7)`,
+    [input.worldId, input.tick, input.seq.next(), decision.locationId, decision.toAgentId,
+      JSON.stringify({ toAgentKey: decision.fromAgentKey, responseToEventId: event.rows[0]!.event_id }),
+      `${decision.toName}: ${decision.response}`],
   );
 
   await client.query(
@@ -235,6 +247,20 @@ export async function applyDialogue(
     billable: decision.modelId !== 'deterministic-fallback' &&
       decision.modelId !== 'replay' && !decision.modelId.includes('stub'),
   });
+  if (decision.modelId !== 'deterministic-fallback' && decision.modelId !== 'replay') {
+    const sourceKey = `${input.tick}:${decision.fromAgentKey}:${decision.toAgentKey}`;
+    await client.query(
+      `INSERT INTO world_inference_usage
+         (world_id, usage_id, category, source_key, model_id, tokens_in, tokens_out,
+          est_cost_micros)
+       VALUES ($1, $2, 'npc_dialogue', $3, $4, $5, $6, $7)
+       ON CONFLICT (world_id, category, source_key, attempt) DO NOTHING`,
+      [input.worldId, stableId(input.worldId, 'npc_dialogue', sourceKey), sourceKey,
+        decision.modelId, decision.tokensIn, decision.tokensOut,
+        estimateCostMicros({ calls: 1, tokensIn: decision.tokensIn,
+          tokensOut: decision.tokensOut, billable: !decision.modelId.includes('stub') })],
+    );
+  }
   return 1;
 }
 
@@ -244,6 +270,7 @@ function makeDecision(
   pair: PairRow,
   inputHash: string,
   line: string,
+  response: string,
   modelId: string,
 ): DialogueDecision {
   return {
@@ -259,6 +286,7 @@ function makeDecision(
     claimKey: pair.claim_key,
     claimText: pair.claim_text,
     line,
+    response,
     tactic: pair.tactic,
     inputHash,
     modelId,
@@ -266,6 +294,17 @@ function makeDecision(
     tokensOut: 0,
     latencyMs: 0,
   };
+}
+
+function parseExchange(text: string, fallback: string): { utterance: string; response: string } {
+  try {
+    const value = JSON.parse(text) as { utterance?: unknown; response?: unknown };
+    if (typeof value.utterance === 'string' && value.utterance.trim() &&
+        typeof value.response === 'string' && value.response.trim()) {
+      return { utterance: value.utterance.trim(), response: value.response.trim() };
+    }
+  } catch { /* deterministic fallback below */ }
+  return { utterance: fallback, response: 'I will remember what you said.' };
 }
 
 async function loadPairs(client: Client, worldId: string, tick: number): Promise<PairRow[]> {
@@ -346,5 +385,6 @@ async function loadRecordedDialogue(
   // Runtime ids for rumors are regenerated by rewind. The recorded decision
   // owns the model-authored line; the freshly reconstructed pair owns every
   // database identity used to apply it.
-  return makeDecision(pair, inputHash, row.decision.line, 'replay');
+  return makeDecision(pair, inputHash, row.decision.line,
+    row.decision.response ?? 'I will remember what you said.', 'replay');
 }

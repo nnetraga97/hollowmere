@@ -37,10 +37,12 @@ import {
 import { loadTriggerFacts, loadTriggerKeyMaps, runTriggers } from './triggers.ts';
 import { clampUnit, type Fixed } from './fixedpoint.ts';
 import type { InferenceClient } from './inference/index.ts';
+import { hasConversationHold } from './conversation.ts';
 
 export type SkipReason =
   | 'not_active'
   | 'already_committed'
+  | 'conversation_held'
   | 'tick_ceiling';
 
 export interface TickReport {
@@ -74,6 +76,8 @@ export interface RunTickOptions {
   replay?: boolean;
   /** Force the tick number, for tests that need to re-run a specific tick. */
   tick?: number;
+  /** An extra tick charged by a completed player conversation. */
+  debtTick?: boolean;
 }
 
 interface WorldRow {
@@ -85,6 +89,15 @@ interface WorldRow {
 
 export async function runTick(options: RunTickOptions): Promise<TickReport> {
   const started = Date.now();
+
+  if (await hasConversationHold(options.worldId)) {
+    const state = await withClient((client) => readWorldState(client, options.worldId));
+    const world = await withClient((client) => client.query<{ current_tick: number }>(
+      `SELECT current_tick FROM worlds WHERE world_id = $1`, [options.worldId],
+    ));
+    return emptyReport(options.worldId, (world.rows[0]?.current_tick ?? 0) + 1,
+      state.stage, state.globalTension, 'conversation_held', Date.now() - started);
+  }
 
   // ---------------------------------------------------------------------
   // Phase 1 — read and think. No transaction is open here, and none may be.
@@ -180,6 +193,21 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
   const outcome = await withSerializable(async (client) => {
     const seq = createSeq(0);
 
+    // The partial unique index is the durable hold; this lock makes the
+    // scheduler and conversation start serialize on the same world row.
+    const locked = await client.query<{ time_debt_ticks: number }>(
+      `SELECT time_debt_ticks FROM worlds WHERE world_id = $1 FOR UPDATE`,
+      [options.worldId],
+    );
+    if (!locked.rows[0]) throw new Error(`unknown world ${options.worldId}`);
+    const held = await client.query(
+      `SELECT 1 FROM world_conversation_sessions
+        WHERE world_id = $1 AND status IN ('open', 'closing') LIMIT 1`,
+      [options.worldId],
+    );
+    if (held.rowCount) return null;
+    if (options.debtTick && locked.rows[0].time_debt_ticks <= 0) return null;
+
     // Claiming the tick is the first statement, so a racing scheduler that
     // loses does no work at all rather than doing it and discarding it.
     const claimed = await client.query<{ tick: number }>(
@@ -198,8 +226,10 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
       [options.worldId, phase, dayForTick(tick)],
     );
     await client.query(
-      `UPDATE worlds SET current_tick = $2, last_activity_at = now() WHERE world_id = $1`,
-      [options.worldId, tick],
+      `UPDATE worlds SET current_tick = $2, last_activity_at = now(),
+              time_debt_ticks = time_debt_ticks - $3
+        WHERE world_id = $1`,
+      [options.worldId, tick, options.debtTick ? 1 : 0],
     );
 
     const commands = await applyPendingCommands(client, options.worldId, tick);
@@ -315,8 +345,9 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
   const durationMs = Date.now() - started;
 
   if (!outcome.value) {
+    const held = await hasConversationHold(options.worldId);
     return emptyReport(options.worldId, tick, prepared.state.stage,
-      prepared.state.globalTension, 'already_committed', durationMs);
+      prepared.state.globalTension, held ? 'conversation_held' : 'already_committed', durationMs);
   }
 
   const result = outcome.value;

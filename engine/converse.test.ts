@@ -130,7 +130,8 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
 
     const events = await query<{ count: number }>(
       `SELECT count(*)::INT8 AS count FROM world_events
-        WHERE world_id = $1 AND kind = 'player_command'`, [worldId]);
+        WHERE world_id = $1 AND kind = 'player_command'
+          AND payload->>'text' IS NOT NULL`, [worldId]);
     assert.equal(events[0]!.count, 1, 'the utterance is recorded once');
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
@@ -455,7 +456,8 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
     // store them would lose the audit trail.
     const recorded = await query<{ count: number }>(
       `SELECT count(*)::INT8 AS count FROM world_events
-        WHERE world_id = $1 AND kind = 'player_command'`, [worldId]);
+        WHERE world_id = $1 AND kind = 'player_command'
+          AND payload->>'text' IS NOT NULL`, [worldId]);
     assert.equal(recorded[0]!.count, corpus.length);
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);

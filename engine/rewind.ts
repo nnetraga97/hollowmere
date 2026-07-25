@@ -48,6 +48,11 @@ const HISTORY_TABLES = [
   'world_agent_commitments',
   'world_hearings',
   'world_rumor_tellings',
+  // Conversation sessions and turns are recordings and survive rewind. Their
+  // derived memories, relationship updates, and usage projections do not.
+  'memory_source_edges',
+  'player_agent_relationship_updates',
+  'world_inference_usage',
   'memory_accesses',
   'world_memories',
   'belief_updates',
@@ -97,6 +102,7 @@ export async function rewindWorld(worldId: string): Promise<RewindResult> {
       `UPDATE worlds
           SET current_tick = 0, command_seq = 0, status = 'active', ending = NULL,
               active_runtime_ms = 0, lease_owner = NULL, lease_expires_at = NULL,
+              time_debt_ticks = 0,
               last_activity_at = now()
         WHERE world_id = $1`,
       [worldId],
@@ -213,6 +219,17 @@ async function resetProjections(client: Client, worldId: string): Promise<void> 
   await client.query(
     `UPDATE player_reputation SET reputation = 0 WHERE world_id = $1`,
     [worldId],
+  );
+  await client.query(
+    `UPDATE player_agent_relationships
+        SET trust = 5000, affinity = 0, fear = 0, respect = 0,
+            impression = NULL, updated_tick = 0
+      WHERE world_id = $1`, [worldId],
+  );
+  await client.query(
+    `UPDATE world_agent_reflection_state
+        SET accumulated_importance = 0, last_reflection_tick = NULL
+      WHERE world_id = $1`, [worldId],
   );
   await client.query(
     `INSERT INTO world_state_history (world_id, tick, global_tension, escalation_stage)

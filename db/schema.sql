@@ -112,6 +112,9 @@ CREATE TABLE IF NOT EXISTS agent_templates (
   -- Disposition knobs, fixed point.
   credulity           INT8 NOT NULL CHECK (credulity BETWEEN 0 AND 10000),
   talkativeness       INT8 NOT NULL CHECK (talkativeness BETWEEN 0 AND 10000),
+  kindness            INT8 NOT NULL DEFAULT 5000 CHECK (kindness BETWEEN 0 AND 10000),
+  engagement          INT8 NOT NULL DEFAULT 5000 CHECK (engagement BETWEEN 0 AND 10000),
+  honesty             INT8 NOT NULL DEFAULT 5000 CHECK (honesty BETWEEN 0 AND 10000),
   PRIMARY KEY (scenario_version_id, agent_key),
   FOREIGN KEY (scenario_version_id, faction_key)
     REFERENCES faction_templates (scenario_version_id, faction_key),
@@ -120,6 +123,16 @@ CREATE TABLE IF NOT EXISTS agent_templates (
   FOREIGN KEY (scenario_version_id, work_location_key)
     REFERENCES location_templates (scenario_version_id, location_key)
 );
+
+ALTER TABLE agent_templates ADD COLUMN IF NOT EXISTS kindness INT8 NOT NULL DEFAULT 5000;
+ALTER TABLE agent_templates ADD COLUMN IF NOT EXISTS engagement INT8 NOT NULL DEFAULT 5000;
+ALTER TABLE agent_templates ADD COLUMN IF NOT EXISTS honesty INT8 NOT NULL DEFAULT 5000;
+ALTER TABLE agent_templates DROP CONSTRAINT IF EXISTS check_kindness;
+ALTER TABLE agent_templates ADD CONSTRAINT check_kindness CHECK (kindness BETWEEN 0 AND 10000);
+ALTER TABLE agent_templates DROP CONSTRAINT IF EXISTS check_engagement;
+ALTER TABLE agent_templates ADD CONSTRAINT check_engagement CHECK (engagement BETWEEN 0 AND 10000);
+ALTER TABLE agent_templates DROP CONSTRAINT IF EXISTS check_honesty;
+ALTER TABLE agent_templates ADD CONSTRAINT check_honesty CHECK (honesty BETWEEN 0 AND 10000);
 
 CREATE TABLE IF NOT EXISTS claim_templates (
   scenario_version_id UUID NOT NULL REFERENCES scenario_versions (scenario_version_id),
@@ -211,6 +224,10 @@ CREATE TABLE IF NOT EXISTS worlds (
   -- Fixed point: 10000 is realtime. Raised for headless tests and video capture.
   time_scale          INT8 NOT NULL DEFAULT 10000 CHECK (time_scale > 0),
   active_runtime_ms   INT8 NOT NULL DEFAULT 0,
+  -- Additional ticks owed by completed player conversations. Only the
+  -- lease-holding scheduler drains this projection, one back-to-back tick at a
+  -- time; normal cadence ticks never decrement it.
+  time_debt_ticks     INT8 NOT NULL DEFAULT 0 CHECK (time_debt_ticks >= 0),
 
   -- Operational metadata only. None of this is simulation time.
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -226,6 +243,11 @@ CREATE TABLE IF NOT EXISTS worlds (
 
 CREATE INDEX IF NOT EXISTS worlds_schedulable_idx
   ON worlds (status, lease_expires_at);
+
+ALTER TABLE worlds
+  ADD COLUMN IF NOT EXISTS time_debt_ticks INT8 NOT NULL DEFAULT 0;
+ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_time_debt_ticks;
+ALTER TABLE worlds ADD CONSTRAINT check_time_debt_ticks CHECK (time_debt_ticks >= 0);
 
 -- Existing databases predate the exposed ending.
 ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_ending_ending;
@@ -300,6 +322,9 @@ CREATE TABLE IF NOT EXISTS world_agents (
   routine        JSONB NOT NULL,
   credulity      INT8 NOT NULL CHECK (credulity BETWEEN 0 AND 10000),
   talkativeness  INT8 NOT NULL CHECK (talkativeness BETWEEN 0 AND 10000),
+  kindness       INT8 NOT NULL DEFAULT 5000 CHECK (kindness BETWEEN 0 AND 10000),
+  engagement     INT8 NOT NULL DEFAULT 5000 CHECK (engagement BETWEEN 0 AND 10000),
+  honesty        INT8 NOT NULL DEFAULT 5000 CHECK (honesty BETWEEN 0 AND 10000),
   -- Character state only. Spotlight membership is ephemeral and never stored.
   status         STRING NOT NULL DEFAULT 'alive'
                    CHECK (status IN ('alive', 'injured', 'missing', 'dead', 'detained')),
@@ -321,6 +346,16 @@ CREATE INDEX IF NOT EXISTS world_agents_by_location_idx
 ALTER TABLE world_agents DROP CONSTRAINT IF EXISTS check_status;
 ALTER TABLE world_agents ADD CONSTRAINT check_status
   CHECK (status IN ('alive', 'injured', 'missing', 'dead', 'detained'));
+
+ALTER TABLE world_agents ADD COLUMN IF NOT EXISTS kindness INT8 NOT NULL DEFAULT 5000;
+ALTER TABLE world_agents ADD COLUMN IF NOT EXISTS engagement INT8 NOT NULL DEFAULT 5000;
+ALTER TABLE world_agents ADD COLUMN IF NOT EXISTS honesty INT8 NOT NULL DEFAULT 5000;
+ALTER TABLE world_agents DROP CONSTRAINT IF EXISTS check_kindness;
+ALTER TABLE world_agents ADD CONSTRAINT check_kindness CHECK (kindness BETWEEN 0 AND 10000);
+ALTER TABLE world_agents DROP CONSTRAINT IF EXISTS check_engagement;
+ALTER TABLE world_agents ADD CONSTRAINT check_engagement CHECK (engagement BETWEEN 0 AND 10000);
+ALTER TABLE world_agents DROP CONSTRAINT IF EXISTS check_honesty;
+ALTER TABLE world_agents ADD CONSTRAINT check_honesty CHECK (honesty BETWEEN 0 AND 10000);
 
 -- Faction leadership, added now that agents exist.
 ALTER TABLE world_factions
@@ -444,6 +479,30 @@ CREATE TABLE IF NOT EXISTS player_reputation (
   FOREIGN KEY (world_id, faction_id) REFERENCES world_factions (world_id, faction_id)
 );
 
+CREATE TABLE IF NOT EXISTS player_agent_relationships (
+  world_id    UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  player_id   UUID NOT NULL,
+  agent_id    UUID NOT NULL,
+  trust       INT8 NOT NULL DEFAULT 5000 CHECK (trust BETWEEN 0 AND 10000),
+  affinity    INT8 NOT NULL DEFAULT 0 CHECK (affinity BETWEEN -10000 AND 10000),
+  fear        INT8 NOT NULL DEFAULT 0 CHECK (fear BETWEEN 0 AND 10000),
+  respect     INT8 NOT NULL DEFAULT 0 CHECK (respect BETWEEN -10000 AND 10000),
+  impression  STRING NULL,
+  updated_tick INT8 NOT NULL DEFAULT 0,
+  PRIMARY KEY (world_id, player_id, agent_id),
+  FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_agent_reflection_state (
+  world_id              UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  agent_id              UUID NOT NULL,
+  accumulated_importance INT8 NOT NULL DEFAULT 0 CHECK (accumulated_importance >= 0),
+  last_reflection_tick  INT8 NULL,
+  PRIMARY KEY (world_id, agent_id),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
+);
+
 CREATE TABLE IF NOT EXISTS world_culprit (
   world_id     UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
   agent_id     UUID NOT NULL,
@@ -493,6 +552,81 @@ CREATE TABLE IF NOT EXISTS world_budget (
   est_cost_micros INT8 NOT NULL DEFAULT 0,
   PRIMARY KEY (world_id)
 );
+
+-- Durable multi-turn player conversations. These rows double as replay
+-- recordings and are deliberately preserved by rewind; ids are position-derived
+-- by the engine rather than generated by the database.
+CREATE TABLE IF NOT EXISTS world_conversation_sessions (
+  world_id          UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  conversation_id   UUID NOT NULL,
+  player_id         UUID NOT NULL,
+  target_agent_id   UUID NOT NULL,
+  location_id       UUID NOT NULL,
+  status            STRING NOT NULL CHECK (status IN
+                      ('open', 'closing', 'closed', 'timed_out', 'abandoned')),
+  opened_tick       INT8 NOT NULL,
+  closed_tick       INT8 NULL,
+  next_turn_ordinal INT8 NOT NULL DEFAULT 0,
+  closing_ordinal   INT8 NULL,
+  turn_count        INT8 NOT NULL DEFAULT 0,
+  time_cost_ticks   INT8 NOT NULL DEFAULT 0 CHECK (time_cost_ticks BETWEEN 0 AND 3),
+  close_idempotency_key STRING NULL,
+  summary           STRING NULL,
+  relationship_impression STRING NULL,
+  opened_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deadline_at       TIMESTAMPTZ NOT NULL,
+  closed_at         TIMESTAMPTZ NULL,
+  PRIMARY KEY (world_id, conversation_id),
+  UNIQUE (world_id, close_idempotency_key),
+  FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, target_agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, location_id) REFERENCES world_locations (world_id, location_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS one_held_conversation_per_world_idx
+  ON world_conversation_sessions (world_id)
+  WHERE status IN ('open', 'closing');
+
+CREATE TABLE IF NOT EXISTS world_conversation_participants (
+  world_id        UUID NOT NULL,
+  conversation_id UUID NOT NULL,
+  agent_id        UUID NOT NULL,
+  role            STRING NOT NULL CHECK (role IN ('target', 'observer')),
+  PRIMARY KEY (world_id, conversation_id, agent_id),
+  FOREIGN KEY (world_id, conversation_id)
+    REFERENCES world_conversation_sessions (world_id, conversation_id) ON DELETE CASCADE,
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_conversation_turns (
+  world_id          UUID NOT NULL,
+  conversation_id   UUID NOT NULL,
+  turn_id           UUID NOT NULL,
+  ordinal           INT8 NOT NULL,
+  status            STRING NOT NULL CHECK (status IN ('reserved', 'completed', 'fallback')),
+  player_text       STRING NOT NULL,
+  reply             STRING NULL,
+  speech_act        STRING NULL,
+  structured_outcome JSONB NOT NULL DEFAULT '{}',
+  input_hash        STRING NULL,
+  prompt_version    STRING NULL,
+  model_id          STRING NULL,
+  budget_tier       STRING NOT NULL DEFAULT 'normal' CHECK (budget_tier IN
+                       ('normal', 'background_degraded', 'critical_only', 'exhausted')),
+  tokens_in         INT8 NOT NULL DEFAULT 0,
+  tokens_out        INT8 NOT NULL DEFAULT 0,
+  latency_ms        INT8 NOT NULL DEFAULT 0,
+  deadline_at       TIMESTAMPTZ NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at      TIMESTAMPTZ NULL,
+  PRIMARY KEY (world_id, turn_id),
+  UNIQUE (world_id, conversation_id, ordinal),
+  FOREIGN KEY (world_id, conversation_id)
+    REFERENCES world_conversation_sessions (world_id, conversation_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS conversation_turns_pending_idx
+  ON world_conversation_turns (world_id, status, deadline_at);
 
 -- ===========================================================================
 -- SECTION 4 — Append-only history
@@ -576,6 +710,64 @@ CREATE TABLE IF NOT EXISTS memory_accesses (
   accessed_tick INT8 NOT NULL,
   PRIMARY KEY (world_id, access_id),
   FOREIGN KEY (world_id, memory_id) REFERENCES world_memories (world_id, memory_id)
+);
+
+CREATE TABLE IF NOT EXISTS memory_source_edges (
+  world_id        UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  edge_id         UUID NOT NULL,
+  memory_id       UUID NOT NULL,
+  source_kind     STRING NOT NULL CHECK (source_kind IN ('memory', 'event', 'turn')),
+  source_memory_id UUID NULL,
+  source_event_id UUID NULL,
+  source_turn_id  UUID NULL,
+  PRIMARY KEY (world_id, edge_id),
+  FOREIGN KEY (world_id, memory_id) REFERENCES world_memories (world_id, memory_id) ON DELETE CASCADE,
+  FOREIGN KEY (world_id, source_memory_id) REFERENCES world_memories (world_id, memory_id),
+  FOREIGN KEY (world_id, source_event_id) REFERENCES world_events (world_id, event_id),
+  FOREIGN KEY (world_id, source_turn_id) REFERENCES world_conversation_turns (world_id, turn_id),
+  CONSTRAINT exactly_one_memory_source CHECK (
+    (CASE WHEN source_memory_id IS NULL THEN 0 ELSE 1 END) +
+    (CASE WHEN source_event_id IS NULL THEN 0 ELSE 1 END) +
+    (CASE WHEN source_turn_id IS NULL THEN 0 ELSE 1 END) = 1)
+);
+
+CREATE TABLE IF NOT EXISTS player_agent_relationship_updates (
+  world_id      UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  update_id     UUID NOT NULL,
+  player_id     UUID NOT NULL,
+  agent_id      UUID NOT NULL,
+  tick          INT8 NOT NULL,
+  seq           INT8 NOT NULL,
+  trust_delta   INT8 NOT NULL DEFAULT 0,
+  affinity_delta INT8 NOT NULL DEFAULT 0,
+  fear_delta    INT8 NOT NULL DEFAULT 0,
+  respect_delta INT8 NOT NULL DEFAULT 0,
+  impression    STRING NULL,
+  conversation_id UUID NULL,
+  PRIMARY KEY (world_id, update_id),
+  UNIQUE (world_id, tick, seq),
+  FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, conversation_id)
+    REFERENCES world_conversation_sessions (world_id, conversation_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_inference_usage (
+  world_id      UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  usage_id      UUID NOT NULL,
+  category      STRING NOT NULL CHECK (category IN
+                  ('player_turn', 'conversation_summary', 'npc_dialogue',
+                   'reflection', 'planning', 'instigator', 'embedding', 'other')),
+  source_key    STRING NOT NULL,
+  attempt       INT8 NOT NULL DEFAULT 0,
+  model_id      STRING NOT NULL,
+  calls         INT8 NOT NULL DEFAULT 1,
+  tokens_in     INT8 NOT NULL DEFAULT 0,
+  tokens_out    INT8 NOT NULL DEFAULT 0,
+  est_cost_micros INT8 NOT NULL DEFAULT 0,
+  recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (world_id, usage_id),
+  UNIQUE (world_id, category, source_key, attempt)
 );
 
 -- "When was this memory last touched" is a descending-limit-1 lookup.
@@ -772,7 +964,8 @@ CREATE TABLE IF NOT EXISTS world_commands (
   idempotency_key STRING NOT NULL,
   command_seq     INT8 NOT NULL,
   kind            STRING NOT NULL CHECK (kind IN
-    ('converse', 'summon', 'move_player', 'restart', 'set_time_scale')),
+    ('converse', 'conversation_start', 'conversation_turn', 'conversation_close',
+     'finalize_conversation', 'summon', 'move_player', 'restart', 'set_time_scale')),
   payload         JSONB NOT NULL DEFAULT '{}',
   received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   applied_tick    INT8 NULL,
@@ -783,7 +976,9 @@ CREATE TABLE IF NOT EXISTS world_commands (
 
 ALTER TABLE world_commands DROP CONSTRAINT IF EXISTS check_kind;
 ALTER TABLE world_commands ADD CONSTRAINT check_kind
-  CHECK (kind IN ('converse', 'summon', 'move_player', 'restart', 'set_time_scale'));
+  CHECK (kind IN ('converse', 'conversation_start', 'conversation_turn',
+                  'conversation_close', 'finalize_conversation', 'summon',
+                  'move_player', 'restart', 'set_time_scale'));
 
 -- Pending commands are drained in order each tick.
 CREATE INDEX IF NOT EXISTS world_commands_pending_idx

@@ -232,6 +232,35 @@ function respond(request: CompletionRequest): string {
     case 'dialogue':
       return rng.pick(DIALOGUE_OPENERS);
 
+    case 'conversation_turn': {
+      const playerText = request.user.split(/\nPlayer: /).at(-1) ?? request.user;
+      const cued = classifyByCue(playerText);
+      const type = playerText.includes('?') && cued !== 'summon' && cued !== 'threaten'
+        ? 'inquire' : (cued ?? 'smalltalk');
+      return JSON.stringify({
+        reply: rng.pick(DIALOGUE_OPENERS),
+        speechAct: type,
+        disclosure: type === 'inquire'
+          ? (pickFromChoices(request, 'disclosures', rng) ?? 'deflect')
+          : null,
+        hearingResponse: type === 'summon'
+          ? (pickFromChoices(request, 'responses', rng) ?? 'come')
+          : null,
+      });
+    }
+
+    case 'conversation_summary':
+      return JSON.stringify({
+        summary: 'The outsider and the agent spoke at length about the unrest in Hollowmere.',
+        impression: 'The conversation will color their next meeting.',
+      });
+
+    case 'npc_conversation':
+      return JSON.stringify({
+        utterance: rng.pick(DIALOGUE_OPENERS),
+        response: rng.pick(DIALOGUE_OPENERS),
+      });
+
     case 'reflect':
       return rng.pick(REFLECTIONS);
 

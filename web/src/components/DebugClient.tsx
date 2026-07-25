@@ -5,11 +5,11 @@ import { BookOpen, FileSearch, Map, Network, Pause, Play, RotateCcw, Scale, User
 
 import { EventBus } from '@/game/EventBus';
 import type {
-  AgentDetail, Bootstrap, ChronicleEntry, DebugTruth, GameSnapshot, SocialGraph,
+  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, SocialGraph,
 } from '@/lib/contracts';
 import {
-  control, loadAgent, loadChronicle, loadGame, loadGraph, loadTruth, movePlayer,
-  startSession, streamConversation, type PlayerEntry,
+  closeConversation, control, loadAgent, loadChronicle, loadGame, loadGraph, loadTruth, movePlayer,
+  startConversation, startSession, streamConversationTurn, type PlayerEntry,
 } from '@/lib/clientApi';
 import { PhaserGame } from './PhaserGame';
 import { Panel } from './Panel';
@@ -27,6 +27,7 @@ export function DebugClient() {
   const [graph, setGraph] = useState<SocialGraph | null>(null);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [talkingTo, setTalkingTo] = useState<string | null>(null);
+  const [conversation, setConversation] = useState<Conversation | null>(null);
   const [utterance, setUtterance] = useState('');
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
@@ -39,6 +40,8 @@ export function DebugClient() {
     try {
       const next = await loadGame();
       setGame(next);
+      setConversation(next.conversation);
+      setTalkingTo(next.conversation?.agentKey ?? null);
       setError(null);
       if (!next.player.pendingMove) moveInFlight.current = false;
     } catch (cause) {
@@ -53,6 +56,8 @@ export function DebugClient() {
       const created = await startSession(entry);
       setBootstrap(created);
       setGame(created.game);
+      setConversation(created.game.conversation);
+      setTalkingTo(created.game.conversation?.agentKey ?? null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -71,7 +76,15 @@ export function DebugClient() {
       setPanel('agent');
       void loadAgent(agentKey).then(setAgent).catch((cause) => setError(String(cause)));
     });
-    const offTalk = EventBus.on('talk-agent', ({ agentKey }) => setTalkingTo(agentKey));
+    const offTalk = EventBus.on('talk-agent', ({ agentKey }) => {
+      setSending(true);
+      void startConversation(agentKey).then((value) => {
+        setConversation(value);
+        setTalkingTo(value.agentKey);
+        setReply('');
+      }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+        .finally(() => setSending(false));
+    });
     const offMove = EventBus.on('request-move', ({ locationKey }) => {
       if (moveInFlight.current) return;
       moveInFlight.current = true;
@@ -95,14 +108,30 @@ export function DebugClient() {
 
   async function sendDialogue(event: React.FormEvent) {
     event.preventDefault();
-    if (!talkingTo || !utterance.trim() || sending) return;
+    if (!talkingTo || !conversation || !utterance.trim() || sending) return;
     const text = utterance.trim();
     setUtterance('');
     setReply('');
     setSending(true);
     try {
-      await streamConversation({ agentKey: talkingTo, text, idempotencyKey: crypto.randomUUID() },
+      await streamConversationTurn({ conversationId: conversation!.conversationId, text, idempotencyKey: crypto.randomUUID() },
         (token) => setReply((current) => current + token));
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function leaveConversation() {
+    if (!conversation || sending) return;
+    setSending(true);
+    try {
+      await closeConversation(conversation.conversationId);
+      setConversation(null);
+      setTalkingTo(null);
+      setReply('');
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -144,6 +173,7 @@ export function DebugClient() {
         <div className="instrument stage-instrument"><dt>stage</dt><dd>{game.world.stage.replaceAll('_', ' ')}</dd></div>
         <div className="instrument tension-instrument"><dt>tension</dt><dd><span className="tension-track"><span style={{ width: `${stageProgress}%` }} /></span><b>{stageProgress}%</b></dd></div>
         <div className="instrument"><dt>phase</dt><dd>{game.world.phase}</dd></div>
+        {game.world.timeDebtTicks > 0 && <div className="instrument"><dt>talk cost</dt><dd>+{game.world.timeDebtTicks} ticks</dd></div>}
         <div className="instrument seed-instrument"><dt>seed</dt><dd>{game.world.seed}</dd></div>
       </dl>
       <div className="controls">
@@ -205,13 +235,17 @@ export function DebugClient() {
       })}</section>
     </Panel>}
     {panel === 'agent' && <Panel title={agent?.agent.name ?? 'Agent inspector'} onClose={() => setPanel(null)}>
-      {!agent ? <p className="empty">Choose an NPC on the map.</p> : <><p>{agent.summary}</p><p className="tags">{agent.traits.join(' · ')}</p><dl className="detail-list"><div><dt>faction</dt><dd>{agent.agent.factionKey}</dd></div><div><dt>location</dt><dd>{agent.agent.locationKey}</dd></div><div><dt>status</dt><dd>{agent.agent.status}</dd></div><div><dt>action</dt><dd>{agent.agent.currentAction ?? 'routine'}</dd></div></dl><h3>Strongest beliefs</h3>{agent.beliefs.map((belief) => <div className="metric-row" key={belief.claimKey}><b>{belief.claimKey}</b><span>{Math.round(belief.confidence / 100)}% · t{belief.updatedTick}</span></div>)}<h3>Relationships</h3>{agent.relationships.map((relationship) => <div className="metric-row" key={relationship.agentKey}><b>{relationship.agentKey}</b><span>sentiment {Math.round(relationship.sentiment / 100)} · trust {Math.round(relationship.trust / 100)}</span></div>)}</>}
+      {!agent ? <p className="empty">Choose an NPC on the map.</p> : <><p>{agent.summary}</p><p className="tags">{agent.traits.join(' · ')}</p><dl className="detail-list"><div><dt>faction</dt><dd>{agent.agent.factionKey}</dd></div><div><dt>location</dt><dd>{agent.agent.locationKey}</dd></div><div><dt>status</dt><dd>{agent.agent.status}</dd></div><div><dt>action</dt><dd>{agent.agent.currentAction ?? 'routine'}</dd></div></dl><h3>Personality</h3>{Object.entries(agent.personality).map(([name, value]) => <div className="metric-row" key={name}><b>{name}</b><span>{Math.round(value / 100)}%</span></div>)}<h3>Relationship with you</h3>{agent.playerRelationship ? <><div className="metric-row"><b>trust · affinity</b><span>{Math.round(agent.playerRelationship.trust / 100)} · {Math.round(agent.playerRelationship.affinity / 100)}</span></div><div className="metric-row"><b>fear · respect</b><span>{Math.round(agent.playerRelationship.fear / 100)} · {Math.round(agent.playerRelationship.respect / 100)}</span></div>{agent.playerRelationship.impression && <p className="notice">{agent.playerRelationship.impression}</p>}</> : <p className="empty">No impression yet.</p>}<h3>Recent dialogue</h3>{agent.recentDialogue.length ? agent.recentDialogue.map((item, index) => <div className="metric-row" key={`${item.tick}-${index}`}><b>t{item.tick}</b><span>{item.text}</span></div>) : <p className="empty">Nothing recorded.</p>}<h3>Strongest beliefs</h3>{agent.beliefs.map((belief) => <div className="metric-row" key={belief.claimKey}><b>{belief.claimKey}</b><span>{Math.round(belief.confidence / 100)}% · t{belief.updatedTick}</span></div>)}<h3>Relationships</h3>{agent.relationships.map((relationship) => <div className="metric-row" key={relationship.agentKey}><b>{relationship.agentKey}</b><span>sentiment {Math.round(relationship.sentiment / 100)} · trust {Math.round(relationship.trust / 100)}</span></div>)}</>}
     </Panel>}
 
-    {talkingTo && <section className="dialogue" aria-label={`Conversation with ${talkingAgent?.name ?? talkingTo}`}>
-      <header><div><span className="eyebrow">Conversation</span><h2>{talkingAgent?.name ?? talkingTo}</h2></div><button onClick={() => setTalkingTo(null)} aria-label="Close conversation">×</button></header>
+    {talkingTo && conversation && <section className="dialogue" aria-label={`Conversation with ${talkingAgent?.name ?? talkingTo}`}>
+      <header><div><span className="eyebrow">Conversation · {conversation.turnCount} turns</span><h2>{talkingAgent?.name ?? talkingTo}</h2></div><button disabled={sending} onClick={() => void leaveConversation()} aria-label="End conversation">×</button></header>
       <p className="muted">{talkingAgent?.factionKey} · {talkingAgent?.locationKey}</p>
-      <div className="reply">{reply || (sending ? 'Listening…' : 'Ask about a source, dispute a claim, reconcile the Houses, or summon them to a hearing.')}</div>
+      {conversation.participants.some((item) => item.role === 'observer') && <p className="audience">Overheard by {conversation.participants.filter((item) => item.role === 'observer').map((item) => item.name).join(', ')}</p>}
+      <div className="conversation-log">
+        {conversation.turns.map((turn) => <div className="conversation-exchange" key={turn.turnId}><p><b>You</b>{turn.playerText}</p><p><b>{conversation.agentName}</b>{turn.reply}</p><small>{turn.speechAct}{turn.fallback ? ' · fallback' : ''}</small></div>)}
+      </div>
+      <div className="reply">{reply || (sending ? 'Listening…' : conversation.turns.length ? 'Continue, or end the conversation.' : 'Ask about a source, dispute a claim, reconcile the Houses, or summon them to a hearing.')}</div>
       <form onSubmit={sendDialogue}><textarea value={utterance} onChange={(event) => setUtterance(event.target.value)} maxLength={2000} autoFocus placeholder="Speak to them…" /><button disabled={sending || !utterance.trim()}>{sending ? 'Speaking…' : 'Send'}</button></form>
     </section>}
 

@@ -22,29 +22,29 @@ The town is the visualization. The substrate is the point.
 
 ## Status
 
-**Phase 1 (engine) is complete — 12 of 12 milestones, 177 tests passing.**
+**Phase 1 (engine) and the Phaser debug client are complete.**
 
 Preflight gate · fixed-point + RNG conventions · schema + DB layer · scenario
 loader · inference (stub + Bedrock) · retrieval · gossip + beliefs · tension,
 stages, peace and triggers · `runTick` + scheduler · `converse` · headless
 harness + REPL · read-only debug dashboard.
 
-Phase 2 now has a production-shaped Next.js + Phaser debug client on the
-`codex/phase-2-phaser` branch: a playable town map, session-isolated APIs,
-walk-up streaming dialogue, safe simulation controls, and the dashboard's
-diagnostic views. Evidence and hearing panels are wired to the instigator spec
-and activate when that engine implementation is integrated.
+Phase 2 has a production-shaped Next.js + Phaser debug client: a playable town
+map, session-isolated APIs, durable multi-turn walk-up dialogue, safe simulation
+controls, evidence/hearing gameplay, and the dashboard's diagnostic views.
+Conversation holds simulation time, remembers who heard it, changes the NPC's
+long-term impression of the player, and charges 1–3 ticks when it ends.
 
 Next: finish the instigator-engine merge, then CockroachDB Cloud, Managed MCP,
 and ECS/Fargate (Phase 3).
 
 ### The town, left alone
 
-Under the canonical seed, an unattended run reaches war at **tick 240** — inside
+Under the canonical seed, an unattended run reaches war at **tick 239** — inside
 the 192–288 window the plan fixes, passing through every stage in order:
 
 ```
-suspicion t36 · accusations t85 · trials t142 · first_blood t195 · war t240
+suspicion t36 · accusations t83 · trials t141 · first_blood t194 · war t239
 ```
 
 It gets there with **no model calls required** (the deterministic stub is a
@@ -66,7 +66,7 @@ npm run preflight      # verifies vector indexing, isolation, time travel
 cp .env.example .env
 npm run db:migrate -- --fresh
 npm run seed -- --seed 42
-npm run check          # typecheck + 177 tests
+npm run check          # typecheck + engine tests
 ```
 
 Then watch a town destroy itself:

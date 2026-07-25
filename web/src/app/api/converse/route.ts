@@ -1,79 +1,73 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-import { assertColocated, converse, query } from '@/server/engine';
-import { jsonBody, requireSameOrigin, requireSession } from '@/server/http';
+import {
+  closeConversation, getHeldConversation, startConversation, takeConversationTurn,
+} from '@/server/engine';
+import { jsonBody, requireSameOrigin, requireSession, routeError } from '@/server/http';
 import { inference } from '@/server/inference';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+export async function GET(): Promise<Response> {
+  try {
+    return NextResponse.json(await getHeldConversation(await requireSession()), {
+      headers: { 'cache-control': 'no-store' },
+    });
+  } catch (error) { return routeError(error); }
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   try {
     requireSameOrigin(request);
     const ref = await requireSession();
-    const body = await jsonBody<{ agentKey?: string; text?: string; idempotencyKey?: string }>(request);
-    const agentKey = body.agentKey?.trim();
-    const utterance = body.text?.trim();
-    if (!agentKey || !utterance || !body.idempotencyKey) {
-      return Response.json({ error: 'agentKey, text, and idempotencyKey are required' }, { status: 400 });
+    const body = await jsonBody<{
+      action?: 'start' | 'turn' | 'close'; agentKey?: string; conversationId?: string;
+      text?: string; idempotencyKey?: string;
+    }>(request);
+    if (!body.action || !body.idempotencyKey) {
+      return Response.json({ error: 'action and idempotencyKey are required' }, { status: 400 });
     }
-    if (utterance.length > 2_000) return Response.json({ error: 'utterance is too long' }, { status: 413 });
-    await assertColocated(ref, agentKey);
-
-    const recent = await query<{ count: number }>(
-      `SELECT count(*)::INT8 AS count FROM world_commands
-        WHERE world_id = $1 AND kind = 'converse'
-          AND received_at > now() - INTERVAL '1 minute'`, [ref.worldId],
-    );
-    const limit = Number(process.env.CONVERSATION_RATE_LIMIT_PER_MINUTE ?? 20);
-    if ((recent[0]?.count ?? 0) >= limit) {
-      return Response.json({ error: 'conversation rate limit reached; wait a moment' }, { status: 429 });
+    if (body.action === 'start') {
+      if (!body.agentKey) return Response.json({ error: 'agentKey is required' }, { status: 400 });
+      return NextResponse.json(await startConversation({
+        ...ref, agentKey: body.agentKey, idempotencyKey: body.idempotencyKey,
+      }));
     }
+    if (!body.conversationId) {
+      return Response.json({ error: 'conversationId is required' }, { status: 400 });
+    }
+    if (body.action === 'close') {
+      return NextResponse.json(await closeConversation({
+        ...ref, conversationId: body.conversationId,
+        idempotencyKey: body.idempotencyKey, inference,
+      }));
+    }
+    const text = body.text?.trim();
+    if (!text) return Response.json({ error: 'text is required' }, { status: 400 });
+    if (text.length > 2_000) return Response.json({ error: 'utterance is too long' }, { status: 413 });
 
+    // The full turn is validated and committed before anything is exposed to
+    // the browser. SSE then reveals that authoritative reply incrementally.
+    const result = await takeConversationTurn({
+      ...ref, conversationId: body.conversationId, text,
+      idempotencyKey: body.idempotencyKey, inference,
+    });
     const encoder = new TextEncoder();
-    let open = true;
     const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const emit = (event: string, value: unknown) => {
-          if (!open) return;
-          try {
-            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`));
-          } catch {
-            open = false;
-          }
-        };
-        void converse({
-          worldId: ref.worldId,
-          sessionId: ref.sessionId,
-          agentKey,
-          text: utterance,
-          idempotencyKey: body.idempotencyKey!,
-          inference,
-          onToken: (token) => emit('token', { token }),
-        }).then((result) => {
-          emit('result', result);
-        }).catch((error: unknown) => {
-          emit('error', { error: error instanceof Error ? error.message : String(error) });
-        }).finally(() => {
-          if (open) controller.close();
-          open = false;
-        });
-      },
-      cancel() {
-        // converse intentionally continues: its effects are already durable,
-        // and the completed reply still needs to be recorded for replay.
-        open = false;
+      async start(controller) {
+        for (const token of result.turn.reply.match(/\S+\s*/g) ?? []) {
+          controller.enqueue(encoder.encode(`event: token\ndata: ${JSON.stringify({ token })}\n\n`));
+          await new Promise((resolve) => setTimeout(resolve, 8));
+        }
+        controller.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify(result)}\n\n`));
+        controller.close();
       },
     });
-    return new Response(stream, {
-      headers: {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache, no-transform',
-        connection: 'keep-alive',
-        'x-accel-buffering': 'no',
-      },
-    });
-  } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
-  }
+    return new Response(stream, { headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      'x-accel-buffering': 'no',
+    } });
+  } catch (error) { return routeError(error); }
 }

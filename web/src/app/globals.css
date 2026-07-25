@@ -201,6 +201,12 @@ th, td { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0.5rem; }
 }
 .dialogue header, .truth-drawer header { display: flex; justify-content: space-between; align-items: start; }.dialogue h2, .truth-drawer h2 { margin: 0.2rem 0 0; }
 .reply { min-height: 70px; margin: 0.8rem 0; border: 1px solid var(--line); background: var(--surface); padding: 0.8rem; color: #d4cbbb; font: 0.93rem/1.5 Georgia, serif; }
+.audience { margin: .45rem 0; color: #746f66; font-size: .58rem; }
+.conversation-log { max-height: 230px; overflow-y: auto; border-block: 1px solid var(--line); }
+.conversation-exchange { padding: .7rem 0; border-bottom: 1px solid rgba(255,255,255,.045); }
+.conversation-exchange p { display: grid; grid-template-columns: 86px 1fr; gap: .65rem; margin: .25rem 0; color: #cfc5b5; font: .78rem/1.45 Georgia, serif; }
+.conversation-exchange b { color: var(--muted); font: 500 .58rem/1.6 var(--mono); text-transform: uppercase; }
+.conversation-exchange small { display: block; margin-left: 86px; color: var(--gold); font-size: .52rem; text-transform: uppercase; }
 .dialogue form { display: grid; grid-template-columns: 1fr auto; gap: 0.6rem; }.dialogue textarea { min-height: 74px; resize: vertical; border: 1px solid var(--line); background: #09090c; padding: 0.7rem; color: var(--ink); }
 
 .toast { position: absolute; z-index: 90; top: 84px; left: calc(50% + 39px); transform: translateX(-50%); border: 1px solid #874b40; background: #331d20; padding: 0.75rem 1rem; box-shadow: 0 10px 40px #0008; }.toast button { margin-left: 1rem; }

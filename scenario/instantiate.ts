@@ -79,6 +79,8 @@ export async function instantiateWorld(
       locationIds.get(options.playerLocationKey ?? scenario.opening.location)!,
       scenario.factions, factionIds, options.playerName, options.playerProfile,
     );
+    await insertPlayerAgentRelationships(client, worldId, playerId);
+    await insertReflectionState(client, worldId);
 
     await applyOpening(client, worldId, scenario.opening, locationIds, claimIds);
 
@@ -86,6 +88,28 @@ export async function instantiateWorld(
   }, { label: 'instantiateWorld' });
 
   return value;
+}
+
+async function insertPlayerAgentRelationships(
+  client: Client,
+  worldId: string,
+  playerId: string,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO player_agent_relationships (world_id, player_id, agent_id)
+     SELECT $1, $2, agent_id FROM world_agents WHERE world_id = $1
+     ON CONFLICT (world_id, player_id, agent_id) DO NOTHING`,
+    [worldId, playerId],
+  );
+}
+
+async function insertReflectionState(client: Client, worldId: string): Promise<void> {
+  await client.query(
+    `INSERT INTO world_agent_reflection_state (world_id, agent_id)
+     SELECT $1, agent_id FROM world_agents WHERE world_id = $1
+     ON CONFLICT (world_id, agent_id) DO NOTHING`,
+    [worldId],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +121,8 @@ interface LocationRow { location_key: string; district_key: string; name: string
   x: number; y: number; gossip_bonus: number }
 interface RouteRow { from_location_key: string; to_location_key: string; cost: number }
 interface AgentRow { agent_key: string; name: string; faction_key: string;
-  home_location_key: string; work_location_key: string; persona: unknown;
+  home_location_key: string; work_location_key: string;
+  persona: { status?: string; traits?: string[] };
   routine: unknown; credulity: number; talkativeness: number }
 interface ClaimRow { claim_key: string; text: string; subject_agent_key: string;
   truth: string; severity: number }
@@ -225,12 +250,15 @@ async function insertAgents(
 ): Promise<Map<string, string>> {
   const ids = new Map<string, string>();
   for (const a of agents) {
-    const persona = a.persona as { status?: string };
+    const persona = a.persona;
+    const personality = personalityFrom(a);
     const row = await client.query<{ agent_id: string }>(
       `INSERT INTO world_agents
          (world_id, agent_key, name, faction_id, home_location_id, work_location_id,
-          location_id, persona, routine, credulity, talkativeness, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING agent_id`,
+          location_id, persona, routine, credulity, talkativeness, kindness,
+          engagement, honesty, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING agent_id`,
       [
         worldId, a.agent_key, a.name,
         factionIds.get(a.faction_key),
@@ -239,13 +267,36 @@ async function insertAgents(
         // Everyone starts at home; the first tick moves them into the routine.
         locationIds.get(a.home_location_key),
         JSON.stringify(a.persona), JSON.stringify(a.routine),
-        a.credulity, a.talkativeness,
+        a.credulity, a.talkativeness, personality.kindness,
+        personality.engagement, personality.honesty,
         persona.status ?? 'alive',
       ],
     );
     ids.set(a.agent_key, row.rows[0]!.agent_id);
   }
   return ids;
+}
+
+function personalityFrom(agent: AgentRow): {
+  kindness: number; engagement: number; honesty: number;
+} {
+  const traits = new Set((agent.persona.traits ?? []).map((trait) => trait.toLowerCase()));
+  const score = (positive: readonly string[], negative: readonly string[]) => {
+    const up = positive.some((word) => [...traits].some((trait) => trait.includes(word)));
+    const down = negative.some((word) => [...traits].some((trait) => trait.includes(word)));
+    return up === down ? 5000 : up ? 7000 : 3000;
+  };
+  return {
+    kindness: score(
+      ['motherly', 'cheerful', 'devout', 'careful', 'kind'],
+      ['bitter', 'imperious', 'calculating', 'hot-tempered', 'unforgiving'],
+    ),
+    engagement: agent.talkativeness,
+    honesty: score(
+      ['credible', 'blunt', 'practical', 'meticulous', 'careful'],
+      ['secretive', 'evasive', 'compromised', 'calculating'],
+    ),
+  };
 }
 
 async function linkFactionLeaders(

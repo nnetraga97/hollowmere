@@ -12,6 +12,7 @@ import {
   listAgents, type AgentView, type ClaimView, type CognitionView,
   type FactionView, type TickMetrics, type WorldSummary,
 } from './api.ts';
+import { getHeldConversation, type ConversationView } from './conversation.ts';
 
 export interface SessionRef {
   sessionId: string;
@@ -92,6 +93,7 @@ export interface GameSnapshot {
   hearings: HearingView[];
   cognition: CognitionView[];
   metrics: TickMetrics[];
+  conversation: ConversationView | null;
   capabilities: { instigator: boolean; hearings: boolean; evidence: boolean };
 }
 
@@ -102,6 +104,11 @@ export interface AgentDetailView {
   beliefs: { claimKey: string; confidence: number; updatedTick: number }[];
   relationships: { agentKey: string; sentiment: number; trust: number }[];
   cognition: CognitionView[];
+  recentDialogue: { tick: number; text: string }[];
+  personality: { kindness: number; engagement: number; honesty: number };
+  playerRelationship: {
+    trust: number; affinity: number; fear: number; respect: number; impression: string | null;
+  } | null;
 }
 
 export interface DebugTruthView {
@@ -266,6 +273,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
     hearings,
     cognition,
     metrics,
+    conversation: await getHeldConversation(ref),
     capabilities: {
       instigator: await tableExists('world_culprit'),
       hearings: await tableExists('world_hearings'),
@@ -303,6 +311,26 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
   const recent = (await getCognition(ref.worldId, 100))
     .filter((item) => item.agentKey === agentKey)
     .slice(0, 10);
+  const recentDialogue = await query<{ tick: number; description: string }>(
+    `SELECT e.tick, e.description FROM world_events e
+       JOIN world_agents a ON a.world_id = e.world_id AND a.agent_id = e.actor_agent_id
+      WHERE e.world_id = $1 AND a.agent_key = $2 AND e.kind = 'dialogue'
+      ORDER BY e.tick DESC, e.seq DESC LIMIT 10`, [ref.worldId, agentKey],
+  );
+  const personality = await query<{
+    kindness: number; engagement: number; honesty: number; trust: number | null;
+    affinity: number | null; fear: number | null; respect: number | null; impression: string | null;
+  }>(
+    `SELECT a.kindness, a.engagement, a.honesty, r.trust, r.affinity, r.fear,
+            r.respect, r.impression
+       FROM world_agents a
+       LEFT JOIN world_players p ON p.world_id = a.world_id AND p.session_id = $3
+       LEFT JOIN player_agent_relationships r ON r.world_id = a.world_id
+            AND r.player_id = p.player_id AND r.agent_id = a.agent_id
+      WHERE a.world_id = $1 AND a.agent_key = $2`,
+    [ref.worldId, agentKey, ref.sessionId],
+  );
+  const personal = personality[0];
   return {
     agent,
     summary: personas[0]?.persona.summary ?? '',
@@ -314,6 +342,19 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
       agentKey: row.agent_key, sentiment: row.sentiment, trust: row.trust,
     })),
     cognition: recent,
+    recentDialogue: recentDialogue.map((row) => ({ tick: row.tick, text: row.description })),
+    personality: {
+      kindness: personal?.kindness ?? 5000,
+      engagement: personal?.engagement ?? 5000,
+      honesty: personal?.honesty ?? 5000,
+    },
+    playerRelationship: personal?.trust == null ? null : {
+      trust: personal.trust,
+      affinity: personal.affinity ?? 0,
+      fear: personal.fear ?? 0,
+      respect: personal.respect ?? 0,
+      impression: personal.impression,
+    },
   };
 }
 

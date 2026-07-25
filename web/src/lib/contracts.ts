@@ -47,11 +47,23 @@ export interface HearingView {
   commitments: { agentKey: string; response: string; status: string; dueTick: number }[];
 }
 
+export interface ConversationTurn {
+  turnId: string; ordinal: number; playerText: string; reply: string;
+  speechAct: string; fallback: boolean;
+}
+
+export interface Conversation {
+  conversationId: string; agentKey: string; agentName: string; status: string;
+  openedTick: number; turnCount: number; timeCostTicks: number;
+  participants: { agentKey: string; name: string; role: 'target' | 'observer' }[];
+  turns: ConversationTurn[];
+}
+
 export interface GameSnapshot {
   world: {
     worldId: string; status: string; ending: string | null; currentTick: number;
     day: number; phase: string; stage: string; globalTension: number;
-    peaceStreak: number; seed: number; timeScale: number; agentsAlive: number;
+    peaceStreak: number; seed: number; timeScale: number; timeDebtTicks: number; agentsAlive: number;
     inferenceCalls: number; estCostMicros: number;
   };
   player: {
@@ -76,6 +88,7 @@ export interface GameSnapshot {
     decision: Record<string, unknown>; latencyMs: number;
   }[];
   metrics: { tick: number; durationMs: number; retryCount: number }[];
+  conversation: Conversation | null;
   capabilities: { instigator: boolean; hearings: boolean; evidence: boolean };
 }
 
@@ -92,6 +105,11 @@ export interface AgentDetail {
   beliefs: { claimKey: string; confidence: number; updatedTick: number }[];
   relationships: { agentKey: string; sentiment: number; trust: number }[];
   cognition: GameSnapshot['cognition'];
+  recentDialogue: { tick: number; text: string }[];
+  personality: { kindness: number; engagement: number; honesty: number };
+  playerRelationship: {
+    trust: number; affinity: number; fear: number; respect: number; impression: string | null;
+  } | null;
 }
 
 export interface DebugTruth {

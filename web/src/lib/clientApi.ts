@@ -1,5 +1,5 @@
 import type {
-  AgentDetail, Bootstrap, ChronicleEntry, DebugTruth, GameSnapshot, SocialGraph, TensionPoint,
+  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, SocialGraph, TensionPoint,
 } from './contracts';
 
 async function decode<T>(response: Response): Promise<T> {
@@ -60,12 +60,27 @@ export async function control(body: Record<string, unknown>) {
   }));
 }
 
-export async function streamConversation(
-  input: { agentKey: string; text: string; idempotencyKey: string },
+export async function startConversation(agentKey: string): Promise<Conversation> {
+  return decode(await fetch('/api/converse', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'start', agentKey, idempotencyKey: crypto.randomUUID() }),
+  }));
+}
+
+export async function closeConversation(conversationId: string): Promise<Conversation> {
+  return decode(await fetch('/api/converse', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'close', conversationId, idempotencyKey: crypto.randomUUID() }),
+  }));
+}
+
+export async function streamConversationTurn(
+  input: { conversationId: string; text: string; idempotencyKey: string },
   onToken: (token: string) => void,
 ): Promise<Record<string, unknown>> {
   const response = await fetch('/api/converse', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'turn', ...input }),
   });
   if (!response.ok || !response.body) return decode(response);
   const reader = response.body.getReader();

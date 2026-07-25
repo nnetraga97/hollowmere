@@ -26,7 +26,7 @@ import { createHash } from 'node:crypto';
 
 import type { Client } from './db.ts';
 import { BELIEF, COGNITION } from './config.ts';
-import { readBudget, recordUsage, type BudgetState } from './budget.ts';
+import { estimateCostMicros, readBudget, recordUsage, type BudgetState } from './budget.ts';
 import { accuseByClaimKey } from './accusations.ts';
 import { loadAgentGoals, type AgentGoal } from './goals.ts';
 import { recall, recordAccesses } from './retrieval.ts';
@@ -35,13 +35,14 @@ import { clampUnit, type Fixed } from './fixedpoint.ts';
 import type { Rng } from './rng.ts';
 import type { Seq } from './seq.ts';
 import type { InferenceClient } from './inference/index.ts';
+import { stableId } from './ids.ts';
 import type { EscalationStage } from './tension.ts';
 
 export const PLAN_PROMPT_VERSION = 'plan-v2';
 export const REFLECT_PROMPT_VERSION = 'reflect-v1';
 
 /** How often a thinking agent also synthesises what they have recalled. */
-const REFLECTION_CHANCE = 3_000;
+const REFLECTION_THRESHOLD = 25_000;
 
 /** The model id recorded when the budget is spent and the rules take over. */
 export const FALLBACK_MODEL_ID = 'deterministic-fallback';
@@ -375,24 +376,15 @@ export async function think(
       planned = parsePlan(response.text, destinations, beliefs.map((b) => b.claimKey));
     }
 
-    // Reflection is the expensive, occasional step: only when the agent has
-    // enough material for a synthesis to mean anything.
-    //
-    // Note carefully what the draw is *not* conditioned on. `memories.length`
-    // comes from the ANN index, which is approximate: it can return a slightly
-    // different candidate set as it is rebuilt or under load. Gating the draw on
-    // it made whether the generator was consumed depend on index recall, which
-    // shifted every later draw in the tick and made two runs of the same seed
-    // diverge — the exact failure mode the determinism contract exists to
-    // prevent, and one that only appeared under concurrent load. The draw is
-    // therefore always taken, and only then tested against an exact count.
-    const wantsReflection = ctx.rng.chance(REFLECTION_CHANCE);
+    // Park-style reflection is threshold driven: memories add importance until
+    // there is enough material to justify one synthesis. Both inputs are exact
+    // database counts, never ANN recall, so rebuilds cannot change the decision.
     const memoryCount = await countMemories(client, ctx.worldId, agent.agentId);
+    const reflectionImportance = await readReflectionImportance(client, ctx.worldId, agent.agentId);
 
-    // Same discipline as the plan seed: the draw is decided by `willReflect`,
-    // which a replay reproduces exactly, and is taken in both modes so the two
-    // consume the generator identically.
-    const willReflect = wantsReflection && memoryCount >= 4;
+    // Only a real reflection consumes a seed, which replay reproduces from the
+    // same persisted accumulator and memory count.
+    const willReflect = reflectionImportance >= REFLECTION_THRESHOLD && memoryCount >= 4;
     const reflectSeed = willReflect ? ctx.rng.nextU32() : 0;
 
     let reflection: string | null = null;
@@ -476,6 +468,19 @@ export async function think(
     tokensOut,
     billable: ctx.inference.mode === 'bedrock',
   });
+  if (first && calls > 0 && !ctx.replay) {
+    const sourceKey = String(ctx.tick);
+    await client.query(
+      `INSERT INTO world_inference_usage
+         (world_id, usage_id, category, source_key, model_id, calls, tokens_in, tokens_out,
+          est_cost_micros)
+       VALUES ($1, $2, 'planning', $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (world_id, category, source_key, attempt) DO NOTHING`,
+      [ctx.worldId, stableId(ctx.worldId, 'planning', sourceKey), sourceKey,
+        first.modelId, calls, tokensIn, tokensOut,
+        estimateCostMicros({ calls, tokensIn, tokensOut, billable: ctx.inference.mode === 'bedrock' })],
+    );
+  }
 
   return decisions;
 }
@@ -666,6 +671,8 @@ export async function applyCognition(
         importance: COGNITION.observationImportance,
       });
       applied.memories++;
+      await addReflectionImportance(client, ctx.worldId, decision.agentId,
+        COGNITION.observationImportance);
     }
     if (decision.reflection && decision.reflectionVector) {
       await insertMemory(client, ctx, decision.agentId, {
@@ -675,6 +682,12 @@ export async function applyCognition(
         importance: COGNITION.reflectionImportance,
       });
       applied.memories++;
+      await client.query(
+        `UPDATE world_agent_reflection_state
+            SET accumulated_importance = 0, last_reflection_tick = $3
+          WHERE world_id = $1 AND agent_id = $2`,
+        [ctx.worldId, decision.agentId, ctx.tick],
+      );
     }
 
     if (decision.accuseClaimKey) {
@@ -698,6 +711,26 @@ export async function applyCognition(
 
   applied.tensionDelta = clampUnit(applied.tensionDelta);
   return applied;
+}
+
+async function readReflectionImportance(
+  client: Client, worldId: string, agentId: string,
+): Promise<number> {
+  const rows = await client.query<{ accumulated_importance: number }>(
+    `SELECT accumulated_importance FROM world_agent_reflection_state
+      WHERE world_id = $1 AND agent_id = $2`, [worldId, agentId],
+  );
+  return rows.rows[0]?.accumulated_importance ?? 0;
+}
+
+async function addReflectionImportance(
+  client: Client, worldId: string, agentId: string, amount: number,
+): Promise<void> {
+  await client.query(
+    `UPDATE world_agent_reflection_state
+        SET accumulated_importance = accumulated_importance + $3
+      WHERE world_id = $1 AND agent_id = $2`, [worldId, agentId, amount],
+  );
 }
 
 /** CockroachDB's VECTOR input format. Null passes straight through. */

@@ -34,7 +34,13 @@ export type InferenceTask =
   /** Decide whether an NPC attends a hearing. */
   | 'attendance'
   /** Decide how an NPC answers a provenance inquiry. */
-  | 'inquire';
+  | 'inquire'
+  /** Produce one structured reply inside an ongoing player conversation. */
+  | 'conversation_turn'
+  /** Compress a completed player conversation into durable memory. */
+  | 'conversation_summary'
+  /** Produce one structured NPC-to-NPC conversational exchange. */
+  | 'npc_conversation';
 
 export interface CompletionRequest {
   task: InferenceTask;

@@ -37,6 +37,7 @@ export async function decideSummon(
     playerId: string;
     text: string;
     inference: InferenceClient;
+    responseOverride?: AttendanceResponse;
   },
 ): Promise<SummonDecision> {
   const graph = await loadRouteGraph(client, input.worldId);
@@ -77,6 +78,13 @@ export async function decideSummon(
     };
   }
 
+  if (input.responseOverride) {
+    return {
+      response: input.responseOverride, locationId, locationKey, dueTick, rejectedReason: null,
+      inputHash, modelId: 'conversation-turn', tokensIn: 0, tokensOut: 0, latencyMs: 0,
+    };
+  }
+
   const budget = await readBudget(client, input.worldId);
   if (budget.exhausted) {
     return {
@@ -114,7 +122,6 @@ export async function applySummon(
     playerId: string;
     agentId: string;
     agentName: string;
-    agentLocationId: string;
     tick: number;
     seq: Seq;
     decision: SummonDecision;
@@ -173,7 +180,7 @@ export async function applySummon(
       input.worldId,
       input.agentId,
       hearingId,
-      input.agentLocationId,
+      decision.locationId,
       decision.dueTick,
       decision.response,
       'pending',

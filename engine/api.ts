@@ -27,6 +27,7 @@ export interface WorldSummary {
   peaceStreak: number;
   seed: number;
   timeScale: number;
+  timeDebtTicks: number;
   agentsAlive: number;
   inferenceCalls: number;
   estCostMicros: number;
@@ -35,11 +36,12 @@ export interface WorldSummary {
 export async function getWorldSummary(worldId: string): Promise<WorldSummary | null> {
   const rows = await query<{
     world_id: string; status: string; ending: string | null; current_tick: number;
-    seed: number; time_scale: number; day: number; phase: string;
+    seed: number; time_scale: number; time_debt_ticks: number; day: number; phase: string;
     escalation_stage: EscalationStage; global_tension: number; peace_streak: number;
     agents_alive: number; inference_calls: number; est_cost_micros: number;
   }>(
     `SELECT w.world_id, w.status, w.ending, w.current_tick, w.seed, w.time_scale,
+            w.time_debt_ticks,
             s.day, s.phase, s.escalation_stage, s.global_tension, s.peace_streak,
             (SELECT count(*)::INT8 FROM world_agents a
               WHERE a.world_id = w.world_id AND a.status = 'alive') AS agents_alive,
@@ -66,6 +68,7 @@ export async function getWorldSummary(worldId: string): Promise<WorldSummary | n
     peaceStreak: row.peace_streak,
     seed: row.seed,
     timeScale: row.time_scale,
+    timeDebtTicks: row.time_debt_ticks,
     agentsAlive: row.agents_alive,
     inferenceCalls: row.inference_calls,
     estCostMicros: row.est_cost_micros,

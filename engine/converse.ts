@@ -455,6 +455,120 @@ interface StoredOutcome {
   effects?: ConverseEffects;
 }
 
+export async function applyStructuredConversationTurn(input: {
+  worldId: string;
+  sessionId: string;
+  agentKey: string;
+  text: string;
+  turnId: string;
+  act: SpeechAct;
+  reply: string;
+  disclosure: Disclosure | null;
+  hearingResponse: 'come' | 'decline' | 'come_but_tell_someone' | null;
+  inference: InferenceClient;
+}): Promise<{ reply: string; effects: ConverseEffects; claimKey: string | null }> {
+  const prepared = await withClient(async (client) => {
+    const agent = await loadAgentContext(client, input);
+    const candidates = await loadClaimCandidates(client, input.worldId);
+    const claim = resolveClaim(input.text, candidates);
+    const command = await client.query<{ command_seq: number; payload: Record<string, unknown> }>(
+      `SELECT command_seq, payload FROM world_commands
+        WHERE world_id = $1 AND payload->>'turnId' = $2`, [input.worldId, input.turnId],
+    );
+    const row = command.rows[0];
+    if (!row) throw new Error(`missing command for conversation turn ${input.turnId}`);
+    const world = await client.query<{ current_tick: number }>(
+      `SELECT current_tick FROM worlds WHERE world_id = $1`, [input.worldId],
+    );
+    if (!world.rows[0]) throw new Error(`unknown world ${input.worldId}`);
+    const summonDecision = input.act === 'summon'
+      ? await decideSummon(client, {
+          worldId: input.worldId, tick: world.rows[0].current_tick,
+          commandSeq: row.command_seq, agentId: agent.agentId, playerId: agent.playerId,
+          text: input.text, inference: input.inference,
+          ...(input.hearingResponse ? { responseOverride: input.hearingResponse } : {}),
+        }) : null;
+    return { agent, claim, commandSeq: row.command_seq, commandPayload: row.payload,
+      tick: world.rows[0].current_tick, summonDecision };
+  });
+  const previous = prepared.commandPayload.effects as ConverseEffects | undefined;
+  if (previous) return {
+    reply: typeof prepared.commandPayload.authoritativeReply === 'string'
+      ? prepared.commandPayload.authoritativeReply : input.reply,
+    effects: previous,
+    claimKey: prepared.claim?.claimKey ?? null,
+  };
+
+  const { value } = await withSerializable(async (client) => {
+    const command = await client.query<{ payload: Record<string, unknown> }>(
+      `SELECT payload FROM world_commands WHERE world_id = $1 AND payload->>'turnId' = $2 FOR UPDATE`,
+      [input.worldId, input.turnId],
+    );
+    const existing = command.rows[0]?.payload;
+    const turn = await client.query(
+      `SELECT 1 FROM world_conversation_turns
+        WHERE world_id = $1 AND turn_id = $2 AND status = 'reserved' AND deadline_at > now()
+        FOR UPDATE`, [input.worldId, input.turnId],
+    );
+    if (!turn.rowCount && !existing?.effects) throw new Error('conversation turn expired');
+    if (existing?.effects) return {
+      reply: typeof existing.authoritativeReply === 'string' ? existing.authoritativeReply : input.reply,
+      effects: existing.effects as ConverseEffects,
+    };
+    const seq = playerSeq(prepared.commandSeq, SEQ_UTTERANCE);
+    const event = await client.query<{ event_id: string }>(
+      `INSERT INTO world_events
+         (world_id, tick, seq, location_id, kind, payload, description)
+       VALUES ($1, $2, $3, $4, 'player_command', $5, $6) RETURNING event_id`,
+      [input.worldId, prepared.tick, seq.next(), prepared.agent.locationId,
+        JSON.stringify({ conversationTurnId: input.turnId, text: input.text }),
+        `The outsider speaks to ${prepared.agent.name}.`],
+    );
+    const effects = await applyEffects(client, {
+      worldId: input.worldId, tick: prepared.tick,
+      seq: playerSeq(prepared.commandSeq, SEQ_EFFECTS), agent: prepared.agent,
+      act: input.act, commandEventId: event.rows[0]!.event_id,
+      summonDecision: prepared.summonDecision, disclosure: input.disclosure,
+      claim: prepared.claim ? {
+        claimId: prepared.claim.claimId, claimKey: prepared.claim.claimKey,
+        severity: prepared.claim.severity, text: prepared.claim.text,
+        subjectAgentId: prepared.claim.subjectAgentId,
+        subjectFactionId: prepared.claim.subjectFactionId,
+        subjectKey: prepared.claim.subjectKey,
+      } : null,
+    });
+    let reply = input.reply;
+    if (effects.evidenceRecorded && input.act === 'inquire') {
+      const source = await client.query<{ name: string }>(
+        `SELECT a.name FROM world_player_evidence e
+          JOIN world_agents a ON a.world_id = e.world_id AND a.agent_id = e.accused_id
+         WHERE e.world_id = $1 AND e.player_id = $2 AND e.found_tick = $3
+         ORDER BY e.evidence_id DESC LIMIT 1`,
+        [input.worldId, prepared.agent.playerId, prepared.tick],
+      );
+      if (source.rows[0]) reply = `${reply} The source I name is ${source.rows[0].name}.`;
+    }
+    if (effects.hearingId) reply = `${reply} I will answer the summons.`;
+    if (effects.hearingRejectedReason) reply = `${reply} ${effects.hearingRejectedReason}.`;
+    await client.query(
+      `INSERT INTO world_events
+         (world_id, tick, seq, location_id, actor_agent_id, kind, payload, description)
+       VALUES ($1, $2, $3, $4, $5, 'dialogue', $6, $7)`,
+      [input.worldId, prepared.tick, playerSeq(prepared.commandSeq, SEQ_REPLY).next(),
+        prepared.agent.locationId, prepared.agent.agentId,
+        JSON.stringify({ act: input.act, claimKey: prepared.claim?.claimKey ?? null,
+          conversationTurnId: input.turnId }), `${prepared.agent.name}: ${reply}`],
+    );
+    await client.query(
+      `UPDATE world_commands SET payload = payload || $3::JSONB
+        WHERE world_id = $1 AND payload->>'turnId' = $2`,
+      [input.worldId, input.turnId, JSON.stringify({ effects, authoritativeReply: reply })],
+    );
+    return { reply, effects };
+  }, { label: 'apply-structured-conversation-turn' });
+  return { ...value, claimKey: prepared.claim?.claimKey ?? null };
+}
+
 function emptyEffects(): ConverseEffects {
   return {
     tensionDelta: 0, sentimentDelta: 0, reputationDelta: 0,
@@ -653,7 +767,6 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
         playerId: agent.playerId,
         agentId: agent.agentId,
         agentName: agent.name,
-        agentLocationId: agent.locationId,
         tick: input.tick,
         seq: input.seq,
         decision: input.summonDecision,
@@ -886,7 +999,7 @@ async function resolveSubject(
 }
 
 async function loadAgentContext(
-  client: Client, options: ConverseOptions,
+  client: Client, options: Pick<ConverseOptions, 'worldId' | 'sessionId' | 'agentKey'>,
 ): Promise<AgentContext> {
   const result = await client.query<{
     agent_id: string; agent_key: string; name: string; faction_id: string;
