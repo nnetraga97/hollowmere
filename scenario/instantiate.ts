@@ -8,6 +8,8 @@
  */
 
 import { withSerializable, type Client } from '../engine/db.ts';
+import { pickRumorOriginator, seedRumor } from '../engine/gossip.ts';
+import { createSeq } from '../engine/seq.ts';
 import type { OpeningEventDef } from './schema.ts';
 
 /** Starting sentiment and trust, by relationship of the two agents' factions. */
@@ -341,6 +343,13 @@ async function insertPlayer(
 /**
  * Apply the inciting event: one world event at tick 0, plus the rumors the
  * town already carries when the player arrives.
+ *
+ * Each opening rumor is put into somebody's mouth. A rumor with no holder
+ * cannot spread — gossip walks outward from whoever already has it — so a
+ * seeded rumor without an originator would sit in the table looking correct
+ * while the town stayed silent. The first tellers are the talkative, taken one
+ * further down the list for each successive rumor so the three opening stories
+ * start in three different corners of town rather than all in one mouth.
  */
 async function applyOpening(
   client: Client, worldId: string, opening: OpeningEventDef,
@@ -354,12 +363,24 @@ async function applyOpening(
   );
   const eventId = event.rows[0]!.event_id;
 
-  for (const seed of opening.seedRumors) {
-    await client.query(
-      `INSERT INTO world_rumors
-         (world_id, claim_id, origin_event_id, heat, valence, created_tick, updated_tick)
-       VALUES ($1, $2, $3, $4, $5, 0, 0)`,
-      [worldId, claimIds.get(seed.claim), eventId, seed.heat, seed.valence],
-    );
+  const seq = createSeq(1);
+  for (const [index, seed] of opening.seedRumors.entries()) {
+    const claimId = claimIds.get(seed.claim);
+    if (!claimId) continue;
+
+    const originator = await pickRumorOriginator(client, worldId, claimId, index);
+    if (!originator) continue;
+
+    await seedRumor(client, {
+      worldId,
+      tick: 0,
+      seq,
+      claimId,
+      originAgentId: originator.agentId,
+      heat: seed.heat,
+      valence: seed.valence,
+      text: originator.claimText,
+      originEventId: eventId,
+    });
   }
 }

@@ -158,6 +158,36 @@ const SPEECH_ACTS = [
   'threaten', 'inform', 'inquire', 'smalltalk',
 ];
 
+/**
+ * Cue words for each speech act, in priority order.
+ *
+ * Ordered rather than scored, because an utterance that both threatens and asks
+ * a question is a threat. The first list whose cue appears wins.
+ */
+const CUES: readonly (readonly [act: string, cues: readonly string[]])[] = [
+  ['threaten', ['burn', 'kill you', 'ruin you', 'regret', 'or else', 'watch yourself']],
+  ['reconcile', ['peace', 'terms', 'forgive', 'settle this', 'lay it down', 'no more blood',
+                 'talk to them', 'come to the table', 'end this']],
+  // Denials outrank accusations deliberately. Someone rejecting a rumor almost
+  // always quotes it first — "that Corvane ordered it is a lie" contains every
+  // cue an accusation has, plus the one that says it is being denied.
+  ['dispute', ['not true', 'untrue', 'a lie', 'nonsense', 'no proof', 'never happened']],
+  ['defend', ['innocent', 'would never', 'defend', 'not their doing', 'wrongly']],
+  ['accuse', ['killed', 'murdered', 'guilty', 'you did it', 'they did it', 'to blame',
+              'ordered the', 'paid to']],
+  ['corroborate', ['i saw', 'i heard it too', 'true', 'confirm', 'so it is']],
+  ['inform', ['you should know', 'i have news', 'word from', 'let me tell you']],
+  ['inquire', ['?']],
+];
+
+function classifyByCue(text: string): string | null {
+  const lowered = text.toLowerCase();
+  for (const [act, cues] of CUES) {
+    if (cues.some((cue) => lowered.includes(cue))) return act;
+  }
+  return null;
+}
+
 function pickFromChoices(
   request: CompletionRequest,
   key: string,
@@ -184,17 +214,17 @@ function respond(request: CompletionRequest): string {
     }
 
     case 'classify': {
-      // Bias toward the acts that actually move the simulation, so a stub run
-      // still produces escalation rather than an hour of small talk.
-      const weighted = rng.nextFixed() < 3_000
-        ? 'accuse'
-        : (pickFromChoices(request, 'types', rng) ?? rng.pick(SPEECH_ACTS));
-      return JSON.stringify({
-        type: weighted,
-        subjectAgentKey: pickFromChoices(request, 'agents', rng),
-        claimKey: pickFromChoices(request, 'claims', rng),
-        valence: rng.nextBelow(20_001) - 10_000,
-      });
+      // Cue words first, then a seeded pick.
+      //
+      // A purely random classifier would make every scripted test vacuous: a
+      // transcript written to reconcile the two Houses would be classified as
+      // an accusation a third of the time, and the peace-path acceptance test
+      // could never be written. Matching obvious cues is crude, but it means
+      // the stub answers the question that was actually asked, which is the
+      // standard the rest of this file is held to.
+      const cued = classifyByCue(request.user);
+      const type = cued ?? pickFromChoices(request, 'types', rng) ?? rng.pick(SPEECH_ACTS);
+      return JSON.stringify({ type });
     }
 
     case 'dialogue':

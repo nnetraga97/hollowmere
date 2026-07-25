@@ -64,6 +64,22 @@ export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   return result.rows;
 }
 
+/**
+ * Borrow a pooled client without opening a transaction.
+ *
+ * Cognition needs this: it reads a great deal and appends memory accesses, but
+ * it must not hold a transaction open while waiting on a model — a retry would
+ * re-bill the inference, and the lock would be held for the whole round trip.
+ */
+export async function withClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    return await fn(client);
+  } finally {
+    client.release();
+  }
+}
+
 export interface TxnOutcome<T> {
   value: T;
   /** Number of times the transaction was retried. Zero on first-attempt success. */

@@ -127,34 +127,42 @@ describe('stub completions', () => {
     );
   });
 
-  test('classify returns a known speech act', async () => {
+  test('classify draws only from the acts it was offered', async () => {
     const client = createStubClient();
     const types = ['accuse', 'defend', 'inquire'];
     for (let seed = 0; seed < 25; seed++) {
       const response = await client.complete(
         request({ task: 'classify', seed, choices: { types } }),
       );
-      const parsed = JSON.parse(response.text) as { type: string; valence: number };
-      assert.ok(
-        types.includes(parsed.type) || parsed.type === 'accuse',
-        `unexpected speech act ${parsed.type}`,
-      );
-      assert.ok(parsed.valence >= -10_000 && parsed.valence <= 10_000);
+      const parsed = JSON.parse(response.text) as { type: string };
+      assert.ok(types.includes(parsed.type), `unexpected speech act ${parsed.type}`);
     }
   });
 
-  test('classify produces accusations often enough to drive escalation', async () => {
+  test('classify answers the question that was actually asked', async () => {
+    // The stub used to pick an act at random, weighted toward accusations, on
+    // the reasoning that a town which never accuses never escalates. That is no
+    // longer true — escalation is driven by what agents *believe*, in rules,
+    // not by how the classifier happens to land — and the random classifier had
+    // a real cost: no scripted transcript could be tested, because a
+    // reconciliation would be read as an accusation a third of the time.
     const client = createStubClient();
-    let accusations = 0;
-    for (let seed = 0; seed < 200; seed++) {
+    const cued: readonly (readonly [text: string, act: string])[] = [
+      ['Let us have peace. Come to the table.', 'reconcile'],
+      ['That is a lie and there is no proof of it.', 'dispute'],
+      ['Corvane ordered the killing and you know it.', 'accuse'],
+      ['He would never do such a thing. He is innocent.', 'defend'],
+      ['Say another word and you will regret it.', 'threaten'],
+      ['Where were you the night the prince died?', 'inquire'],
+    ];
+
+    for (const [text, expected] of cued) {
       const response = await client.complete(
-        request({ task: 'classify', seed, choices: { types: ['smalltalk'] } }),
+        request({ task: 'classify', user: text, choices: { types: ['smalltalk'] } }),
       );
-      if ((JSON.parse(response.text) as { type: string }).type === 'accuse') accusations++;
+      const parsed = JSON.parse(response.text) as { type: string };
+      assert.equal(parsed.type, expected, `"${text}" should classify as ${expected}`);
     }
-    // A stub run that never accuses would never escalate, making the
-    // unattended-war test unfalsifiable.
-    assert.ok(accusations > 20, `expected regular accusations, saw ${accusations}/200`);
   });
 
   test('distort rewords the source without discarding it', async () => {

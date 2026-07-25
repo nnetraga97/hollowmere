@@ -2,9 +2,9 @@
 
 ---
 
-## STATUS — 2026-07-24
+## STATUS — 2026-07-25
 
-**Phase 1 (engine): 8 of 12 milestones complete. 130 tests passing, typecheck clean.**
+**Phase 1 (engine): 12 of 12 milestones complete. 177 tests passing, typecheck clean.**
 
 | # | Milestone | State | Evidence |
 |---|---|---|---|
@@ -15,66 +15,106 @@
 | 5 | Inference layer | **done** | 20 tests, stub + Bedrock behind one interface |
 | 6 | Retrieval | **done** | 14 tests incl. query-plan assertion |
 | 7 | Gossip + beliefs | **done** | 18 tests incl. polarization + misinformation |
-| 8 | Tension / stages / peace / triggers | **next** | — |
-| 9 | `runTick` + scheduler | pending | — |
-| 10 | `converse` | pending | — |
-| 11 | Harness | pending | — |
-| 12 | Debug dashboard | pending | — |
+| 8 | Tension / stages / peace / triggers | **done** | 20 tests — monotonic stages, rules-only peace, hard triggers |
+| 9 | `runTick` + scheduler | **done** | 14 tests — canonical arc, split-brain, cross-world determinism |
+| 10 | `converse` | **done** | 13 tests — idempotency, peace path, injection corpus, contention |
+| 11 | Harness | **done** | `harness/sim.ts` headless runner, `harness/repl.ts` |
+| 12 | Debug dashboard | **done** | `web/` read-only server + single-page instrument |
 
-### Verified against the real cluster (CockroachDB v26.2.4, 3-node Docker)
+### The canonical arc, measured
 
-- Cross-world foreign key reference **rejected by the database**.
-- Zero float/decimal columns outside `VECTOR` embeddings.
-- Duplicate `(world_id, tick)` commit **rejected** — the split-brain backstop.
-- ANN query plan shows `vector search` + `prefix spans` scoped to one world.
-- Belief projection rebuilt from append-only history matches the live projection exactly.
-- Two houses **polarize** rather than converge on a shared accusation.
-- A claim the engine knows is **false** still reaches actionable belief.
+An unattended stub run under seed 42 reaches `war` at **tick 240** (192–288 is
+the window the plan fixes; seeds 7 and 1234 land at 240 and 238). It passes
+through every stage in order — suspicion t36, accusations t85, trials t142,
+first_blood t195, war t240 — and ends with a claim the engine *knows to be
+false* believed by a quarter of the town.
+
+### Verified against the real cluster (CockroachDB v26.2.4)
+
+Everything from the previous milestones, plus:
+
+- Two schedulers racing one world → **one commit per tick, no duplicated
+  effects, no gaps**, both as a direct race and through two live scheduler loops.
+- Eight concurrent conversations plus a tick on the same `world_state` row →
+  **no lost update**, and a gapless command log.
+- The same seed in two different worlds → **identical chronicle, identical
+  belief table, identical tension curve** (a different seed diverges).
+- A murder at `suspicion` → straight to `war`, with tension still far below the
+  war threshold.
+- A scripted reconciliation campaign reaches **peace**; the same words after
+  `first_blood` do not, and the streak never even starts.
+- An exhausted budget degrades to deterministic cognition and keeps ticking.
+- A prompt-injection corpus moves no stage, ends no world, and grants nobody
+  standing.
 
 ### Decisions changed during implementation
 
-Each of these came from the code disagreeing with the plan, not from preference.
+Items 1–8 are unchanged from the previous status. New in this phase:
 
-1. **`world_state.faction_tension` JSONB → `world_faction_state` table.** Convention 9
-   forbids JSONB for values the rules compare, and per-faction tension is compared
-   every tick.
-2. **`agent_beliefs.confidence` is signed.** An agent must be able to *actively
-   disbelieve* a claim, or the `dispute`/`defend` speech acts have nothing to move.
-3. **Vector index prefix is `(world_id, agent_id, embedding)`, not `(world_id, embedding)`.**
-   Retrieval is always per-agent; with only `world_id` the optimizer cannot satisfy
-   the `agent_id` predicate from the index and silently falls back to scan-and-filter.
-   Caught only by asserting the plan — results were correct throughout.
-4. **Retrieval draws candidates three ways, not ANN-first.** `nearest ∪ most_important
-   ∪ most_recent`, then exact integer re-rank. ANN-first made relevance a gatekeeper,
-   so an important-but-lexically-distant memory could never be recalled.
-5. **`scenario_versions.opening` is a real column**, not a reserved `__opening__`
-   trigger row, so a world is rebuildable from the database alone.
-6. **`faction_templates.belligerent`** added — the unaligned (magistrate, priest,
-   physician) carry gossip but are never a side in the war.
-7. **Gossip writes no `world_memories`.** Hearing is recorded in `world_rumor_spread`
-   + a belief update; embedding into a retrievable memory happens in cognition, only
-   for agents who actually think. Embedding every retelling for 40 agents costs far
-   more than it buys.
-8. **Stub embeddings are a signed hashing vectoriser** with stopword filtering and
-   3 hashes per token — not random vectors. Random vectors would make every
-   retrieval test vacuous; the first two versions produced measurable false
-   similarity from stopwords and from single-hash collisions.
+9. **Rumors are re-heard, not heard once.** `world_rumor_spread` records first
+   contact and is never rewritten, but a listener becomes eligible again after
+   `GOSSIP.retellCooldown` ticks, measured from their last belief update. With
+   single exposure, belief plateaus around 0.14 and *no agent in the town ever
+   reaches actionable confidence* — the misinformation thesis fails outright.
+   Belief hardens by repetition or not at all.
+10. **Escalation is belief-driven, not gossip-driven.** Once everyone has heard
+    a rumor there is nobody left to tell, so a purely gossip-driven town
+    plateaus below war. `accusations.ts` closes the loop: agents who *believe* a
+    cross-house claim say so publicly, with a probability that rises by stage.
+    Accusations raise tension, tension advances the stage, and the stage makes
+    everyone readier to speak.
+11. **Tension is capped per tick** (`TENSION.maxRisePerTick`). Individual events
+    are still priced by severity, but one hot rumor reaching forty people in a
+    tick would otherwise take the town from calm to war inside a minute. The cap
+    is what stretches the arc across the canonical window; it is the single knob
+    that sets pacing.
+12. **Ordering keys are scenario keys, never UUIDs.** Three separate
+    determinism bugs came from ordering rule-feeding queries on random ids —
+    rumors by `rumor_id`, agents by `agent_id`, and route adjacency by
+    `location_id`. Each produced correct results and a different town. Ordering
+    is now on `claim_key` / `agent_key` / `location_key` throughout.
+13. **The RNG stream must never depend on an approximate result.** Reflection
+    was gated on how many memories the ANN index returned; under load the index
+    returned a different count, the generator was consumed differently, and two
+    runs of one seed diverged. The draw is now unconditional and tested against
+    an exact count.
+14. **Player writes use a disjoint sequence band.** A tick and a conversation
+    both write `world_events` at the same tick, and `(world_id, tick, seq)` is
+    unique. Rather than share a counter across two services, conversations
+    allocate from `PLAYER_SEQ_BASE` upward, strided per command.
+15. **The stub classifier reads cue words instead of picking at random.** A
+    random classifier makes every scripted transcript untestable — a
+    reconciliation is read as an accusation a third of the time — and the
+    escalation bias it existed to provide now comes from belief instead.
+16. **Reconciling with a leader cools the whole town's rumors.** Peace requires
+    no hostile rumor above a heat threshold, and nothing else a player can do
+    cools one. A leader's public call for calm carries; a fisherman's does not.
+17. **The dashboard is a dependency-free Node server, not Next.js.** Phase 1's
+    milestone is a read-only instrument, and every read model it needs lives in
+    `engine/api.ts`. The player-facing Next.js service in Phase 2/3 sits on the
+    same functions, so nothing was pre-built here that has to be rebuilt there.
+    *(This is a deliberate deviation from §9 of the plan below.)*
 
 ### Blocked / waiting
 
-- **Bedrock model access.** AWS account created 2026-07-24 and is minutes old.
-  Credentials, IAM (`AmazonBedrockFullAccess`), region, and entitlement all verify
-  clean; only `authorizationStatus` is `NOT_AUTHORIZED`, which is fresh-account
-  propagation. Nothing to fix — retry `npm run check:bedrock`. The engine runs
-  fully on `INFERENCE_MODE=stub` meanwhile, which is why this blocks nothing.
+- **Bedrock model access.** Unchanged: credentials, IAM, region, and
+  entitlement all verify clean; only `authorizationStatus` is `NOT_AUTHORIZED`,
+  which is fresh-account propagation. Retry `npm run check:bedrock`. Phase 1 is
+  complete on `INFERENCE_MODE=stub`, which is why this still blocks nothing.
 
 ### Known gaps to address next
 
-- `loadListeners` runs one query per rumor-holder per tick. Fine at current scale,
-  but it is the obvious hot spot once ticks run continuously.
-- Distortion costs one model call per reworded retelling; capped by
-  `GOSSIP.distortionChance` and skippable via `allowDistortion`, but not yet wired
-  to the per-world budget.
+- `loadListeners` still runs one query per rumor-holder per tick, now bounded by
+  `GOSSIP.maxTellersPerRumor`. A tick costs ~500 ms locally at 40 agents; this
+  is the first thing to batch if that matters.
+- Distortion is capped by `GOSSIP.distortionChance` and skippable, but still not
+  wired to the per-world budget — only cognition checks it.
+- `retrieval.ts` breaks score ties on `memory_id`, a random UUID. Deterministic
+  within a world, not across two worlds built from the same seed. No rule
+  currently depends on the tie order, but it is the same class of bug as (12).
+- Replay tolerates input-hash drift with a warning rather than refusing, because
+  the hash covers ANN-derived memory ids. Worth narrowing to inputs that are
+  exact.
 
 ---
 

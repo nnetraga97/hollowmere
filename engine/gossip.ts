@@ -37,7 +37,7 @@ export interface GossipContext {
   seq: Seq;
   inference: InferenceClient;
   /** Set false to skip reworded retellings, e.g. when the budget is spent. */
-  allowDistortion?: boolean;
+  allowDistortion?: boolean | undefined;
 }
 
 export interface Transmission {
@@ -56,6 +56,12 @@ export interface GossipResult {
   transmissions: Transmission[];
   /** Tension generated this tick, to be applied by the escalation step. */
   tensionDelta: Fixed;
+  /**
+   * The same tension, attributed to the faction the claims were about, by
+   * faction id. Heat lands on the House being accused, which is what lets one
+   * House be dragged toward war while the other stays comparatively calm.
+   */
+  factionDelta: Map<string, Fixed>;
   rumorsConsidered: number;
   distortions: number;
 }
@@ -105,8 +111,14 @@ export async function runGossip(
 ): Promise<GossipResult> {
   const rumors = await loadHotRumors(client, ctx.worldId);
   const transmissions: Transmission[] = [];
+  const factionDelta = new Map<string, Fixed>();
   let tensionDelta = 0;
   let distortions = 0;
+
+  const attribute = (factionId: string, amount: Fixed): void => {
+    if (amount === 0) return;
+    factionDelta.set(factionId, (factionDelta.get(factionId) ?? 0) + amount);
+  };
 
   for (const rumor of rumors) {
     // Heat decays from when the rumor was last stirred, not from creation, so
@@ -128,7 +140,7 @@ export async function runGossip(
       if (transmissions.length >= GOSSIP.maxTransmissionsPerTick) break;
 
       const listeners = await loadListeners(
-        client, ctx.worldId, rumor.rumor_id, rumor.claim_id, holder.agent_id,
+        client, ctx.worldId, rumor.claim_id, holder.agent_id, ctx.tick,
       );
 
       for (const listener of listeners) {
@@ -172,10 +184,14 @@ export async function runGossip(
           alignment,
         });
 
+        // First contact is recorded once and never rewritten — this table is
+        // the history of who was told, in the wording that reached them.
+        // Hearing it again shows up as another belief update, not as an edit.
         await client.query(
           `INSERT INTO world_rumor_spread
              (world_id, rumor_id, agent_id, received_tick, distorted_text, from_agent_id)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (world_id, rumor_id, agent_id) DO NOTHING`,
           [ctx.worldId, rumor.rumor_id, listener.agent_id, ctx.tick, text, holder.agent_id],
         );
 
@@ -206,13 +222,17 @@ export async function runGossip(
         // Tension comes from a hostile claim crossing the line between the two
         // houses, and again when a listener's belief first becomes actionable.
         if (crossFaction && rumor.valence < 0) {
-          tensionDelta += fpMul(TENSION.crossFactionAccusation, rumor.severity);
+          const rise = fpMul(TENSION.crossFactionAccusation, rumor.severity);
+          tensionDelta += rise;
+          attribute(rumor.subject_faction_id, rise);
         }
         if (
           confidenceBefore < BELIEF.actionableConfidence &&
           confidenceAfter >= BELIEF.actionableConfidence
         ) {
-          tensionDelta += fpMul(TENSION.beliefHardens, rumor.severity);
+          const rise = fpMul(TENSION.beliefHardens, rumor.severity);
+          tensionDelta += rise;
+          attribute(rumor.subject_faction_id, rise);
         }
 
         transmissions.push({
@@ -242,9 +262,54 @@ export async function runGossip(
   return {
     transmissions,
     tensionDelta: clampUnit(tensionDelta),
+    factionDelta,
     rumorsConsidered: rumors.length,
     distortions,
   };
+}
+
+export interface RumorOriginator {
+  agentId: string;
+  agentKey: string;
+  claimText: string;
+}
+
+/**
+ * Who starts telling a claim that the rules (not a person) introduced.
+ *
+ * Trigger-seeded rumors and the opening event both need a first mouth, and it
+ * has to be chosen by a rule rather than at random, because it decides where in
+ * the town the story begins. The talkative go first, the subject of the claim is
+ * never their own accuser, and ties break on agent_key so the choice replays.
+ *
+ * `skip` lets a caller take the second- or third-most talkative teller instead,
+ * which is how several opening rumors start in different corners of town rather
+ * than all in one mouth.
+ */
+export async function pickRumorOriginator(
+  client: Client,
+  worldId: string,
+  claimId: string,
+  skip = 0,
+): Promise<RumorOriginator | null> {
+  const result = await client.query<{
+    agent_id: string; agent_key: string; claim_text: string;
+  }>(
+    `SELECT a.agent_id, a.agent_key, c.text AS claim_text
+       FROM world_claims c
+       JOIN world_agents a
+         ON a.world_id = c.world_id
+        AND a.agent_id != c.subject_agent_id
+        AND a.status = 'alive'
+      WHERE c.world_id = $1 AND c.claim_id = $2
+      ORDER BY a.talkativeness DESC, a.agent_key
+      LIMIT 1 OFFSET $3`,
+    [worldId, claimId, skip],
+  );
+  const row = result.rows[0];
+  return row
+    ? { agentId: row.agent_id, agentKey: row.agent_key, claimText: row.claim_text }
+    : null;
 }
 
 export function transmissionChance(input: {
@@ -308,12 +373,21 @@ async function loadHotRumors(client: Client, worldId: string): Promise<RumorRow[
        JOIN world_claims c ON c.world_id = r.world_id AND c.claim_id = r.claim_id
        JOIN world_agents s ON s.world_id = r.world_id AND s.agent_id = c.subject_agent_id
       WHERE r.world_id = $1 AND r.heat >= $2
-      ORDER BY r.heat DESC, r.rumor_id`,
+      -- Ordered by claim_key, never by rumor_id. Rumor ids are random UUIDs, so
+      -- ordering on them makes the iteration order — and therefore the order the
+      -- seeded generator is consumed in — differ between two worlds built from
+      -- the same scenario and seed. That is exactly what the determinism
+      -- contract forbids, and it is invisible until a second rumor is in play.
+      ORDER BY r.heat DESC, c.claim_key`,
     [worldId, GOSSIP.minHeat],
   );
   return result.rows;
 }
 
+/**
+ * Who is doing the telling. The talkative go first, and only so many of them —
+ * see GOSSIP.maxTellersPerRumor.
+ */
 async function loadHolders(
   client: Client, worldId: string, rumorId: string,
 ): Promise<HolderRow[]> {
@@ -324,20 +398,32 @@ async function loadHolders(
        JOIN world_agents a ON a.world_id = s.world_id AND a.agent_id = s.agent_id
       WHERE s.world_id = $1 AND s.rumor_id = $2
         AND a.status = 'alive'
-      ORDER BY a.agent_key`,
-    [worldId, rumorId],
+      ORDER BY a.talkativeness DESC, a.agent_key
+      LIMIT $3`,
+    [worldId, rumorId, GOSSIP.maxTellersPerRumor],
   );
   return result.rows;
 }
 
 /**
- * Everyone who could hear this rumor from this holder and has not heard it yet.
+ * Everyone who could hear this rumor from this holder right now.
+ *
+ * Two kinds of listener: someone who has never heard it, and someone who has
+ * not heard it *lately*. The second kind is what makes belief harden — a single
+ * exposure moves a person a fraction of the way toward believing, and a town
+ * where nobody is ever told anything twice never convinces itself of anything.
+ *
+ * "Lately" is measured against the last belief update for that claim rather
+ * than against the spread row, because `world_rumor_spread` is append-only
+ * history of first contact and must not be rewritten every time someone brings
+ * the subject up again.
  *
  * Co-located listeners are the common case; the rest are reachable only through
  * the much weaker remote factor, representing word travelling indirectly.
  */
 async function loadListeners(
-  client: Client, worldId: string, rumorId: string, claimId: string, holderId: string,
+  client: Client, worldId: string, claimId: string,
+  holderId: string, tick: number,
 ): Promise<ListenerRow[]> {
   const result = await client.query<ListenerRow>(
     `SELECT a.agent_id, a.agent_key, a.location_id, a.faction_id, a.credulity,
@@ -348,20 +434,20 @@ async function loadListeners(
        LEFT JOIN world_relationships r
               ON r.world_id = a.world_id
              AND r.src_agent_id = a.agent_id
-             AND r.dst_agent_id = $3
+             AND r.dst_agent_id = $2
        LEFT JOIN agent_beliefs b
               ON b.world_id = a.world_id
              AND b.agent_id = a.agent_id
-             AND b.claim_id = $4
+             AND b.claim_id = $3
       WHERE a.world_id = $1
-        AND a.agent_id != $3
+        AND a.agent_id != $2
         AND a.status = 'alive'
-        AND NOT EXISTS (
-          SELECT 1 FROM world_rumor_spread s
-           WHERE s.world_id = $1 AND s.rumor_id = $2 AND s.agent_id = a.agent_id
-        )
+        AND (b.updated_tick IS NULL OR b.updated_tick <= $4)
       ORDER BY a.agent_key`,
-    [worldId, rumorId, holderId, claimId],
+    // The cutoff is computed here rather than as "$tick - $cooldown" in SQL:
+    // with two placeholders either side of the subtraction the planner cannot
+    // infer their type and rejects the statement.
+    [worldId, holderId, claimId, tick - GOSSIP.retellCooldown],
   );
   return result.rows;
 }

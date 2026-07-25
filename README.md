@@ -22,13 +22,32 @@ The town is the visualization. The substrate is the point.
 
 ## Status
 
-Phase 1 (engine) — 8 of 12 milestones. **130 tests passing.**
+**Phase 1 (engine) is complete — 12 of 12 milestones, 177 tests passing.**
 
-Done: preflight gate · fixed-point + RNG conventions · schema + DB layer ·
-scenario loader · inference (stub + Bedrock) · retrieval · gossip + beliefs.
+Preflight gate · fixed-point + RNG conventions · schema + DB layer · scenario
+loader · inference (stub + Bedrock) · retrieval · gossip + beliefs · tension,
+stages, peace and triggers · `runTick` + scheduler · `converse` · headless
+harness + REPL · read-only debug dashboard.
 
-Next: tension and escalation · `runTick` + scheduler · `converse` · harness ·
-debug dashboard. Then the Phaser client, CockroachDB Cloud, and Managed MCP.
+Next: the Phaser client (Phase 2), then CockroachDB Cloud, Managed MCP, and
+ECS/Fargate (Phase 3).
+
+### The town, left alone
+
+Under the canonical seed, an unattended run reaches war at **tick 240** — inside
+the 192–288 window the plan fixes, passing through every stage in order:
+
+```
+suspicion t36 · accusations t85 · trials t142 · first_blood t195 · war t240
+```
+
+It gets there with **no model calls required** (the deterministic stub is a
+first-class runtime mode), and it ends with `millers_poison_grain` — a claim the
+engine *knows* is false — believed by a quarter of the town. That gap between
+`truth` and belief is the whole point, and it is a column in the dashboard.
+
+Talking to both House leaders, persistently and early, reaches peace instead.
+The same words after first blood do not: the streak never even starts.
 
 ## Quick start
 
@@ -41,7 +60,16 @@ npm run preflight      # verifies vector indexing, isolation, time travel
 cp .env.example .env
 npm run db:migrate -- --fresh
 npm run seed -- --seed 42
-npm run check          # typecheck + 130 tests
+npm run check          # typecheck + 177 tests
+```
+
+Then watch a town destroy itself:
+
+```bash
+npm run sim -- --ticks 360 --seed 42    # headless: tension curve, chronicle, belief
+npm run repl                            # interactive: tick, talk, belief, graph
+npm run scheduler                       # the service that advances worlds
+npm run dashboard                       # read-only instrument on :8099
 ```
 
 `npm run preflight` is a gate, not a formality: it verifies that vector indexing,
@@ -64,10 +92,13 @@ the application working normally, not a staged one.
 |---|---|
 | `db/` | `schema.sql` — 32 tables, composite world-scoped keys |
 | `scenario/` | Versioned immutable content + validating loader |
-| `engine/` | Rules, retrieval, gossip, beliefs, inference |
+| `engine/` | Rules, retrieval, gossip, beliefs, tension, triggers, cognition, `runTick`, `converse`, read models |
+| `scheduler/` | Lease-guarded non-overlapping loop + service entrypoint |
+| `harness/` | `sim.ts` headless runner, `repl.ts` interactive shell |
+| `web/` | Read-only debug dashboard (no build step, no dependencies) |
 | `scripts/` | Preflight, migrate, seed, Bedrock check |
 | `infra/` | Local 3-node cluster |
-| `docs/` | Preflight findings, AWS setup |
+| `docs/` | Plan and status, preflight findings, AWS setup |
 
 ## Design constraints
 
@@ -88,8 +119,20 @@ These are enforced, not aspirational — see `engine/schema.test.ts`.
   `AS OF SYSTEM TIME` is a separate database-resilience demonstration.
 - **Scenario content is untrusted input.** The trigger DSL is a closed,
   allowlisted grammar; scenario JSON is never evaluated as code.
+- **Model output never selects an effect.** A plan is a choice from an
+  engine-built allowlist; a speech act is one of nine known values; the claim a
+  player is talking about is resolved by the engine from its own data rather
+  than by asking a model for an identifier. An injection corpus is part of the
+  test suite.
+- **Peace is decided by rules, never announced by a model.** Conversation moves
+  the inputs — willingness, tension, rumor heat — and the tick decides what they
+  add up to. Escalation stages advance in exactly one place, which is what makes
+  "never reverses" a property of the code rather than a convention.
+- **No inference inside a transaction.** A serialization retry would re-bill the
+  model call and could duplicate streamed output, so a tick thinks first with
+  nothing open and then commits what it decided.
 
-## Two findings worth knowing
+## Three findings worth knowing
 
 **A correct query can silently stop using the vector index.** CockroachDB needs
 table statistics before it will choose one, the opclass must match the operator
@@ -102,6 +145,16 @@ Retrieval tests therefore assert the query plan. See `docs/preflight-findings.md
 `Operation not allowed` if the model is not authorized for the account, and
 `list-foundation-models` succeeding proves nothing about invoking them. See
 `docs/aws-setup.md`.
+
+**Ordering a rule query on a random UUID is a determinism bug that passes every
+result assertion.** Three separate ones surfaced here — rumors ordered by
+`rumor_id`, agents by `agent_id`, route adjacency by `location_id`. Each gave
+correct results, and each produced a *different town* from the same seed,
+because the seeded generator is consumed in iteration order. Rule-feeding
+queries order on scenario keys, never on ids. The same class of bug bit the RNG
+itself: a draw conditioned on how many rows the approximate vector index
+returned made two runs of one seed diverge under load. See the status section of
+`docs/plan.md`.
 
 ## Attribution
 

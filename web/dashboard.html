@@ -1,0 +1,470 @@
+<!doctype html>
+<!--
+  Hollowmere debug dashboard.
+
+  One page, no build step, no dependencies. It reads the JSON routes in
+  server.ts and draws four things worth looking at while a world runs:
+
+    · the tension curve, banded by escalation stage
+    · every claim, with what the town believes set against ground truth
+    · the social graph, drawn only where relationships have actually moved
+    · one agent's belief in one claim, tick by tick
+
+  There are no decorative status lights here. Everything on the page is a
+  number the engine actually produced.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hollowmere — debug</title>
+<style>
+  :root {
+    --bg: #14110f; --panel: #1d1917; --line: #322b27;
+    --ink: #e8e0d6; --dim: #9a8c80;
+    --aldreth: #6fa8dc; --corvane: #d98a5a; --unaligned: #8d8577;
+    --hot: #d9534f; --cool: #6a9955; --warn: #d8b45a;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-size: 13px; }
+  header {
+    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+    padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 2;
+  }
+  h1 { font-size: 14px; margin: 0; letter-spacing: 0.14em; text-transform: uppercase; }
+  .stat { color: var(--dim); }
+  .stat b { color: var(--ink); font-weight: 600; }
+  select, button {
+    background: #262019; color: var(--ink); border: 1px solid var(--line);
+    padding: 4px 8px; font: inherit; border-radius: 3px;
+  }
+  main {
+    display: grid; gap: 14px; padding: 14px 18px;
+    grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+  }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+  section > h2 {
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim);
+    margin: 0; padding: 9px 12px; border-bottom: 1px solid var(--line);
+  }
+  .body { padding: 10px 12px; overflow: auto; max-height: 340px; }
+  .wide { grid-column: 1 / -1; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-weight: 500; color: var(--dim); padding: 3px 6px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel);
+  }
+  td { padding: 3px 6px; border-bottom: 1px solid #241f1c; vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .truth-true { color: var(--cool); }
+  .truth-false { color: var(--hot); }
+  .truth-unknown { color: var(--warn); }
+  .bar { display: inline-block; height: 8px; background: var(--aldreth); vertical-align: middle; }
+  .muted { color: var(--dim); }
+  .kind { color: var(--dim); }
+  .kind-accusation { color: var(--hot); }
+  .kind-escalation { color: var(--warn); }
+  .kind-trigger { color: var(--warn); }
+  .kind-dialogue { color: var(--aldreth); }
+  /* An explicit CSS height on every canvas. With only a width set, a canvas
+     keeps its intrinsic 2:1 aspect ratio and a full-width chart becomes 700px
+     tall — drawn correctly, clipped to nothing. */
+  canvas { display: block; width: 100%; }
+  #tension { height: 150px; }
+  #graph { height: 300px; }
+  #belief { height: 150px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .legend { color: var(--dim); font-size: 11px; }
+  .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 4px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Hollowmere</h1>
+  <select id="worlds"></select>
+  <span class="stat">tick <b id="s-tick">—</b></span>
+  <span class="stat">stage <b id="s-stage">—</b></span>
+  <span class="stat">tension <b id="s-tension">—</b></span>
+  <span class="stat">peace streak <b id="s-peace">—</b></span>
+  <span class="stat">alive <b id="s-alive">—</b></span>
+  <span class="stat">status <b id="s-status">—</b></span>
+  <span class="stat">inference <b id="s-calls">—</b> · <b id="s-cost">—</b></span>
+  <span class="stat">tick p50 <b id="s-latency">—</b> · retries <b id="s-retries">—</b></span>
+</header>
+
+<main>
+  <section class="wide">
+    <h2>tension, banded by stage</h2>
+    <div class="body"><canvas id="tension" height="150"></canvas></div>
+  </section>
+
+  <section>
+    <h2>claims — what the town believes, against what is true</h2>
+    <div class="body"><table id="claims"></table></div>
+  </section>
+
+  <section>
+    <h2>the social graph, where it has actually moved</h2>
+    <div class="body">
+      <div class="legend">
+        <i style="background:var(--aldreth)"></i>aldreth
+        <i style="background:var(--corvane)"></i>corvane
+        <i style="background:var(--unaligned)"></i>unaligned ·
+        <span style="color:var(--hot)">red</span> resentment,
+        <span style="color:var(--cool)">green</span> regard
+      </div>
+      <canvas id="graph" height="300"></canvas>
+    </div>
+  </section>
+
+  <section>
+    <h2>belief, tick by tick — rebuilt from history</h2>
+    <div class="body">
+      <div class="row">
+        <select id="belief-agent"></select>
+        <select id="belief-claim"></select>
+      </div>
+      <canvas id="belief" height="150"></canvas>
+      <div id="belief-note" class="legend"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>chronicle</h2>
+    <div class="body"><table id="chronicle"></table></div>
+  </section>
+
+  <section>
+    <h2>factions</h2>
+    <div class="body"><table id="factions"></table></div>
+  </section>
+
+  <section>
+    <h2>who thought, and what they decided</h2>
+    <div class="body"><table id="cognition"></table></div>
+  </section>
+</main>
+
+<script type="module">
+const SCALE = 10000;
+const STAGES = ['calm', 'suspicion', 'accusations', 'trials', 'first_blood', 'war'];
+const FACTION_COLOUR = { aldreth: '#6fa8dc', corvane: '#d98a5a', unaligned: '#8d8577' };
+
+const el = (id) => document.getElementById(id);
+const fx = (v, digits = 2) => (v / SCALE).toFixed(digits);
+const esc = (s) => String(s ?? '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+
+let worldId = new URLSearchParams(location.search).get('world') || null;
+let selectedAgent = null;
+let selectedClaim = null;
+
+async function api(path, params = {}) {
+  const query = new URLSearchParams({ world: worldId, ...params });
+  const response = await fetch(`${path}?${query}`);
+  if (!response.ok) throw new Error((await response.json()).error);
+  return response.json();
+}
+
+// --- header ---------------------------------------------------------------
+
+async function loadWorlds() {
+  const worlds = await (await fetch('/api/worlds')).json();
+  const select = el('worlds');
+  select.innerHTML = worlds.map((w) =>
+    `<option value="${w.worldId}">${w.worldId.slice(0, 8)} · t${w.currentTick} · ${w.stage}` +
+    `${w.ending ? ' · ' + w.ending : ''}</option>`).join('');
+  if (!worldId && worlds.length > 0) worldId = worlds[0].worldId;
+  select.value = worldId ?? '';
+  select.onchange = () => {
+    worldId = select.value;
+    selectedAgent = selectedClaim = null;
+    history.replaceState({}, '', `?world=${worldId}`);
+    refresh();
+  };
+}
+
+// --- tension --------------------------------------------------------------
+
+function drawTension(points) {
+  const canvas = el('tension');
+  const ctx = setup(canvas);
+  const { width, height } = canvas.getBoundingClientRect();
+  if (points.length === 0) return;
+
+  // Stage bands first, so the curve reads against the thresholds it crossed.
+  const bandHeight = height / STAGES.length;
+  STAGES.forEach((stage, index) => {
+    ctx.fillStyle = index % 2 ? 'rgba(255,255,255,0.022)' : 'rgba(255,255,255,0.008)';
+    ctx.fillRect(0, height - (index + 1) * bandHeight, width, bandHeight);
+    ctx.fillStyle = '#6d6259';
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillText(stage, 4, height - index * bandHeight - 4);
+  });
+
+  const lastTick = points[points.length - 1].tick || 1;
+  const x = (tick) => (tick / lastTick) * (width - 8) + 4;
+  const y = (value) => height - (value / SCALE) * (height - 6) - 3;
+
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const px = x(point.tick), py = y(point.globalTension);
+    index === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  });
+  ctx.strokeStyle = '#d9534f';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // A tick mark wherever the town crossed into a new stage.
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].stage === points[i - 1].stage) continue;
+    const px = x(points[i].tick);
+    ctx.strokeStyle = '#d8b45a';
+    ctx.beginPath();
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, height);
+    ctx.stroke();
+    ctx.fillStyle = '#d8b45a';
+    ctx.fillText(`${points[i].stage} t${points[i].tick}`, px + 3, 12);
+  }
+}
+
+// --- claims ---------------------------------------------------------------
+
+function drawClaims(claims) {
+  const most = Math.max(1, ...claims.map((c) => c.believers));
+  el('claims').innerHTML =
+    '<tr><th>claim</th><th>truth</th><th class="num">heat</th>' +
+    '<th class="num">reached</th><th>believers</th><th class="num">deny</th></tr>' +
+    claims.map((claim) => `
+      <tr>
+        <td title="${esc(claim.text)}">${esc(claim.claimKey)}</td>
+        <td class="truth-${claim.truth}">${claim.truth}</td>
+        <td class="num">${fx(claim.heat, 2)}</td>
+        <td class="num">${claim.reached}</td>
+        <td><span class="bar" style="width:${(claim.believers / most) * 60}px"></span>
+            ${claim.believers}</td>
+        <td class="num">${claim.deniers}</td>
+      </tr>`).join('');
+}
+
+// --- social graph ---------------------------------------------------------
+
+let layout = new Map();
+
+function drawGraph(graph) {
+  const canvas = el('graph');
+  const ctx = setup(canvas);
+  const { width, height } = canvas.getBoundingClientRect();
+
+  // A tiny deterministic force layout, seeded by faction so the two Houses
+  // start on opposite sides and the drawing settles the same way each refresh.
+  if (layout.size !== graph.nodes.length) {
+    layout = new Map();
+    graph.nodes.forEach((node, index) => {
+      const side = node.factionKey === 'aldreth' ? -1 : node.factionKey === 'corvane' ? 1 : 0;
+      const angle = (index / graph.nodes.length) * Math.PI * 2;
+      layout.set(node.key, {
+        x: width / 2 + side * width * 0.22 + Math.cos(angle) * 40,
+        y: height / 2 + Math.sin(angle) * height * 0.3,
+      });
+    });
+  }
+
+  for (let step = 0; step < 40; step++) {
+    for (const edge of graph.edges) {
+      const a = layout.get(edge.src), b = layout.get(edge.dst);
+      if (!a || !b) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const distance = Math.hypot(dx, dy) || 1;
+      // Regard pulls people together, resentment pushes them apart.
+      const pull = ((edge.sentiment / SCALE) * (distance - 120)) / distance * 0.01;
+      a.x += dx * pull; a.y += dy * pull;
+      b.x -= dx * pull; b.y -= dy * pull;
+    }
+    for (const [, point] of layout) {
+      point.x = Math.max(14, Math.min(width - 14, point.x));
+      point.y = Math.max(14, Math.min(height - 14, point.y));
+    }
+  }
+
+  for (const edge of graph.edges) {
+    const a = layout.get(edge.src), b = layout.get(edge.dst);
+    if (!a || !b) continue;
+    ctx.strokeStyle = edge.sentiment < 0
+      ? `rgba(217,83,79,${Math.min(0.75, Math.abs(edge.sentiment) / SCALE)})`
+      : `rgba(106,153,85,${Math.min(0.75, edge.sentiment / SCALE)})`;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+
+  for (const node of graph.nodes) {
+    const point = layout.get(node.key);
+    if (!point) continue;
+    ctx.fillStyle = FACTION_COLOUR[node.factionKey] ?? '#8d8577';
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, node.status === 'alive' ? 4 : 6, 0, Math.PI * 2);
+    ctx.fill();
+    if (node.status !== 'alive') {
+      ctx.strokeStyle = '#d9534f';
+      ctx.stroke();
+    }
+  }
+}
+
+// --- belief inspector -----------------------------------------------------
+
+function fillSelectors(agents, claims) {
+  const agentSelect = el('belief-agent');
+  const claimSelect = el('belief-claim');
+  selectedAgent = selectedAgent ?? agents[0]?.agentKey ?? null;
+  selectedClaim = selectedClaim ?? claims[0]?.claimKey ?? null;
+
+  agentSelect.innerHTML = agents
+    .map((a) => `<option ${a.agentKey === selectedAgent ? 'selected' : ''}>${a.agentKey}</option>`)
+    .join('');
+  claimSelect.innerHTML = claims
+    .map((c) => `<option ${c.claimKey === selectedClaim ? 'selected' : ''}>${c.claimKey}</option>`)
+    .join('');
+
+  agentSelect.onchange = () => { selectedAgent = agentSelect.value; drawBelief(); };
+  claimSelect.onchange = () => { selectedClaim = claimSelect.value; drawBelief(); };
+}
+
+async function drawBelief() {
+  if (!selectedAgent || !selectedClaim) return;
+  const points = await api('/api/belief', { agent: selectedAgent, claim: selectedClaim });
+  const canvas = el('belief');
+  const ctx = setup(canvas);
+  const { width, height } = canvas.getBoundingClientRect();
+
+  el('belief-note').textContent = points.length === 0
+    ? `${selectedAgent} has never encountered this claim`
+    : `${points.length} belief updates · now ${fx(points[points.length - 1].confidence)}`;
+  if (points.length === 0) return;
+
+  const lastTick = Math.max(1, points[points.length - 1].tick);
+  const x = (tick) => (tick / lastTick) * (width - 8) + 4;
+  // Signed: the midline is "no opinion", below it is active disbelief.
+  const y = (value) => height / 2 - (value / SCALE) * (height / 2 - 6);
+
+  ctx.strokeStyle = '#3a322d';
+  ctx.beginPath();
+  ctx.moveTo(0, height / 2);
+  ctx.lineTo(width, height / 2);
+  ctx.stroke();
+
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const px = x(point.tick), py = y(point.confidence);
+    index === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  });
+  ctx.strokeStyle = '#6fa8dc';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+// --- tables ---------------------------------------------------------------
+
+function drawChronicle(entries) {
+  el('chronicle').innerHTML =
+    '<tr><th class="num">tick</th><th>kind</th><th>what happened</th></tr>' +
+    entries.map((entry) => `
+      <tr>
+        <td class="num">${entry.tick}</td>
+        <td class="kind kind-${entry.kind}">${entry.kind}</td>
+        <td>${esc(entry.description)}</td>
+      </tr>`).join('');
+}
+
+function drawFactions(factions) {
+  el('factions').innerHTML =
+    '<tr><th>faction</th><th class="num">tension</th><th class="num">members</th>' +
+    '<th>leader</th><th>terms</th></tr>' +
+    factions.map((faction) => `
+      <tr>
+        <td>${esc(faction.factionKey)}${faction.belligerent ? '' : ' <span class="muted">(not a side)</span>'}</td>
+        <td class="num">${fx(faction.tension)}</td>
+        <td class="num">${faction.members}</td>
+        <td>${esc(faction.leaderKey ?? '—')}</td>
+        <td>${faction.willingToNegotiate ? 'will negotiate' : '<span class="muted">no</span>'}</td>
+      </tr>`).join('');
+}
+
+function drawCognition(records) {
+  el('cognition').innerHTML =
+    '<tr><th class="num">tick</th><th>agent</th><th>intention</th><th>model</th></tr>' +
+    records.map((record) => `
+      <tr>
+        <td class="num">${record.tick}</td>
+        <td>${esc(record.agentKey)}</td>
+        <td>${esc(record.decision.intention ?? '')}
+            ${record.decision.accuseClaimKey
+              ? `<span class="truth-false">accuses: ${esc(record.decision.accuseClaimKey)}</span>` : ''}</td>
+        <td class="muted">${esc(record.modelId)}</td>
+      </tr>`).join('');
+}
+
+// --- plumbing -------------------------------------------------------------
+
+function setup(canvas) {
+  const ratio = window.devicePixelRatio || 1;
+  const { width, height } = canvas.getBoundingClientRect();
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  return ctx;
+}
+
+function median(values) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+async function refresh() {
+  if (!worldId) return;
+  try {
+    const [summary, claims, tension, graph, chronicle, factions, cognition, agents, metrics] =
+      await Promise.all([
+        api('/api/world'), api('/api/claims'), api('/api/tension'), api('/api/graph'),
+        api('/api/chronicle'), api('/api/factions'), api('/api/cognition'),
+        api('/api/agents'), api('/api/metrics'),
+      ]);
+
+    el('s-tick').textContent = `${summary.currentTick} (day ${summary.day} ${summary.phase})`;
+    el('s-stage').textContent = summary.stage;
+    el('s-tension').textContent = fx(summary.globalTension);
+    el('s-peace').textContent = summary.peaceStreak;
+    el('s-alive').textContent = summary.agentsAlive;
+    el('s-status').textContent = summary.status + (summary.ending ? ` · ${summary.ending}` : '');
+    el('s-calls').textContent = `${summary.inferenceCalls} calls`;
+    el('s-cost').textContent = `$${(summary.estCostMicros / 1e6).toFixed(4)}`;
+    el('s-latency').textContent = `${median(metrics.map((m) => m.durationMs))}ms`;
+    el('s-retries').textContent = metrics.reduce((sum, m) => sum + m.retryCount, 0);
+
+    drawTension(tension);
+    drawClaims(claims);
+    drawGraph(graph);
+    drawChronicle(chronicle);
+    drawFactions(factions);
+    drawCognition(cognition);
+    fillSelectors(agents, claims);
+    await drawBelief();
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+await loadWorlds();
+await refresh();
+// A tick is five seconds; polling at one keeps the page live without hammering.
+setInterval(refresh, 1000);
+setInterval(loadWorlds, 15000);
+</script>
+</body>
+</html>

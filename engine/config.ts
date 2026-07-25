@@ -37,6 +37,27 @@ export const GOSSIP = {
 
   /** Trust below this and the listener does not even repeat it. */
   minTrustToTransmit: fromPercent(15) as Fixed,
+
+  /**
+   * Ticks before someone can be told the same thing again.
+   *
+   * Without re-hearing, belief cannot harden: one retelling moves a listener a
+   * fraction of the way toward believing, and if that is the only time they
+   * ever hear it, nobody in town ever reaches the confidence that makes them
+   * act. Real rumors do not work by single exposure — they work by repetition
+   * from several mouths — and the whole misinformation thesis depends on that.
+   * Eight ticks is two minutes of play: long enough that a conversation is not
+   * one person saying the same sentence four times.
+   */
+  retellCooldown: 8,
+
+  /**
+   * How many holders of one rumor do the telling in a tick. The talkative go
+   * first. This bounds the work per rumor — the listener query runs once per
+   * holder — and keeps a rumor everyone has heard from costing forty queries a
+   * tick to make no progress.
+   */
+  maxTellersPerRumor: 12,
 } as const;
 
 export const BELIEF = {
@@ -86,6 +107,21 @@ export const TENSION = {
     war: fromPercent(94) as Fixed,
   },
 
+  /** Added when a believer says a cross-house accusation out loud. */
+  publicAccusation: fromPercent(2.2) as Fixed,
+
+  /**
+   * Ceiling on how far tension can move in one tick.
+   *
+   * Individual events are priced by how bad they are, but a town's mood does
+   * not turn over in fifteen in-world minutes however much is said. Without the
+   * cap, one very hot rumor reaching forty people in a single tick takes the
+   * town from calm to war inside a minute of play — which is unreadable on
+   * screen and makes every intervention pointless. The cap is what stretches
+   * the arc across the canonical 192–288 ticks.
+   */
+  maxRisePerTick: fromPercent(0.45) as Fixed,
+
   /** Consecutive ticks the peace conditions must hold before peace is declared. */
   peaceStreakRequired: 12,
 
@@ -94,6 +130,85 @@ export const TENSION = {
 
   /** Peace requires no hostile rumor hotter than this. */
   peaceMaxRumorHeat: fromPercent(30) as Fixed,
+} as const;
+
+export const ACCUSATION = {
+  /**
+   * How likely a believer is to say it out loud this tick, by how far the town
+   * has already gone. This is the self-reinforcing loop: accusations raise
+   * tension, tension advances the stage, and a further stage makes everyone
+   * readier to accuse. It is also why an unattended town does not simply settle
+   * once everyone has heard everything.
+   */
+  chanceByStage: {
+    calm: 0 as Fixed,
+    suspicion: fromPercent(3) as Fixed,
+    accusations: fromPercent(7) as Fixed,
+    trials: fromPercent(11) as Fixed,
+    first_blood: fromPercent(16) as Fixed,
+    war: fromPercent(16) as Fixed,
+  },
+
+  /** Ceiling per tick, so a town of forty believers cannot all speak at once. */
+  maxPerTick: 3,
+
+  /** How much an accusation puts a rumor back in circulation. */
+  reheat: fromPercent(25) as Fixed,
+} as const;
+
+export const COGNITION = {
+  /** Ticks between cognition rounds. 6 ticks × 5 s = 30 s of real time. */
+  intervalTicks: 6,
+  /** Agents who think in a normal round. */
+  spotlightMax: 2,
+  /** Agents who think when something has just happened to them. */
+  burstMax: 6,
+  /**
+   * Inference calls a single world may make before cognition degrades to the
+   * deterministic path. A 30-minute world at two thinks per 30 s needs ~120;
+   * the headroom covers conversation and distortion.
+   */
+  callBudget: 400,
+  /**
+   * How long an agent keeps walking toward what they decided. Beyond this the
+   * plan is stale and the day's routine takes over again — otherwise one
+   * decision at dawn would keep someone out of their workshop all day.
+   */
+  planHorizonTicks: 12,
+
+  /** Importance assigned to a memory an agent forms by thinking about it. */
+  reflectionImportance: fromPercent(70) as Fixed,
+  observationImportance: fromPercent(45) as Fixed,
+} as const;
+
+export const CONVERSE = {
+  /** How hot a rumor the player's accusation starts at. */
+  accusationHeat: fromPercent(75) as Fixed,
+
+  /**
+   * How much weight one player utterance carries against a townsperson's
+   * belief. Higher than a single retelling — the player is standing in front of
+   * them — but far short of decisive, so persuasion takes a conversation rather
+   * than a sentence.
+   */
+  persuasion: fromPercent(160) as Fixed,
+
+  /** How much heat a reconciliation takes out of the rumors that agent carries. */
+  rumorCooling: fromPercent(22) as Fixed,
+
+  sentimentWarming: fromPercent(8) as Fixed,
+  sentimentSmalltalk: fromPercent(2) as Fixed,
+  threatTension: fromPercent(1.5) as Fixed,
+
+  reputationForAccusing: fromPercent(6) as Fixed,
+  reputationForPeacemaking: fromPercent(5) as Fixed,
+} as const;
+
+export const TIME = {
+  /** Ticks per in-world phase. Four phases × 24 = 96 ticks per in-world day. */
+  ticksPerPhase: 24,
+  /** Hard ceiling on an unattended run: 360 ticks is 30 minutes at 1×. */
+  maxTicks: 360,
 } as const;
 
 export const RETRIEVAL = {
