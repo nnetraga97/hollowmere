@@ -10,10 +10,19 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createInferenceClient, createStubClient, stubEmbed } from './inference/index.ts';
+import {
+  createInferenceClient, createStubClient, isBillableInferenceMode, stubEmbed,
+} from './inference/index.ts';
 import type { CompletionRequest } from './inference/index.ts';
 
 const DIMS = 1024;
+
+test('only live provider inference is billable', () => {
+  assert.equal(isBillableInferenceMode('bedrock'), true);
+  assert.equal(isBillableInferenceMode('azure'), true);
+  assert.equal(isBillableInferenceMode('stub'), false);
+  assert.equal(isBillableInferenceMode('replay'), false);
+});
 
 function request(overrides: Partial<CompletionRequest> = {}): CompletionRequest {
   return {

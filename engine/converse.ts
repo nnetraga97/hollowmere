@@ -52,7 +52,9 @@ import { setNegotiationWillingness } from './peace.ts';
 import { clampSigned, clampUnit, fpMul, type Fixed } from './fixedpoint.ts';
 import { createSeq, type Seq } from './seq.ts';
 import { deriveSeed } from './rng.ts';
-import { createStubClient, streamWithUsage, type InferenceClient } from './inference/index.ts';
+import {
+  createStubClient, isBillableInferenceMode, streamWithUsage, type InferenceClient,
+} from './inference/index.ts';
 
 export const CLASSIFY_PROMPT_VERSION = 'classify-v1';
 export const DIALOGUE_PROMPT_VERSION = 'dialogue-v2';
@@ -281,7 +283,7 @@ export async function converse(options: ConverseOptions): Promise<ConverseResult
   const inference = budget.exhausted
     ? createStubClient({ dimensions: options.inference.dimensions })
     : options.inference;
-  const billable = inference.mode === 'bedrock';
+  const billable = isBillableInferenceMode(inference.mode);
   const candidates = await withClient((client) => loadClaimCandidates(client, options.worldId));
   const subjectKey = await withClient((client) =>
     resolveSubject(client, options.worldId, options.text, agent.agentKey));
@@ -548,7 +550,13 @@ export async function applyStructuredConversationTurn(input: {
       );
       if (source.rows[0]) reply = `${reply} The source I name is ${source.rows[0].name}.`;
     }
-    if (effects.hearingId) reply = `${reply} I will answer the summons.`;
+    if (effects.hearingId) {
+      const attendance = prepared.summonDecision?.response;
+      if (attendance === 'decline') reply = `${reply} I will not answer the summons.`;
+      else if (attendance === 'come_but_tell_someone') {
+        reply = `${reply} I will answer the summons, but others will hear of it.`;
+      } else reply = `${reply} I will answer the summons.`;
+    }
     if (effects.hearingRejectedReason) reply = `${reply} ${effects.hearingRejectedReason}.`;
     await client.query(
       `INSERT INTO world_events

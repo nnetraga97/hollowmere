@@ -946,6 +946,13 @@ ALTER TABLE cognition_records ADD CONSTRAINT check_task
 CREATE INDEX IF NOT EXISTS cognition_records_replay_idx
   ON cognition_records (world_id, tick, agent_id);
 
+-- Dialogue prompt grounding asks whether an agent historically planted a
+-- scheme claim as of a simulated tick. Keep that interactive lookup scoped to
+-- the world's agent and the small strategy subset rather than scanning every
+-- per-tick cognition row.
+CREATE INDEX IF NOT EXISTS cognition_records_agent_task_tick_idx
+  ON cognition_records (world_id, agent_id, task, tick);
+
 -- The backstop against a duplicate tick under split-brain: two schedulers can
 -- race, but only one can insert (world_id, tick).
 CREATE TABLE IF NOT EXISTS world_tick_commits (

@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  closeConversation, startConversation, sweepExpiredConversations, takeConversationTurn,
+  closeConversation, ConversationRateLimitError, startConversation,
+  parseTurn, sweepExpiredConversations, takeConversationTurn,
 } from './conversation.ts';
 import { closePool, query } from './db.ts';
 import { createStubClient } from './inference/index.ts';
@@ -15,6 +16,37 @@ import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const HAS_DB = Boolean(process.env.DATABASE_URL);
+
+describe('player conversation output parsing', () => {
+  test('accepts only the structured allowlists', () => {
+    assert.deepEqual(parseTurn(JSON.stringify({
+      reply: 'I have heard enough.', speechAct: 'inquire',
+      disclosure: 'deflect', hearingResponse: null,
+    })), {
+      reply: 'I have heard enough.', speechAct: 'inquire',
+      disclosure: 'deflect', hearingResponse: null,
+    });
+    assert.deepEqual(parseTurn(JSON.stringify({
+      reply: 'Come to the square.', speechAct: 'summon',
+      disclosure: null, hearingResponse: 'come_but_tell_someone',
+    })), {
+      reply: 'Come to the square.', speechAct: 'summon',
+      disclosure: null, hearingResponse: 'come_but_tell_someone',
+    });
+  });
+
+  test('rejects malformed and non-allowlisted outputs', () => {
+    const invalid = [
+      'not json',
+      JSON.stringify({ reply: '', speechAct: 'smalltalk', disclosure: null, hearingResponse: null }),
+      JSON.stringify({ reply: 'x'.repeat(2001), speechAct: 'smalltalk', disclosure: null, hearingResponse: null }),
+      JSON.stringify({ reply: 'Hello.', speechAct: 'invent', disclosure: null, hearingResponse: null }),
+      JSON.stringify({ reply: 'Hello.', speechAct: 'inquire', disclosure: 'invent', hearingResponse: null }),
+      JSON.stringify({ reply: 'Hello.', speechAct: 'summon', disclosure: null, hearingResponse: 'invent' }),
+    ];
+    for (const text of invalid) assert.equal(parseTurn(text), null);
+  });
+});
 
 describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
   let scenarioVersionId: string;
@@ -104,6 +136,43 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 
+  test('rate limiting blocks new paid turns but permits an idempotent retry', async () => {
+    const ref = await freshWorld(708);
+    const stub = createStubClient();
+    let calls = 0;
+    const inference = {
+      ...stub,
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        calls++;
+        return stub.complete(request);
+      },
+    };
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const firstInput = {
+      worldId: ref.worldId, sessionId: ref.sessionId,
+      conversationId: started.conversationId, text: 'Good evening.',
+      idempotencyKey: 'turn-1', inference, rateLimitPerMinute: 1,
+    };
+    const first = await takeConversationTurn(firstInput);
+    const replay = await takeConversationTurn(firstInput);
+    assert.equal(replay.turn.turnId, first.turn.turnId);
+    assert.equal(calls, 1);
+
+    await assert.rejects(
+      takeConversationTurn({
+        ...firstInput, text: 'Tell me more.', idempotencyKey: 'turn-2',
+      }),
+      ConversationRateLimitError,
+    );
+    assert.equal(calls, 1, 'a rejected turn must not reach inference');
+    const commands = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM world_commands
+        WHERE world_id = $1 AND kind = 'conversation_turn'`, [ref.worldId],
+    );
+    assert.equal(commands[0]!.count, 1);
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
   test('the sweeper closes an abandoned hold without provider inference', async () => {
     const ref = await freshWorld(703);
     const started = await startConversation({ ...ref, idempotencyKey: 'start' });
@@ -163,11 +232,17 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     });
 
     const second = await startConversation({ ...ref, idempotencyKey: 'start-2' });
-    let prompt = '';
+    let systemPrompt = '';
+    let userPrompt = '';
+    let speechActChoices: readonly string[] = [];
     const observing = {
       ...stub,
       async complete(request: Parameters<typeof stub.complete>[0]) {
-        if (request.task === 'conversation_turn') prompt = request.user;
+        if (request.task === 'conversation_turn') {
+          systemPrompt = request.system;
+          userPrompt = request.user;
+          speechActChoices = request.choices?.speechActs ?? [];
+        }
         return stub.complete(request);
       },
     };
@@ -175,9 +250,103 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
       worldId: ref.worldId, sessionId: ref.sessionId, conversationId: second.conversationId,
       text: 'Do you remember me?', idempotencyKey: 'turn-2', inference: observing,
     });
-    assert.match(prompt, /Lasting impression.*threat/i);
-    assert.match(prompt, /What you remember:/);
+    const prompt = JSON.parse(userPrompt) as {
+      scene: { location: { name: string }; publicEscalationStage: string };
+      npc: { name: string; persona: string; personality: { honesty: number } };
+      relationshipWithPlayer: { lastingImpression: string };
+      recalledMemories: string[];
+      subjectiveBeliefs: unknown[];
+      latestPlayerUtterance: string;
+    };
+    assert.match(systemPrompt, /speechAct classifies the latest PLAYER utterance/);
+    assert.ok(speechActChoices.includes('inquire'));
+    assert.ok(speechActChoices.includes('summon'));
+    assert.ok(prompt.scene.location.name.length > 0);
+    assert.equal(prompt.scene.publicEscalationStage, 'calm');
+    assert.ok(prompt.npc.name.length > 0);
+    assert.ok(prompt.npc.persona.length > 0);
+    assert.ok(Number.isInteger(prompt.npc.personality.honesty));
+    assert.match(prompt.relationshipWithPlayer.lastingImpression, /threat/i);
+    assert.ok(prompt.recalledMemories.length > 0);
+    assert.ok(Array.isArray(prompt.subjectiveBeliefs));
+    assert.equal(prompt.latestPlayerUtterance, 'Do you remember me?');
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
+  test('the player prompt hides every claim historically planted by the instigator', async () => {
+    const sessionId = `conversation-scheme-history-${Date.now()}`;
+    const world = await instantiateWorld({ scenarioVersionId, seed: 710, sessionId });
+    const culprit = await query<{
+      agent_id: string; agent_key: string; location_id: string;
+    }>(
+      `SELECT agent.agent_id, agent.agent_key, agent.location_id
+         FROM world_culprit marker
+         JOIN world_agents agent
+           ON agent.world_id = marker.world_id AND agent.agent_id = marker.agent_id
+        WHERE marker.world_id = $1`,
+      [world.worldId],
+    );
+    const claims = await query<{ claim_id: string; text: string }>(
+      `SELECT claim_id, text FROM world_claims
+        WHERE world_id = $1 AND NOT locked ORDER BY claim_key LIMIT 3`,
+      [world.worldId],
+    );
+    const historical = claims[0]!;
+    const future = claims[1]!;
+    const current = claims[2]!;
+    await query(`UPDATE world_players SET location_id = $2 WHERE world_id = $1`,
+      [world.worldId, culprit[0]!.location_id]);
+    await query(`UPDATE world_scheme_state SET claim_id = $2 WHERE world_id = $1`,
+      [world.worldId, current.claim_id]);
+    await query(
+      `INSERT INTO cognition_records
+         (world_id, tick, agent_id, task, input_hash, decision, model_id, prompt_version)
+       VALUES
+         ($1, 0, $2, 'strategy', 'historical-player-scheme-claim', $3,
+          'deterministic-fallback', 'strategy-v2'),
+         ($1, 20, $2, 'strategy', 'future-player-scheme-claim', $4,
+          'deterministic-fallback', 'strategy-v2')`,
+      [world.worldId, culprit[0]!.agent_id,
+        JSON.stringify({ claimId: historical.claim_id }),
+        JSON.stringify({ claimId: future.claim_id })],
+    );
+    await query(
+      `INSERT INTO agent_beliefs (world_id, agent_id, claim_id, confidence, updated_tick)
+       VALUES ($1, $2, $3, -7200, 0), ($1, $2, $4, 3500, 0)
+       ON CONFLICT (world_id, agent_id, claim_id)
+       DO UPDATE SET confidence = excluded.confidence, updated_tick = excluded.updated_tick`,
+      [world.worldId, culprit[0]!.agent_id, historical.claim_id, future.claim_id],
+    );
+    const started = await startConversation({
+      worldId: world.worldId,
+      sessionId,
+      agentKey: culprit[0]!.agent_key,
+      idempotencyKey: 'start',
+    });
+    const stub = createStubClient();
+    let captured = '';
+    const inference = {
+      ...stub,
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        if (request.task === 'conversation_turn') captured = request.user;
+        return stub.complete(request);
+      },
+    };
+    await takeConversationTurn({
+      worldId: world.worldId,
+      sessionId,
+      conversationId: started.conversationId,
+      text: 'What have you heard?',
+      idempotencyKey: 'turn',
+      inference,
+    });
+    const prompt = JSON.parse(captured) as {
+      subjectiveBeliefs: { claim: string }[];
+    };
+    assert.ok(!prompt.subjectiveBeliefs.some((belief) => belief.claim === historical.text));
+    assert.ok(prompt.subjectiveBeliefs.some((belief) => belief.claim === future.text),
+      'a strategy record from a future tick must not affect the current prompt');
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
   });
 
   test('structured inquiry records engine-owned provenance and names the real source', async () => {
@@ -257,6 +426,33 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     );
     assert.equal(commitment.length, 1);
     assert.equal(commitment[0]!.commitment_location, commitment[0]!.hearing_location);
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
+  test('a declined summons records and states the refusal consistently', async () => {
+    const ref = await freshWorld(709);
+    const stub = createStubClient();
+    const scripted = {
+      ...stub,
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        const base = await stub.complete(request);
+        if (request.task !== 'conversation_turn') return base;
+        return { ...base, text: JSON.stringify({
+          reply: 'I have made my decision.', speechAct: 'summon', disclosure: null,
+          hearingResponse: 'decline',
+        }) };
+      },
+    };
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const result = await takeConversationTurn({
+      worldId: ref.worldId, sessionId: ref.sessionId, conversationId: started.conversationId,
+      text: 'Come to a hearing at the chapel.', idempotencyKey: 'turn', inference: scripted,
+    });
+    assert.match(result.turn.reply, /will not answer the summons/i);
+    const commitments = await query<{ response: string }>(
+      `SELECT response FROM world_agent_commitments WHERE world_id = $1`, [ref.worldId],
+    );
+    assert.deepEqual(commitments.map((row) => row.response), ['decline']);
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 });

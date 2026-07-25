@@ -21,6 +21,7 @@ import {
   type InferenceClient,
   type StreamUsage,
 } from './types.ts';
+import { withChoiceConstraints } from './prompts.ts';
 
 const ANTHROPIC_VERSION = 'bedrock-2023-05-31';
 
@@ -76,20 +77,6 @@ export interface BedrockOptions {
   reasoningModelId?: string;
   embeddingModelId?: string;
   dimensions?: number;
-}
-
-/**
- * Constraints are appended to the system prompt rather than trusted to the
- * model's imagination: the engine can only act on keys it already knows, so a
- * hallucinated location or claim key is a wasted call.
- */
-function withChoiceConstraints(request: CompletionRequest): string {
-  if (!request.choices) return request.system;
-  const lines = Object.entries(request.choices)
-    .filter(([, values]) => values.length > 0)
-    .map(([key, values]) => `- ${key}: ${values.join(', ')}`);
-  if (lines.length === 0) return request.system;
-  return `${request.system}\n\nChoose only from these known values:\n${lines.join('\n')}`;
 }
 
 export function createBedrockClient(options: BedrockOptions = {}): InferenceClient {

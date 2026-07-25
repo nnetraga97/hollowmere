@@ -8,21 +8,23 @@
  */
 
 import { createBedrockClient, type BedrockOptions } from './bedrock.ts';
+import { createAzureOpenAIClient, type AzureOpenAIOptions } from './azure.ts';
 import { createStubClient, type StubOptions } from './stub.ts';
 import type { InferenceClient, InferenceMode } from './types.ts';
 
 export * from './types.ts';
 export { createStubClient, stubEmbed } from './stub.ts';
 export { createBedrockClient } from './bedrock.ts';
+export { createAzureOpenAIClient } from './azure.ts';
 
-export interface InferenceOptions extends StubOptions, BedrockOptions {
+export interface InferenceOptions extends StubOptions, BedrockOptions, AzureOpenAIOptions {
   mode?: InferenceMode;
 }
 
 function resolveMode(explicit?: InferenceMode): InferenceMode {
   if (explicit) return explicit;
   const configured = process.env.INFERENCE_MODE;
-  if (configured === 'bedrock' || configured === 'stub' || configured === 'replay') {
+  if (configured === 'bedrock' || configured === 'azure' || configured === 'stub' || configured === 'replay') {
     return configured;
   }
   // Defaulting to the stub is deliberate: an unconfigured environment should
@@ -36,6 +38,9 @@ export function createInferenceClient(options: InferenceOptions = {}): Inference
   switch (mode) {
     case 'bedrock':
       return createBedrockClient(options);
+
+    case 'azure':
+      return createAzureOpenAIClient(options);
 
     case 'stub':
       return createStubClient(options);

@@ -1,13 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
-  closeConversation, getHeldConversation, startConversation, takeConversationTurn,
+  closeConversation, ConversationRateLimitError,
+  DEFAULT_CONVERSATION_RATE_LIMIT_PER_MINUTE, getHeldConversation,
+  startConversation, takeConversationTurn,
 } from '@/server/engine';
 import { jsonBody, requireSameOrigin, requireSession, routeError } from '@/server/http';
 import { inference } from '@/server/inference';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+function configuredRateLimit(): number {
+  const value = Number(process.env.CONVERSATION_RATE_LIMIT_PER_MINUTE);
+  return Number.isSafeInteger(value) && value > 0
+    ? value
+    : DEFAULT_CONVERSATION_RATE_LIMIT_PER_MINUTE;
+}
 
 export async function GET(): Promise<Response> {
   try {
@@ -52,6 +61,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     const result = await takeConversationTurn({
       ...ref, conversationId: body.conversationId, text,
       idempotencyKey: body.idempotencyKey, inference,
+      rateLimitPerMinute: configuredRateLimit(),
     });
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -69,5 +79,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       'cache-control': 'no-cache, no-transform',
       'x-accel-buffering': 'no',
     } });
-  } catch (error) { return routeError(error); }
+  } catch (error) {
+    if (error instanceof ConversationRateLimitError) {
+      return Response.json({ error: error.message }, {
+        status: 429,
+        headers: { 'retry-after': '60' },
+      });
+    }
+    return routeError(error);
+  }
 }

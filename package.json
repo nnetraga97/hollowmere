@@ -27,6 +27,10 @@
     "check:full": "npm run typecheck && npm run test:full && npm run check:web",
     "check:web": "npm run web:typecheck && npm --workspace @hollowmere/web test && npm run web:build",
     "check:bedrock": "node --env-file-if-exists=.env scripts/check-bedrock.ts",
+    "check:azure": "node --env-file-if-exists=.env scripts/check-azure.ts",
+    "azure:check": "node --env-file-if-exists=.env scripts/azure-local.ts check",
+    "azure:scheduler": "node --env-file-if-exists=.env scripts/azure-local.ts scheduler",
+    "azure:web": "node --env-file-if-exists=.env scripts/azure-local.ts web",
     "seed": "node --env-file-if-exists=.env scripts/seed.ts",
     "sim": "node --env-file-if-exists=.env harness/sim.ts",
     "repl": "node --env-file-if-exists=.env harness/repl.ts",
@@ -43,6 +47,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.700.0",
+    "openai": "^6.49.0",
     "pg": "^8.13.1"
   }
 }

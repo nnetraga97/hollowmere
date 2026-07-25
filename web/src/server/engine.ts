@@ -4,7 +4,9 @@ export * from '../../../engine/game-api.ts';
 export * from '../../../engine/api.ts';
 export { converse } from '../../../engine/converse.ts';
 export {
-  closeConversation, getHeldConversation, startConversation, takeConversationTurn,
+  closeConversation, ConversationRateLimitError,
+  DEFAULT_CONVERSATION_RATE_LIMIT_PER_MINUTE, getHeldConversation,
+  startConversation, takeConversationTurn,
 } from '../../../engine/conversation.ts';
 export { query } from '../../../engine/db.ts';
 export { createInferenceClient } from '../../../engine/inference/index.ts';

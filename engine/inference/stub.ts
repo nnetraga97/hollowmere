@@ -233,7 +233,7 @@ function respond(request: CompletionRequest): string {
       return rng.pick(DIALOGUE_OPENERS);
 
     case 'conversation_turn': {
-      const playerText = request.user.split(/\nPlayer: /).at(-1) ?? request.user;
+      const playerText = latestConversationUtterance(request.user);
       const cued = classifyByCue(playerText);
       const type = playerText.includes('?') && cued !== 'summon' && cued !== 'threaten'
         ? 'inquire' : (cued ?? 'smalltalk');
@@ -244,7 +244,7 @@ function respond(request: CompletionRequest): string {
           ? (pickFromChoices(request, 'disclosures', rng) ?? 'deflect')
           : null,
         hearingResponse: type === 'summon'
-          ? (pickFromChoices(request, 'responses', rng) ?? 'come')
+          ? (pickFromChoices(request, 'hearingResponses', rng) ?? 'come')
           : null,
       });
     }
@@ -257,8 +257,10 @@ function respond(request: CompletionRequest): string {
 
     case 'npc_conversation':
       return JSON.stringify({
-        utterance: rng.pick(DIALOGUE_OPENERS),
-        response: rng.pick(DIALOGUE_OPENERS),
+        turns: [
+          { speaker: 'sender', text: rng.pick(DIALOGUE_OPENERS) },
+          { speaker: 'listener', text: rng.pick(DIALOGUE_OPENERS) },
+        ],
       });
 
     case 'reflect':
@@ -296,6 +298,16 @@ function respond(request: CompletionRequest): string {
       throw new InferenceError(exhaustive, 'no stub responder defined');
     }
   }
+}
+
+function latestConversationUtterance(prompt: string): string {
+  try {
+    const value = JSON.parse(prompt) as { latestPlayerUtterance?: unknown };
+    if (typeof value.latestPlayerUtterance === 'string') return value.latestPlayerUtterance;
+  } catch {
+    // Older recordings used a plain-text prompt. Keep replay fixtures readable.
+  }
+  return prompt.split(/\nPlayer: /).at(-1) ?? prompt;
 }
 
 export interface StubOptions {

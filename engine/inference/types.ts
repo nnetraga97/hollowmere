@@ -11,7 +11,12 @@
  * answer of the right shape for each one. It also gives replay a stable key.
  */
 
-export type InferenceMode = 'stub' | 'bedrock' | 'replay';
+export type InferenceMode = 'stub' | 'bedrock' | 'azure' | 'replay';
+
+/** Only live provider calls are billable; deterministic stub and replay are not. */
+export function isBillableInferenceMode(mode: InferenceMode): boolean {
+  return mode === 'bedrock' || mode === 'azure';
+}
 
 /**
  * The tasks the engine asks a model to perform. Adding a task here is a

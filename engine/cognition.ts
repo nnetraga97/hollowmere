@@ -34,11 +34,11 @@ import type { RouteGraph } from './movement.ts';
 import { clampUnit, type Fixed } from './fixedpoint.ts';
 import type { Rng } from './rng.ts';
 import type { Seq } from './seq.ts';
-import type { InferenceClient } from './inference/index.ts';
+import { isBillableInferenceMode, type InferenceClient } from './inference/index.ts';
 import { stableId } from './ids.ts';
 import type { EscalationStage } from './tension.ts';
 
-export const PLAN_PROMPT_VERSION = 'plan-v2';
+export const PLAN_PROMPT_VERSION = 'plan-v3';
 export const REFLECT_PROMPT_VERSION = 'reflect-v1';
 
 /** How often a thinking agent also synthesises what they have recalled. */
@@ -466,7 +466,7 @@ export async function think(
     calls,
     tokensIn,
     tokensOut,
-    billable: ctx.inference.mode === 'bedrock',
+    billable: isBillableInferenceMode(ctx.inference.mode),
   });
   if (first && calls > 0 && !ctx.replay) {
     const sourceKey = String(ctx.tick);
@@ -478,7 +478,9 @@ export async function think(
        ON CONFLICT (world_id, category, source_key, attempt) DO NOTHING`,
       [ctx.worldId, stableId(ctx.worldId, 'planning', sourceKey), sourceKey,
         first.modelId, calls, tokensIn, tokensOut,
-        estimateCostMicros({ calls, tokensIn, tokensOut, billable: ctx.inference.mode === 'bedrock' })],
+        estimateCostMicros({
+          calls, tokensIn, tokensOut, billable: isBillableInferenceMode(ctx.inference.mode),
+        })],
     );
   }
 
@@ -802,14 +804,31 @@ async function loadSituation(
   ctx: ThinkContext,
   agent: SpotlightAgent,
 ): Promise<SituationRow> {
-  const events = await client.query<{ description: string }>(
-    `SELECT description FROM world_events
+  const events = await client.query<{
+    event_id: string; kind: string; payload: { responseToEventId?: string }; description: string;
+  }>(
+    `SELECT event_id, kind, payload, description FROM world_events
       WHERE world_id = $1 AND location_id = $2 AND tick >= $3
         AND kind IN ('dialogue', 'accusation', 'escalation', 'trigger', 'player_command')
       ORDER BY tick DESC, seq DESC
-      LIMIT 5`,
+      LIMIT 25`,
     [ctx.worldId, agent.locationId, Math.max(0, ctx.tick - 8)],
   );
+  // A short NPC exchange is stored as one event per line so the chronicle can
+  // show the transcript. For cognition it is one situation, not four separate
+  // observations that crowd an accusation or trigger out of the five slots.
+  const eventGroups = new Map<string, string[]>();
+  for (const event of events.rows) {
+    const responseTo = event.kind === 'dialogue' &&
+      typeof event.payload?.responseToEventId === 'string'
+      ? event.payload.responseToEventId : null;
+    const groupKey = responseTo ?? event.event_id;
+    if (!eventGroups.has(groupKey)) {
+      if (eventGroups.size >= 5) continue;
+      eventGroups.set(groupKey, []);
+    }
+    eventGroups.get(groupKey)!.unshift(event.description);
+  }
 
   // Tie-broken on claim_key, not rumor_id. Two rumors heard on the same tick
   // were previously ordered by a random UUID, which put them in the prompt — and
@@ -838,7 +857,7 @@ async function loadSituation(
 
   return {
     location_key: agent.locationKey,
-    events: events.rows.map((r) => r.description),
+    events: [...eventGroups.values()].map((lines) => lines.join('\n')),
     rumors: rumors.rows.map((r) => r.distorted_text),
     top_claim_key: top.rows[0]?.claim_key ?? null,
     top_claim_text: top.rows[0]?.text ?? null,

@@ -4,7 +4,7 @@ import { readBudget, recordUsage } from './budget.ts';
 import { recordBelief } from './beliefs.ts';
 import { SCHEME } from './config.ts';
 import type { Client } from './db.ts';
-import type { InferenceClient } from './inference/index.ts';
+import { isBillableInferenceMode, type InferenceClient } from './inference/index.ts';
 import type { RouteGraph } from './movement.ts';
 import type { Rng } from './rng.ts';
 import type { Seq } from './seq.ts';
@@ -171,7 +171,7 @@ export async function thinkStrategy(
     calls: 1,
     tokensIn: response.tokensIn,
     tokensOut: response.tokensOut,
-    billable: input.inference.mode === 'bedrock',
+    billable: isBillableInferenceMode(input.inference.mode),
   });
   return {
     agentId: schemer.agent_id,
