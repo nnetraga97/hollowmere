@@ -11,6 +11,7 @@ export function PhaserGame({ bootstrap, game }: { bootstrap: Bootstrap; game: Ga
 
   useEffect(() => {
     if (!host.current) return;
+    ready.current = false;
     let disposed = false;
     let instance: { destroy(removeCanvas?: boolean): void } | null = null;
     const off = EventBus.on('scene-ready', () => {
@@ -22,14 +23,18 @@ export function PhaserGame({ bootstrap, game }: { bootstrap: Bootstrap; game: Ga
     });
     return () => {
       disposed = true;
+      ready.current = false;
       off();
       instance?.destroy(true);
+      instance = null;
     };
   }, [bootstrap.map, bootstrap.session.worldId]);
 
   useEffect(() => {
-    if (ready.current) EventBus.emit('game-state', game);
-  }, [game]);
+    if (ready.current && game.world.worldId === bootstrap.session.worldId) {
+      EventBus.emit('game-state', game);
+    }
+  }, [bootstrap.session.worldId, game]);
 
   return <div ref={host} className="game-canvas" aria-label="Interactive map of Hollowmere" />;
 }

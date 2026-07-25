@@ -14,10 +14,29 @@ const FACTION_TINT: Record<string, number> = {
   unaligned: 0xc1b7a6,
 };
 
+const FACTION_TEXT: Record<string, string> = {
+  aldreth: '#9bcdf2',
+  corvane: '#f0aa7f',
+  unaligned: '#d2cabd',
+};
+
+const FACTION_NAME: Record<string, string> = {
+  aldreth: 'ALDRETH',
+  corvane: 'CORVANE',
+  unaligned: 'INDEPENDENT',
+};
+
+// The Kenney sheet also contains equipment and body-part frames. Restrict NPC
+// assignment to its two complete-character columns and human rows.
+const TOWNSPERSON_FRAMES = [216, 217, 270, 271, 324, 325, 378, 379, 432, 433, 486, 487] as const;
+const PLAYER_FRAME = 595;
+
 export class TownScene extends Phaser.Scene {
   private mapData: TownMap | null = null;
   private state: GameSnapshot | null = null;
   private player?: Phaser.Physics.Arcade.Sprite;
+  private playerMarker?: Phaser.GameObjects.Ellipse;
+  private playerLabel?: Phaser.GameObjects.Text;
   private playerPlaced = false;
   private agents = new Map<string, Phaser.GameObjects.Sprite>();
   private labels = new Map<string, Phaser.GameObjects.Text>();
@@ -90,6 +109,7 @@ export class TownScene extends Phaser.Scene {
       body.velocity.normalize().scale(150);
     }
     this.player.setFlipX(body.velocity.x < 0);
+    this.syncPlayerMarker();
     this.updateProximity();
   }
 
@@ -102,13 +122,21 @@ export class TownScene extends Phaser.Scene {
 
   private readonly onInputFocus = (event: Event) => {
     this.overlayCaptured = (event as CustomEvent<boolean>).detail;
+    this.syncKeyboardCapture();
   };
 
   private readonly onDomFocus = () => {
     queueMicrotask(() => {
       this.domInputCaptured = shouldSuppressGameInput(document.activeElement);
+      this.syncKeyboardCapture();
     });
   };
+
+  private syncKeyboardCapture(): void {
+    if (!this.input.keyboard) return;
+    if (this.inputCaptured) this.input.keyboard.resetKeys();
+    this.input.keyboard.enabled = !this.inputCaptured;
+  }
 
   private get inputCaptured(): boolean {
     return this.overlayCaptured || this.domInputCaptured;
@@ -173,11 +201,22 @@ export class TownScene extends Phaser.Scene {
   }
 
   private createPlayer(): void {
-    this.player = this.physics.add.sprite(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, 'characters', 7)
-      .setScale(2.2).setDepth(20).setCollideWorldBounds(true);
-    this.player.setTint(0xf1d07a);
+    this.playerMarker = this.add.ellipse(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, 46, 24, 0xf0c45c, 0.18)
+      .setStrokeStyle(3, 0xffdb78, 1).setDepth(18);
+    this.player = this.physics.add.sprite(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, 'characters', PLAYER_FRAME)
+      .setScale(2.65).setDepth(20).setCollideWorldBounds(true);
+    this.playerLabel = this.add.text(WORLD_WIDTH / 2, WORLD_HEIGHT / 2 - 35, 'YOU', {
+      fontFamily: 'ui-monospace, monospace', fontStyle: 'bold', fontSize: '12px',
+      color: '#171208', backgroundColor: '#ffdb78', padding: { x: 7, y: 3 },
+    }).setOrigin(0.5).setDepth(40);
     if (this.obstacles) this.physics.add.collider(this.player, this.obstacles);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+  }
+
+  private syncPlayerMarker(): void {
+    if (!this.player) return;
+    this.playerMarker?.setPosition(this.player.x, this.player.y + 10);
+    this.playerLabel?.setPosition(this.player.x, this.player.y - 35);
   }
 
   private applyState(game: GameSnapshot): void {
@@ -204,15 +243,16 @@ export class TownScene extends Phaser.Scene {
       const target = { x: location.x + offset.x, y: location.y + offset.y };
       let sprite = this.agents.get(agent.agentKey);
       if (!sprite) {
-        sprite = this.add.sprite(target.x, target.y, 'characters', stableHash(agent.agentKey) % 648)
-          .setScale(1.85).setDepth(15).setInteractive({ useHandCursor: true });
+        const frame = TOWNSPERSON_FRAMES[stableHash(agent.agentKey) % TOWNSPERSON_FRAMES.length];
+        sprite = this.add.sprite(target.x, target.y, 'characters', frame)
+          .setScale(2.1).setDepth(15).setInteractive({ useHandCursor: true });
         sprite.setData('locationKey', agent.locationKey);
         sprite.on('pointerdown', () => EventBus.emit('select-agent', { agentKey: agent.agentKey }));
         this.agents.set(agent.agentKey, sprite);
-        const label = this.add.text(target.x, target.y - 25, agent.name.split(' ')[0] ?? agent.name, {
-          fontFamily: 'ui-monospace, monospace', fontSize: '10px', color: '#ded6c8',
-          backgroundColor: '#10110ecc', padding: { x: 3, y: 2 },
-        }).setOrigin(0.5).setDepth(30).setVisible(false);
+        const label = this.add.text(target.x, target.y - 29, '', {
+          fontFamily: 'ui-monospace, monospace', fontStyle: 'bold', fontSize: '10px',
+          color: '#ded6c8', backgroundColor: '#10110eee', padding: { x: 4, y: 2 },
+        }).setOrigin(0.5).setDepth(30);
         this.labels.set(agent.agentKey, label);
       } else if (sprite.getData('locationKey') !== agent.locationKey) {
         sprite.setData('locationKey', agent.locationKey);
@@ -225,14 +265,15 @@ export class TownScene extends Phaser.Scene {
             const point = interpolateRoute(start, target, travel.progress);
             sprite!.setPosition(point.x, point.y);
             const label = this.labels.get(agent.agentKey);
-            if (label) label.setPosition(sprite!.x, sprite!.y - 25);
+            if (label) label.setPosition(sprite!.x, sprite!.y - 29);
           },
         });
       } else {
         sprite.setPosition(target.x, target.y);
-        this.labels.get(agent.agentKey)?.setPosition(target.x, target.y - 25);
+        this.labels.get(agent.agentKey)?.setPosition(target.x, target.y - 29);
       }
       sprite.setTint(FACTION_TINT[agent.factionKey] ?? 0xffffff);
+      this.updateAgentLabel(agent, agent.agentKey === this.nearestAgent);
       if (agent.status === 'dead' || agent.status === 'detained') sprite.setAlpha(0.4);
       else sprite.setAlpha(1);
     }
@@ -243,6 +284,16 @@ export class TownScene extends Phaser.Scene {
       this.agents.delete(key);
       this.labels.delete(key);
     }
+  }
+
+  private updateAgentLabel(agent: AgentView, nearby: boolean): void {
+    const label = this.labels.get(agent.agentKey);
+    if (!label?.active || !label.scene) return;
+    const firstName = agent.name.split(' ')[0] ?? agent.name;
+    const faction = FACTION_NAME[agent.factionKey] ?? agent.factionKey.toUpperCase();
+    label.setText(`${nearby ? 'E · ' : ''}${firstName} · ${faction}`);
+    label.setColor(FACTION_TEXT[agent.factionKey] ?? '#ded6c8');
+    label.setBackgroundColor(nearby ? '#2d2718f5' : '#10110eee');
   }
 
   private drawHearings(game: GameSnapshot): void {
@@ -274,9 +325,11 @@ export class TownScene extends Phaser.Scene {
       }
     }
     if (nearest?.key !== this.nearestAgent) {
-      if (this.nearestAgent) this.labels.get(this.nearestAgent)?.setVisible(false);
+      const previous = this.state.agents.find((agent) => agent.agentKey === this.nearestAgent);
+      if (previous) this.updateAgentLabel(previous, false);
       this.nearestAgent = nearest?.key ?? null;
-      if (this.nearestAgent) this.labels.get(this.nearestAgent)?.setVisible(true);
+      const current = this.state.agents.find((agent) => agent.agentKey === this.nearestAgent);
+      if (current) this.updateAgentLabel(current, true);
     }
 
     if (this.state.player.pendingMove) return;

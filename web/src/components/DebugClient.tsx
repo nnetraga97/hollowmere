@@ -125,7 +125,7 @@ export function DebugClient() {
 
   const stageProgress = Math.round(game.world.globalTension / 100);
   return <main className="app-shell">
-    <PhaserGame bootstrap={bootstrap} game={game} />
+    <PhaserGame key={bootstrap.session.worldId} bootstrap={bootstrap} game={game} />
 
     <header className="hud">
       <div className="brand"><span className="eyebrow">Hollowmere</span><strong>Town instrument</strong></div>
@@ -155,7 +155,7 @@ export function DebugClient() {
         .map(([name, label]) => <button key={name} aria-pressed={panel === name} onClick={() => setPanel(panel === name ? null : name)}>{label}</button>)}
     </nav>
 
-    <div className="help">WASD / arrows to move · E to speak · click an NPC to inspect</div>
+    <div className="help">Gold ring = YOU · blue = Aldreth · orange = Corvane · WASD / arrows move · E speaks</div>
     {game.player.pendingMove && <div className="pending">Movement queued for tick {game.world.currentTick + 1}: {game.player.pendingMove.locationKey}</div>}
     {error && <div className="toast" role="alert">{error}<button onClick={() => setError(null)}>dismiss</button></div>}
 
