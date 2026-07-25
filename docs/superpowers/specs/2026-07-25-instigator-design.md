@@ -154,29 +154,80 @@ CREATE TABLE world_agent_goals (
 Principals — both leaders, the magistrate, the culprit — get goals from scenario.
 The culprit gets `provoke_war`.
 
-### Schemes
+### The governing principle
 
-The instigator's plan is an authored **scheme ladder**: an ordered list of steps,
-each gated by preconditions written in the *existing* trigger DSL `Condition`
-grammar from `scenario/schema.ts`. No new evaluator and no new attack surface;
-scenario JSON still never becomes code.
+> **The model decides what a character does. The rules decide what is true.**
 
-A scheme names: a claim to push, an audience (faction or location), and a
-required precondition. Effects come from the existing allowlisted verb set plus
-two additions:
+Character decisions — who to work on, what to say, which grievance to press,
+whether to protect a source, how to misdirect — belong to the model, chosen from
+an engine-built allowlist and recorded for replay. World-fact decisions — what
+actually happened, who actually told whom, what the tension is, whether the world
+ends in war, peace or exposure — belong to the rules, always.
 
-- `instruct_dialogue` — queue an exchange between the culprit and an
-  engine-selected agent matching the named audience, pushing the named claim.
-- `seed_rumor_via` — seed an existing rumor with the culprit as originator, so
+This is stated as an invariant rather than left implicit, because the first draft
+of this spec got it wrong by leaving it implicit. Two arguments were stretched
+past what they support:
+
+- **Determinism does not require rule-derivation.** `cognition_records` already
+  replays *model* decisions with zero Bedrock calls. A recorded model decision is
+  exactly as replayable as a computed one. Determinism argues for recording, not
+  for rules.
+- **"Model output never selects an effect" is about allowlisting, not authorship.**
+  `parsePlan` already lets a model genuinely choose a destination and whether to
+  accuse — from a list the engine built. Constraining the space of a decision is
+  not the same as making the decision.
+
+### Schemes — the instigator strategises
+
+The instigator does not execute a script. Each time a scheme slot opens, a
+**strategy call** gives the model the situation and asks it to devise the next
+move. This is real deception: the misdirection is the model's, not the author's.
+
+**What the strategy call sees:** its own agenda, its goal, the claims it holds,
+who is present and reachable, what those people currently believe, how talkative
+and trusting they are, which witnesses are close to exposing it, and the current
+`heat_on_culprit`.
+
+**What it returns**, structured and allowlist-validated:
+
+| Field | Chosen from |
+|---|---|
+| `tactic` | a closed set (below) |
+| `target` | agents actually present or reachable |
+| `claim` | claims the instigator actually holds |
+| `posture` | `press`, `lie_low`, `redirect`, `force` |
+
+Tactics are the strategic vocabulary, and they are what make the antagonist feel
+like an opponent:
+
+- `blame_shift` — push a claim against the House opposite the listener's own.
+- `corroborate_false` — back a rumor already circulating, to harden it rather
+  than start a new one.
+- `poison_the_well` — discredit a witness *before* they can testify. Working on
+  the ferryman's reputation before he speaks is a strategy the model should be
+  able to find on its own.
+- `feign_moderation` — publicly counsel calm, to build trust with someone worth
+  spending later.
+- `redirect_suspicion` — under heat, seed a claim against a *different* culprit
+  candidate. The other four candidates exist partly to make this possible.
+- `recruit_amplifier` — target a high-talkativeness hub rather than someone who
+  already believes.
+
+Authored scheme templates remain, but as **eligibility and fallback**, not as the
+plan: preconditions in the existing trigger DSL `Condition` grammar determine
+which tactics are available this turn, and a budget-exhausted world falls back to
+the authored ladder. Scenario JSON still never becomes code.
+
+Effects still come from the allowlisted verb set plus two additions:
+
+- `instruct_dialogue` — queue an exchange between the culprit and the chosen
+  target, pushing the chosen claim.
+- `seed_rumor_via` — seed a rumor with the culprit as originator, so
   `from_agent_id` records them as the source.
 
-Both resolve claim and agent ids from scenario keys inside the engine. Neither
-accepts a model-supplied identifier.
-
-**The load-bearing invariant:** the engine selects which scheme fires; the model
-only writes what the character *says* while executing it. Model output still
-never selects an effect, and scheme selection stays deterministic rule logic, so
-replay is unaffected.
+Both resolve claim and agent ids from scenario keys **inside the engine**. A
+tactic, target or claim outside the supplied allowlist is dropped rather than
+corrected, exactly as `parsePlan` drops an unreachable destination.
 
 New module `engine/schemes.ts`. Goal state lives in `engine/goals.ts`.
 
@@ -186,9 +237,14 @@ New module `engine/schemes.ts`. Goal state lives in `engine/goals.ts`.
 
 New module `engine/dialogue.ts`.
 
-**Pair selection is a rule.** Both agents colocated, retell cooldown elapsed, at
+**Pair selection is a rule** — for cost, not principle: deciding it with a model
+would be a call every tick. Both agents colocated, retell cooldown elapsed, at
 least one carrying an agenda or a rumor above `GOSSIP.minHeat`, ordered on
-`agent_key` (never `agent_id` — decision 12). The model writes only the line.
+`agent_key` (never `agent_id` — decision 12).
+
+The exception is the instigator, whose target *is* chosen by the model as part of
+the strategy call (§4). The rules then confirm the chosen target is genuinely
+reachable and drop the tactic if not.
 
 **What an exchange produces:**
 - A `world_events` row with `kind='dialogue'` — a kind the schema already permits
@@ -217,11 +273,32 @@ for correctness — they would only improve prose.
 
 **Budget.** `COGNITION.callBudget` is 400. One exchange per tick over a 360-tick
 run is 360 calls on its own, which starves cognition. Resolution: gate to one
-exchange per 6 ticks — 60 exchanges over a full run, one model call each — with
+exchange per 6 ticks — 60 exchanges over a full run, one speech call each — with
 the instigator's exchanges taking priority when contended, and degrade to
 templated text when the budget is exhausted, the same pattern `think()` already
-uses at `cognition.ts:249`. If playtesting shows 60 exchanges is too sparse to
-read as a living town, raising `callBudget` is preferred over cutting cognition.
+uses at `cognition.ts:249`.
+
+Full accounting for a 360-tick run:
+
+| Consumer | Calls |
+|---|---|
+| Cognition (2 agents per 6 ticks) | ~120 |
+| Dialogue speech calls (1 per 6 ticks) | 60 |
+| Instigator strategy calls (1 per 12 ticks) | 30 |
+| Embeddings (1 per cognition round) | ~60 |
+| Player conversation | player-driven |
+
+That leaves headroom inside 400. The strategy call is the cheapest agency in the
+design — 30 calls buys the antagonist its entire strategic repertoire, because
+one strategy decision governs several ticks of execution. This is the
+option-action split from *Lyfe Agents* (§11): decide rarely and expensively,
+execute often and cheaply.
+
+**Stub mode falls back to the authored ladder.** The determinism tests run on the
+stub, which cannot devise a strategy, so the stub's strategy policy *is* the
+authored scheme ladder — which is why §4 keeps those templates rather than
+deleting them. The canonical arc is therefore reproducible without a model, as it
+is today.
 
 **Determinism and replay.** Dialogue text must be recorded or replay breaks.
 Recorded in `cognition_records` under a new `task` discriminator column rather
@@ -234,7 +311,7 @@ and must draw **unconditionally**, per decisions 13 and 23.
 
 ## 6. Deception, evidence, and exposure
 
-### Deception is a data property — and the model is never told the plot
+### Deception is a data property, and a strategy the model devises
 
 The instigator's own `agent_beliefs` row for the claims they push sits
 **negative** — they know it is false; they invented it — while they seed and
@@ -245,31 +322,59 @@ belief *is* the deception, and it is auditable in existing tables.
 Audience-varying contradiction comes from the scheme naming which claim to push
 at which faction: blame Corvane at the quay, blame Aldreth at the mill.
 
-**The model is never told it is playing the instigator.** This is a hard rule,
-adopted from the hidden-role literature (§11): agents asked to reason as a
-concealed role and then speak as an innocent one leak the concealed role, because
-the mismatch between private reasoning and public speech confuses the model into
-voicing the private thought. Instructing a model to lie well is also a poor bet —
-observed deception is mostly equivocation and rarely effective.
+### Two calls, two contexts
 
-So the instigator's dialogue prompt contains the **cover story only**: who they
-are, which claim they hold, and who they are speaking to. "You are Rusk Baelen.
-You believe House Corvane ordered the prince's death. Say so to Ned Quilley."
-The model plays a sincere partisan; it has no concealed role to leak because it
-has no concealed role at all. The scheming lives entirely in rule-driven scheme
-selection, which the model never sees.
+The instigator must be able to *devise* deception, not merely deliver authored
+lines. That is the whole point of an antagonist. But the hidden-role literature
+(§11) shows that agents asked to reason as a concealed role and then speak as an
+innocent one leak the role.
 
-This upgrades the engine's existing invariant from *model output never selects an
-effect* to **model output never knows the plot** — and it is cheaper, since the
-agenda never enters a prompt.
+The failure is not caused by holding a hidden agenda. It is caused by **private
+reasoning sitting in the same context as public speech** — the model reasons "I
+am the culprit, I must deflect," and fragments of that reasoning surface in the
+line it speaks. The remedy in that literature is separation, not suppression.
+
+So the instigator gets two calls with **two separate contexts**:
+
+**1. Strategy call — private.** The model is fully the instigator here: it has
+the agenda, the goal, the social graph, current beliefs, and the heat on it. It
+devises the misdirection and returns the structured tactic in §4. Recorded to
+`cognition_records` under `task='strategy'`.
+
+**2. Speech call — fresh context.** Contains the cover story and the chosen
+tactic *as a directive*, and nothing else. No agenda, no goal, no role, and
+critically **no reasoning trace from call 1**. "You are Rusk Baelen, speaking to
+Ned Quilley. Tell him you saw Corvane men at the quay that night."
+
+The model genuinely schemes; the reasoning that would leak is simply not present
+when the character speaks. The invariant is therefore not "the model never knows
+the plot" — it is:
+
+> **The context that plans is never the context that speaks.**
+
+This is enforceable and testable in a way that "don't leak" is not, and it is
+what lets the antagonist have real strategic agency without the documented
+failure mode.
+
+Every other agent's dialogue is a single speech call, unchanged.
 
 ### Evidence — three channels
 
 **Provenance (`inquire`).** `inquire` is currently a no-op that warms sentiment
-(`converse.ts:535`). Wire it to `from_agent_id`: the NPC names who told them,
-gated on trust — below a threshold they deflect or misdirect rather than refuse,
-since a flat refusal is a tell in itself. Chase enough branches of a false rumor
-back and they converge on one person.
+(`converse.ts:535`). Wire it to `from_agent_id`.
+
+Whether an NPC gives their source up is a character decision, not a threshold:
+"do I protect the person who told me this" is exactly the kind of choice that
+makes someone feel like a person. The engine supplies trust, sentiment, faction
+alignment and who the source actually is; the model chooses from
+`{name_them, deflect, misdirect, demand_something_first}`. A flat refusal is
+deliberately not in the set — it is a tell, and it ends the thread.
+
+The engine still owns the fact. If the model chooses `name_them`, the engine
+supplies the real `from_agent_id`; if it chooses `misdirect`, the engine picks the
+false name from agents that NPC actually knows. **The model never types a name
+that becomes evidence.** Chase enough branches of a false rumor back and they
+converge on one person.
 
 **Contradiction.** The engine detects that the player has heard one agent blame
 both Houses, and records it as a found clue. Detection is a query over
@@ -306,18 +411,31 @@ remains reachable and unchanged.
 
 ## 7. Adaptivity
 
-A `heat_on_culprit` scalar, computed per tick from player inquiries naming them
-plus town-wide belief in `instigator_exposed`. Thresholds switch the active goal,
-expressed as scheme preconditions in the existing DSL:
+The rules compute `heat_on_culprit` per tick from player inquiries naming them
+plus town-wide belief in `instigator_exposed`. That is a **fact about the world**,
+so it is rule-derived.
 
-```
-provoke_war  →  lie_low            (stop seeding; wait it out)
-             →  discredit_outsider (seed a claim about the player)
-             →  force_war_now      (spend everything before exposure lands)
-```
+What to *do* about it is a character decision, so it belongs to the strategy call.
+`heat_on_culprit` is an input to the prompt, not a branch in a threshold table,
+and the model chooses its `posture`:
 
-This is what makes the endgame a race rather than a checklist. It is also purely
-rule-driven, so it costs nothing in determinism.
+| Posture | What it means |
+|---|---|
+| `press` | Carry on escalating; nobody is close. |
+| `lie_low` | Stop seeding and wait it out. |
+| `redirect` | Seed suspicion onto a different culprit candidate. |
+| `force` | Spend everything to reach war before exposure lands. |
+
+An earlier draft made this a threshold table, on the grounds that telling the
+model it was under investigation would reveal its role. The two-context split in
+§6 removes that objection — the strategy context already knows exactly who it is.
+Handing the decision back is the single largest gain in the design: *"they are
+closing in, so put it on Cuthbert Ash"* is the best beat available here, and a
+threshold table cannot produce it.
+
+Posture is validated against the closed set above, so an unrecognised value is
+dropped and the previous posture holds. The world still cannot be ended by a
+model — see §6.
 
 ---
 
@@ -335,7 +453,12 @@ resolution, 30 agents), `db/schema.sql`, `engine/api.ts` (read models).
 **New tables:** `world_culprit`, `world_agent_goals`, `world_player_evidence`.
 
 **Altered:** `worlds.ending` CHECK gains `'exposed'`; `cognition_records` gains a
-`task` discriminator.
+`task` discriminator taking `plan`, `reflect`, `dialogue`, and `strategy`.
+
+**New prompt versions:** `strategy-v1` (private, instigator-only), `speech-v1`
+(public, all agents), `inquire-v1`. Each is version-gated for replay exactly as
+`PLAN_PROMPT_VERSION` is today, so a changed prompt refuses a stale recording
+rather than replaying against it.
 
 ---
 
@@ -355,6 +478,19 @@ resolution, 30 agents), `db/schema.sql`, `engine/api.ts` (read models).
   reconciliation to peace. If it cannot, the game is not winnable and the
   thresholds in §6 are wrong.
 - **Budget pressure is real** (§5) and may force raising `callBudget`.
+- **A strategising antagonist is less tunable than a scripted one.** Under
+  Bedrock the instigator's choices vary run to run, so the escalation curve is a
+  distribution rather than a number. Two consequences: the canonical-arc
+  guarantees are stated against **stub mode**, where the authored ladder governs
+  and behaviour is exactly reproducible; and live-model runs need a batch harness
+  measuring *how often* war is reached by tick N, not a single assertion. This is
+  the price of the agency and it is worth paying, but it should not be discovered
+  on the day of the recording.
+- **A model-devised strategy can be strategically inert** — the equivocation
+  finding in §11. The mitigation is that tactics are a closed vocabulary with
+  engine-supplied effects, so even a weakly-argued `poison_the_well` moves belief
+  by the same arithmetic as a well-argued one. The prose can be bad without the
+  game breaking.
 - **Scope is substantial**: 5 new modules, 3 new tables, and changes to the three
   largest files in the engine.
 
@@ -399,15 +535,27 @@ Added to the existing suite in `engine/*.test.ts`:
   while they publicly accuse with it.
 - The instigator pushes different claims to different factions, and the
   contradiction is detectable from `world_events` alone.
-- **The agenda never enters a prompt.** Assert over the constructed prompt for an
-  instigator dialogue turn that it contains no goal key, no scheme key, and no
-  reference to the culprit role. This is the guard on finding 1 in §11; without a
-  test it will be reintroduced the first time someone tries to improve the
-  instigator's dialogue.
+- **The context that plans is never the context that speaks.** Assert over the
+  constructed *speech* prompt for an instigator dialogue turn that it contains no
+  goal key, no posture, no culprit role, and no text from the strategy call's
+  output beyond the single chosen tactic directive. This is the guard on finding 1
+  in §11; without a test it will be reintroduced the first time someone tries to
+  give the instigator "better context" for its dialogue.
+- The strategy call and the speech call are separate `inference.complete`
+  invocations with disjoint message contents — asserted by inspecting the
+  recorded calls, not by inspecting the implementation.
+- A `tactic`, `target`, `claim` or `posture` outside the supplied allowlist is
+  dropped, not corrected; an unrecognised posture leaves the previous posture in
+  force. Same discipline as `parsePlan`.
+- The strategy call is recorded under `task='strategy'` and a replayed run reuses
+  it without reaching a model.
 
 **Evidence and exposure**
-- `inquire` returns the true `from_agent_id` above the trust threshold and
-  misdirects below it.
+- `inquire` under `name_them` returns the true `from_agent_id`; under `misdirect`
+  it returns a false name **chosen by the engine** from agents that NPC knows.
+  A name appearing in the model's generated text never becomes evidence.
+- A model that returns `refuse` — deliberately absent from the allowlist — is
+  treated as `deflect`, and the thread stays open.
 - Provenance chains from a culprit-seeded rumor terminate on the culprit.
 - `instigator_exposed` cannot be accused with before the evidence threshold is
   met.
@@ -459,11 +607,31 @@ different one **reliably leak the concealed role**: reasoning as X and then
 speaking as not-X produces a mismatch that surfaces the private thought in public
 speech. This is reported repeatedly across the Werewolf/Avalon/Among Us line of
 work. Related: observed deception is mostly *equivocation* rather than lying, and
-rarely improves outcomes — so instructing a model to lie well is a bad bet.
+rarely improves outcomes.
 
-The first draft of §6 walked into this by having the model voice a character
-whose private belief contradicts their public claim. **Amended:** the model is
-never told it is the instigator, and the agenda never enters a prompt. See §6.
+The first draft of §6 walked into this by having one call voice a character whose
+private belief contradicts their public claim.
+
+**First amendment, since superseded:** never tell the model it is the instigator.
+This removed the failure mode but bought safety with the antagonist's entire
+strategic agency — it reduced the instigator to delivering authored lines, which
+is precisely the "agents feel rudimentary" complaint this spec exists to answer.
+
+**Current amendment:** separate the contexts instead of suppressing the agenda.
+The literature's own mitigation is separated private reasoning and public speech —
+an agent may privately note a suspicion and publicly say something else, provided
+the private note is not in the context that generates the public line. A strategy
+call plans with full knowledge; a speech call executes in a fresh context holding
+only the cover story and the chosen tactic. See §6.
+
+The distinction matters because it changes what is being defended. "The model
+never knows the plot" is a capability restriction. "The context that plans is
+never the context that speaks" is a plumbing constraint — testable, and it costs
+the antagonist nothing.
+
+The equivocation finding still stands as a caution: the model devises the
+*strategy*, and the engine supplies the *facts* the strategy operates on, so a
+weakly-worded lie still moves belief by the same arithmetic as a strong one.
 
 ### Finding 2 — dialogue hallucination propagates (changed §5)
 
