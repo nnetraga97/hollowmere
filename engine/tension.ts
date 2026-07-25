@@ -60,7 +60,7 @@ export function decayTension(tension: Fixed): Fixed {
  * Apply one tick's accrual on top of the decay.
  *
  * The per-tick rise is capped. Without a cap, a single very hot rumor reaching
- * forty people in one tick moves the town from calm to war inside a minute,
+ * thirty people in one tick moves the town from calm to war inside a minute,
  * which is both unreadable on screen and unfaithful — a town's mood does not
  * turn over in fifteen in-world minutes, however much is said.
  */

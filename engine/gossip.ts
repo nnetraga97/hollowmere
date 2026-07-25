@@ -2,7 +2,7 @@
  * Gossip diffusion.
  *
  * Every tick, rumors travel person to person along the social graph. This runs
- * for the whole town — all forty agents — and uses no model inference beyond an
+ * for the whole town — all thirty agents — and uses no model inference beyond an
  * occasional rewording, which is what makes town-wide propagation affordable
  * while full cognition stays reserved for a handful of spotlit agents.
  *
@@ -17,7 +17,7 @@
  * something is recorded in world_rumor_spread (with the exact wording that
  * reached that person) and in their belief; turning it into an embedded,
  * retrievable memory happens later, in cognition, and only for agents who
- * actually think. Embedding every retelling for all forty agents would cost far
+ * actually think. Embedding every retelling for all thirty agents would cost far
  * more than it buys, since an ambient agent never retrieves anything.
  */
 
@@ -194,6 +194,17 @@ export async function runGossip(
            ON CONFLICT (world_id, rumor_id, agent_id) DO NOTHING`,
           [ctx.worldId, rumor.rumor_id, listener.agent_id, ctx.tick, text, holder.agent_id],
         );
+
+        await recordTelling(client, {
+          worldId: ctx.worldId,
+          rumorId: rumor.rumor_id,
+          claimId: rumor.claim_id,
+          fromAgentId: holder.agent_id,
+          toAgentId: listener.agent_id,
+          tick: ctx.tick,
+          seq: ctx.seq.next(),
+          channel: 'gossip',
+        });
 
         await recordBelief(client, {
           worldId: ctx.worldId,
@@ -471,6 +482,8 @@ export async function seedRumor(
     valence: Fixed;
     text: string;
     originEventId?: string | null;
+    channel?: TellingChannel;
+    fromAgentId?: string | null;
   },
 ): Promise<string> {
   const existing = await client.query<{ rumor_id: string; heat: number }>(
@@ -501,6 +514,18 @@ export async function seedRumor(
     [input.worldId, rumorId, input.originAgentId, input.tick, input.text],
   );
 
+  await recordTelling(client, {
+    worldId: input.worldId,
+    rumorId,
+    claimId: input.claimId,
+    fromAgentId: input.fromAgentId ?? null,
+    toAgentId: input.originAgentId,
+    eventId: input.originEventId ?? null,
+    tick: input.tick,
+    seq: input.seq.next(),
+    channel: input.channel ?? 'gossip',
+  });
+
   await recordBelief(client, {
     worldId: input.worldId,
     agentId: input.originAgentId,
@@ -512,6 +537,42 @@ export async function seedRumor(
   });
 
   return rumorId;
+}
+
+export type TellingChannel = 'gossip' | 'dialogue' | 'accusation' | 'player';
+
+export async function recordTelling(
+  client: Client,
+  input: {
+    worldId: string;
+    rumorId: string;
+    claimId: string;
+    fromAgentId: string | null;
+    toAgentId: string;
+    eventId?: string | null;
+    tick: number;
+    seq: number;
+    channel: TellingChannel;
+  },
+): Promise<string> {
+  const row = await client.query<{ telling_id: string }>(
+    `INSERT INTO world_rumor_tellings
+       (world_id, rumor_id, claim_id, from_agent_id, to_agent_id, event_id, tick, seq, channel)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING telling_id`,
+    [
+      input.worldId,
+      input.rumorId,
+      input.claimId,
+      input.fromAgentId,
+      input.toAgentId,
+      input.eventId ?? null,
+      input.tick,
+      input.seq,
+      input.channel,
+    ],
+  );
+  return row.rows[0]!.telling_id;
 }
 
 async function reheat(

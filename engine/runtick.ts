@@ -23,10 +23,14 @@ import { COGNITION, TIME } from './config.ts';
 import { runAccusations } from './accusations.ts';
 import { applyCognition, selectSpotlight, think, type CognitionDecision } from './cognition.ts';
 import { runGossip } from './gossip.ts';
+import { applyDialogue, thinkDialogue, type DialogueDecision } from './dialogue.ts';
+import { evaluateExposureEnding } from './exposure.ts';
+import { runHearings } from './hearings.ts';
 import { loadRouteGraph, phaseForTick, dayForTick, runMovement } from './movement.ts';
 import { endWorld, evaluatePeace, type Ending, type PeaceEvaluation } from './peace.ts';
 import { createSeq } from './seq.ts';
 import { tickRng } from './rng.ts';
+import { applyStrategy, thinkStrategy, type SchemeDecision } from './schemes.ts';
 import {
   applyEscalation, readWorldState, type EscalationStage,
 } from './tension.ts';
@@ -52,6 +56,8 @@ export interface TickReport {
   accusations: number;
   movements: number;
   thinkers: number;
+  dialogues: number;
+  hearings: number;
   firedTriggers: string[];
   peace: PeaceEvaluation | null;
   ending: Ending | null;
@@ -101,15 +107,17 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
 
     if (row.status !== 'active') {
       return { tick, seed: row.seed, state, graph,
-               decisions: [] as CognitionDecision[], blocked: 'not_active' as const };
+               decisions: [] as CognitionDecision[], scheme: null as SchemeDecision | null,
+               dialogue: null as DialogueDecision | null, blocked: 'not_active' as const };
     }
     if (tick > TIME.maxTicks) {
       return { tick, seed: row.seed, state, graph,
-               decisions: [] as CognitionDecision[], blocked: 'tick_ceiling' as const };
+               decisions: [] as CognitionDecision[], scheme: null as SchemeDecision | null,
+               dialogue: null as DialogueDecision | null, blocked: 'tick_ceiling' as const };
     }
 
     // Cognition runs on its own, slower cadence: thinking is the only part of
-    // the tick that costs money, and a town does not need forty people
+    // the tick that costs money, and a town does not need thirty people
     // reconsidering their lives every five seconds.
     let decisions: CognitionDecision[] = [];
     if (tick % COGNITION.intervalTicks === 0) {
@@ -136,10 +144,30 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
       );
     }
 
-    return { tick, seed: row.seed, state, graph, decisions, blocked: null };
+    const scheme = await thinkStrategy(client, {
+      worldId: options.worldId,
+      tick,
+      seed: row.seed,
+      rng: tickRng(row.seed, tick, 'scheme'),
+      graph,
+      stage: state.stage,
+      globalTension: state.globalTension,
+      peaceStreak: state.peaceStreak,
+      inference: options.inference,
+      ...(options.replay === undefined ? {} : { replay: options.replay }),
+    });
+    const dialogue = await thinkDialogue(client, {
+      worldId: options.worldId,
+      tick,
+      rng: tickRng(row.seed, tick, 'dialogue'),
+      inference: options.inference,
+      ...(options.replay === undefined ? {} : { replay: options.replay }),
+    });
+
+    return { tick, seed: row.seed, state, graph, decisions, scheme, dialogue, blocked: null };
   });
 
-  const { tick, seed, graph, decisions } = prepared;
+  const { tick, seed, graph, decisions, scheme, dialogue } = prepared;
 
   if (prepared.blocked) {
     return emptyReport(options.worldId, tick, prepared.state.stage,
@@ -201,10 +229,15 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
     });
 
     const cognition = await applyCognition(client, { worldId: options.worldId, tick, seq }, decisions);
+    await applyStrategy(client, { worldId: options.worldId, tick, seq, decision: scheme });
+    const dialogues = await applyDialogue(client, {
+      worldId: options.worldId, tick, seq, decision: dialogue,
+    });
 
     const movements = await runMovement(client, {
       worldId: options.worldId, tick, seq, phase, graph,
     });
+    const hearings = await runHearings(client, { worldId: options.worldId, tick, seq });
 
     // Triggers see the world as it stood before this tick's escalation, so that
     // every trigger in a tick evaluates against the same numbers regardless of
@@ -233,7 +266,7 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
       seq,
       globalRise: clampUnit(
         gossip.tensionDelta + accusations.tensionDelta +
-        cognition.tensionDelta + triggers.globalRise,
+        cognition.tensionDelta + hearings.tensionDelta + triggers.globalRise,
       ),
       factionRise,
       stageFloor: triggers.stageFloor ?? undefined,
@@ -256,7 +289,10 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
     if (escalation.stage === 'war') ending = 'war';
     else if (peace.declared) ending = 'peace';
     else if (triggers.ending) ending = triggers.ending;
-    if (ending) {
+    else if (await evaluateExposureEnding(client, {
+      worldId: options.worldId, tick, seq,
+    })) ending = 'exposed';
+    if (ending && ending !== 'exposed') {
       const first = await endWorld(client, { worldId: options.worldId, tick, seq, ending });
       if (!first) ending = null;
     }
@@ -266,7 +302,9 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
       gossip,
       accusations,
       cognition,
+      dialogues,
       movements,
+      hearings,
       triggers,
       escalation,
       peace,
@@ -307,6 +345,8 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
     accusations: result.accusations.accusations.length + result.cognition.accusations,
     movements: result.movements.length,
     thinkers: result.cognition.records,
+    dialogues: result.dialogues,
+    hearings: result.hearings.resolved,
     firedTriggers: result.triggers.fired,
     peace: result.peace,
     ending: result.ending,
@@ -333,6 +373,7 @@ function emptyReport(
     worldId, tick, committed: false, skipped,
     stage, previousStage: stage, globalTension: tension,
     transmissions: 0, distortions: 0, accusations: 0, movements: 0, thinkers: 0,
+    dialogues: 0, hearings: 0,
     firedTriggers: [], peace: null, ending: null, durationMs, retries: 0,
   };
 }

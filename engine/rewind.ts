@@ -44,6 +44,10 @@ const INITIAL_NEUTRAL = { sentiment: 0, trust: 5_000 };
  * row it references — the FKs are composite and not all of them cascade.
  */
 const HISTORY_TABLES = [
+  'world_player_evidence',
+  'world_agent_commitments',
+  'world_hearings',
+  'world_rumor_tellings',
   'memory_accesses',
   'world_memories',
   'belief_updates',
@@ -84,6 +88,7 @@ export async function rewindWorld(worldId: string): Promise<RewindResult> {
     }
 
     await resetAgents(client, worldId);
+    await resetInstigatorState(client, worldId);
     await resetRelationships(client, worldId);
     await resetProjections(client, worldId);
     await seedOpening(client, worldId, row.scenario_version_id);
@@ -105,6 +110,30 @@ export async function rewindWorld(worldId: string): Promise<RewindResult> {
   }, { label: 'rewindWorld' });
 
   return value;
+}
+
+async function resetInstigatorState(client: Client, worldId: string): Promise<void> {
+  await client.query(
+    `UPDATE world_scheme_state
+        SET posture = 'press', ladder_index = 0, current_tactic = NULL,
+            target_agent_id = NULL, claim_id = NULL, executes_until = 0,
+            next_strategy_tick = 0, updated_tick = 0
+      WHERE world_id = $1`,
+    [worldId],
+  );
+  await client.query(
+    `UPDATE world_agent_goals SET status = 'active', updated_tick = 0 WHERE world_id = $1`,
+    [worldId],
+  );
+  await client.query(
+    `UPDATE world_culprit SET exposed_tick = NULL WHERE world_id = $1`,
+    [worldId],
+  );
+  await client.query(
+    `UPDATE world_claims SET locked = true
+      WHERE world_id = $1 AND claim_key = 'instigator_exposed'`,
+    [worldId],
+  );
 }
 
 /**

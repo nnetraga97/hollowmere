@@ -28,7 +28,13 @@ export type InferenceTask =
   /** Decide what speech act the player just performed. */
   | 'classify'
   /** Reword a rumor as it passes from one mouth to the next. */
-  | 'distort';
+  | 'distort'
+  /** Choose the instigator's next allowlisted move. */
+  | 'strategy'
+  /** Decide whether an NPC attends a hearing. */
+  | 'attendance'
+  /** Decide how an NPC answers a provenance inquiry. */
+  | 'inquire';
 
 export interface CompletionRequest {
   task: InferenceTask;

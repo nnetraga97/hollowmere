@@ -147,6 +147,48 @@ CREATE TABLE IF NOT EXISTS trigger_templates (
   PRIMARY KEY (scenario_version_id, trigger_key)
 );
 
+CREATE TABLE IF NOT EXISTS culprit_templates (
+  scenario_version_id UUID NOT NULL REFERENCES scenario_versions (scenario_version_id),
+  culprit_key         STRING NOT NULL,
+  motive_key          STRING NOT NULL,
+  profit_claim_key    STRING NOT NULL,
+  record_claim_key    STRING NOT NULL,
+  claim_truth         JSONB NOT NULL,
+  PRIMARY KEY (scenario_version_id, culprit_key),
+  FOREIGN KEY (scenario_version_id, culprit_key)
+    REFERENCES agent_templates (scenario_version_id, agent_key),
+  FOREIGN KEY (scenario_version_id, profit_claim_key)
+    REFERENCES claim_templates (scenario_version_id, claim_key),
+  FOREIGN KEY (scenario_version_id, record_claim_key)
+    REFERENCES claim_templates (scenario_version_id, claim_key)
+);
+
+CREATE TABLE IF NOT EXISTS agent_goal_templates (
+  scenario_version_id UUID NOT NULL REFERENCES scenario_versions (scenario_version_id),
+  agent_key           STRING NOT NULL,
+  goal_key            STRING NOT NULL,
+  priority            INT8 NOT NULL,
+  PRIMARY KEY (scenario_version_id, agent_key, goal_key),
+  FOREIGN KEY (scenario_version_id, agent_key)
+    REFERENCES agent_templates (scenario_version_id, agent_key)
+);
+
+CREATE TABLE IF NOT EXISTS scheme_templates (
+  scenario_version_id UUID NOT NULL REFERENCES scenario_versions (scenario_version_id),
+  scheme_key          STRING NOT NULL,
+  ladder_index        INT8 NOT NULL,
+  tactic              STRING NOT NULL CHECK (tactic IN
+    ('blame_shift', 'corroborate_false', 'poison_the_well', 'feign_moderation',
+     'redirect_suspicion', 'recruit_amplifier')),
+  audience            STRING NOT NULL,
+  claim_key           STRING NULL,
+  condition           JSONB NOT NULL,
+  PRIMARY KEY (scenario_version_id, scheme_key),
+  UNIQUE (scenario_version_id, ladder_index),
+  FOREIGN KEY (scenario_version_id, claim_key)
+    REFERENCES claim_templates (scenario_version_id, claim_key)
+);
+
 -- ===========================================================================
 -- SECTION 2 — Worlds
 --
@@ -165,7 +207,7 @@ CREATE TABLE IF NOT EXISTS worlds (
   status              STRING NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'paused', 'ended', 'expired')),
   ending              STRING NULL
-                        CHECK (ending IS NULL OR ending IN ('war', 'peace', 'expired')),
+                        CHECK (ending IS NULL OR ending IN ('war', 'peace', 'exposed', 'expired')),
   -- Fixed point: 10000 is realtime. Raised for headless tests and video capture.
   time_scale          INT8 NOT NULL DEFAULT 10000 CHECK (time_scale > 0),
   active_runtime_ms   INT8 NOT NULL DEFAULT 0,
@@ -184,6 +226,11 @@ CREATE TABLE IF NOT EXISTS worlds (
 
 CREATE INDEX IF NOT EXISTS worlds_schedulable_idx
   ON worlds (status, lease_expires_at);
+
+-- Existing databases predate the exposed ending.
+ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_ending_ending;
+ALTER TABLE worlds ADD CONSTRAINT check_ending_ending
+  CHECK (ending IS NULL OR ending IN ('war', 'peace', 'exposed', 'expired'));
 
 -- ---------------------------------------------------------------------------
 -- Per-world instantiation of scenario content.
@@ -255,7 +302,7 @@ CREATE TABLE IF NOT EXISTS world_agents (
   talkativeness  INT8 NOT NULL CHECK (talkativeness BETWEEN 0 AND 10000),
   -- Character state only. Spotlight membership is ephemeral and never stored.
   status         STRING NOT NULL DEFAULT 'alive'
-                   CHECK (status IN ('alive', 'injured', 'missing', 'dead')),
+                   CHECK (status IN ('alive', 'injured', 'missing', 'dead', 'detained')),
   current_plan   JSONB NULL,
   current_action STRING NULL,
   updated_tick   INT8 NOT NULL DEFAULT 0,
@@ -269,6 +316,11 @@ CREATE TABLE IF NOT EXISTS world_agents (
 
 CREATE INDEX IF NOT EXISTS world_agents_by_location_idx
   ON world_agents (world_id, location_id);
+
+-- Existing databases predate detention as a non-lethal terminal agent state.
+ALTER TABLE world_agents DROP CONSTRAINT IF EXISTS check_status;
+ALTER TABLE world_agents ADD CONSTRAINT check_status
+  CHECK (status IN ('alive', 'injured', 'missing', 'dead', 'detained'));
 
 -- Faction leadership, added now that agents exist.
 ALTER TABLE world_factions
@@ -297,11 +349,15 @@ CREATE TABLE IF NOT EXISTS world_claims (
   severity          INT8 NOT NULL CHECK (severity BETWEEN 0 AND 10000),
   -- Claims invented by the player at runtime have no template.
   authored          BOOL NOT NULL DEFAULT true,
+  locked            BOOL NOT NULL DEFAULT false,
   created_tick      INT8 NOT NULL DEFAULT 0,
   PRIMARY KEY (world_id, claim_id),
   UNIQUE (world_id, claim_key),
   FOREIGN KEY (world_id, subject_agent_id) REFERENCES world_agents (world_id, agent_id)
 );
+
+ALTER TABLE world_claims
+  ADD COLUMN IF NOT EXISTS locked BOOL NOT NULL DEFAULT false;
 
 -- What each agent currently believes. Projection of belief_updates.
 CREATE TABLE IF NOT EXISTS agent_beliefs (
@@ -382,6 +438,45 @@ CREATE TABLE IF NOT EXISTS player_reputation (
   PRIMARY KEY (world_id, player_id, faction_id),
   FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
   FOREIGN KEY (world_id, faction_id) REFERENCES world_factions (world_id, faction_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_culprit (
+  world_id     UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  agent_id     UUID NOT NULL,
+  motive_key   STRING NOT NULL,
+  exposed_tick INT8 NULL,
+  PRIMARY KEY (world_id),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_agent_goals (
+  world_id     UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  agent_id     UUID NOT NULL,
+  goal_key     STRING NOT NULL,
+  priority     INT8 NOT NULL,
+  status       STRING NOT NULL DEFAULT 'active'
+                 CHECK (status IN ('active', 'suspended', 'achieved', 'abandoned')),
+  updated_tick INT8 NOT NULL DEFAULT 0,
+  PRIMARY KEY (world_id, agent_id, goal_key),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_scheme_state (
+  world_id           UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  agent_id           UUID NOT NULL,
+  posture            STRING NOT NULL DEFAULT 'press'
+                       CHECK (posture IN ('press', 'lie_low', 'redirect', 'force')),
+  ladder_index       INT8 NOT NULL DEFAULT 0,
+  current_tactic     STRING NULL,
+  target_agent_id    UUID NULL,
+  claim_id           UUID NULL,
+  executes_until     INT8 NOT NULL DEFAULT 0,
+  next_strategy_tick INT8 NOT NULL DEFAULT 0,
+  updated_tick       INT8 NOT NULL DEFAULT 0,
+  PRIMARY KEY (world_id, agent_id),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, target_agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, claim_id) REFERENCES world_claims (world_id, claim_id)
 );
 
 CREATE TABLE IF NOT EXISTS world_budget (
@@ -517,6 +612,82 @@ CREATE TABLE IF NOT EXISTS world_rumor_spread (
   FOREIGN KEY (world_id, from_agent_id) REFERENCES world_agents (world_id, agent_id)
 );
 
+CREATE TABLE IF NOT EXISTS world_rumor_tellings (
+  world_id      UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  telling_id    UUID NOT NULL DEFAULT gen_random_uuid(),
+  rumor_id      UUID NOT NULL,
+  claim_id      UUID NOT NULL,
+  from_agent_id UUID NULL,
+  to_agent_id   UUID NOT NULL,
+  event_id      UUID NULL,
+  tick          INT8 NOT NULL,
+  seq           INT8 NOT NULL,
+  channel       STRING NOT NULL CHECK (channel IN ('gossip', 'dialogue', 'accusation', 'player')),
+  PRIMARY KEY (world_id, telling_id),
+  UNIQUE (world_id, tick, seq),
+  FOREIGN KEY (world_id, rumor_id) REFERENCES world_rumors (world_id, rumor_id),
+  FOREIGN KEY (world_id, claim_id) REFERENCES world_claims (world_id, claim_id),
+  FOREIGN KEY (world_id, from_agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, to_agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, event_id) REFERENCES world_events (world_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS world_rumor_tellings_source_idx
+  ON world_rumor_tellings (world_id, to_agent_id, claim_id, tick DESC);
+
+CREATE TABLE IF NOT EXISTS world_hearings (
+  world_id       UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  hearing_id     UUID NOT NULL DEFAULT gen_random_uuid(),
+  convener_id    UUID NOT NULL,
+  location_id    UUID NOT NULL,
+  due_tick       INT8 NOT NULL,
+  status         STRING NOT NULL DEFAULT 'announced' CHECK (status IN
+                   ('announced', 'gathering', 'in_session', 'resolved', 'abandoned')),
+  reveal_claim_id UUID NULL,
+  announced_tick INT8 NOT NULL,
+  resolved_tick  INT8 NULL,
+  PRIMARY KEY (world_id, hearing_id),
+  FOREIGN KEY (world_id, convener_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, location_id) REFERENCES world_locations (world_id, location_id),
+  FOREIGN KEY (world_id, reveal_claim_id) REFERENCES world_claims (world_id, claim_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_agent_commitments (
+  world_id     UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  agent_id     UUID NOT NULL,
+  hearing_id   UUID NULL,
+  location_id  UUID NOT NULL,
+  due_tick     INT8 NOT NULL,
+  source       STRING NOT NULL CHECK (source IN ('player', 'trigger', 'agent')),
+  response     STRING NOT NULL CHECK (response IN ('come', 'decline', 'come_but_tell_someone')),
+  status       STRING NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'kept', 'broken')),
+  created_tick INT8 NOT NULL,
+  PRIMARY KEY (world_id, agent_id, due_tick),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, hearing_id) REFERENCES world_hearings (world_id, hearing_id),
+  FOREIGN KEY (world_id, location_id) REFERENCES world_locations (world_id, location_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_player_evidence (
+  world_id    UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  player_id   UUID NOT NULL,
+  evidence_id UUID NOT NULL DEFAULT gen_random_uuid(),
+  kind        STRING NOT NULL CHECK (kind IN ('provenance', 'contradiction', 'record')),
+  telling_id  UUID NULL,
+  event_id    UUID NULL,
+  claim_id    UUID NULL,
+  accused_id  UUID NULL,
+  genuine     BOOL NOT NULL,
+  found_tick  INT8 NOT NULL,
+  PRIMARY KEY (world_id, evidence_id),
+  UNIQUE (world_id, player_id, kind, telling_id, event_id),
+  FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, telling_id) REFERENCES world_rumor_tellings (world_id, telling_id),
+  FOREIGN KEY (world_id, event_id) REFERENCES world_events (world_id, event_id),
+  FOREIGN KEY (world_id, claim_id) REFERENCES world_claims (world_id, claim_id),
+  FOREIGN KEY (world_id, accused_id) REFERENCES world_agents (world_id, agent_id)
+);
+
 CREATE TABLE IF NOT EXISTS world_state_history (
   world_id         UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
   tick             INT8 NOT NULL,
@@ -539,6 +710,8 @@ CREATE TABLE IF NOT EXISTS cognition_records (
   record_id      UUID NOT NULL DEFAULT gen_random_uuid(),
   tick           INT8 NOT NULL,
   agent_id       UUID NOT NULL,
+  task           STRING NOT NULL DEFAULT 'plan' CHECK (task IN
+                   ('plan', 'reflect', 'dialogue', 'strategy', 'attendance')),
   -- Hash of the exact prompt inputs. Replay matches on this, so a changed
   -- prompt is detected rather than silently replayed against stale decisions.
   input_hash     STRING NOT NULL,
@@ -568,6 +741,11 @@ ALTER TABLE cognition_records
   ADD COLUMN IF NOT EXISTS observation_vector VECTOR(1024) NULL;
 ALTER TABLE cognition_records
   ADD COLUMN IF NOT EXISTS reflection_vector VECTOR(1024) NULL;
+ALTER TABLE cognition_records
+  ADD COLUMN IF NOT EXISTS task STRING NOT NULL DEFAULT 'plan';
+ALTER TABLE cognition_records DROP CONSTRAINT IF EXISTS check_task;
+ALTER TABLE cognition_records ADD CONSTRAINT check_task
+  CHECK (task IN ('plan', 'reflect', 'dialogue', 'strategy', 'attendance'));
 
 CREATE INDEX IF NOT EXISTS cognition_records_replay_idx
   ON cognition_records (world_id, tick, agent_id);
@@ -590,7 +768,7 @@ CREATE TABLE IF NOT EXISTS world_commands (
   idempotency_key STRING NOT NULL,
   command_seq     INT8 NOT NULL,
   kind            STRING NOT NULL CHECK (kind IN
-    ('converse', 'move_player', 'restart', 'set_time_scale')),
+    ('converse', 'summon', 'move_player', 'restart', 'set_time_scale')),
   payload         JSONB NOT NULL DEFAULT '{}',
   received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   applied_tick    INT8 NULL,
@@ -598,6 +776,10 @@ CREATE TABLE IF NOT EXISTS world_commands (
   UNIQUE (world_id, idempotency_key),
   UNIQUE (world_id, command_seq)
 );
+
+ALTER TABLE world_commands DROP CONSTRAINT IF EXISTS check_kind;
+ALTER TABLE world_commands ADD CONSTRAINT check_kind
+  CHECK (kind IN ('converse', 'summon', 'move_player', 'restart', 'set_time_scale'));
 
 -- Pending commands are drained in order each tick.
 CREATE INDEX IF NOT EXISTS world_commands_pending_idx

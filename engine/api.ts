@@ -99,7 +99,7 @@ export async function listAgents(worldId: string): Promise<AgentView[]> {
          SELECT c.claim_key, b.confidence
            FROM agent_beliefs b
            JOIN world_claims c ON c.world_id = b.world_id AND c.claim_id = b.claim_id
-          WHERE b.world_id = a.world_id AND b.agent_id = a.agent_id
+          WHERE b.world_id = a.world_id AND b.agent_id = a.agent_id AND NOT c.locked
           ORDER BY b.confidence DESC, c.claim_key
           LIMIT 1
        ) top ON true
@@ -132,7 +132,7 @@ export interface ChronicleEntry {
 /**
  * The story so far.
  *
- * Movement is excluded by default: forty people walking to work every tick is
+ * Movement is excluded by default: thirty people walking to work every tick is
  * true, voluminous, and not the story. The dashboard can ask for it explicitly.
  */
 export async function getChronicle(
@@ -278,7 +278,7 @@ export async function getClaims(worldId: string): Promise<ClaimView[]> {
        JOIN world_agents s ON s.world_id = c.world_id AND s.agent_id = c.subject_agent_id
        LEFT JOIN world_rumors r ON r.world_id = c.world_id AND r.claim_id = c.claim_id
        LEFT JOIN agent_beliefs b ON b.world_id = c.world_id AND b.claim_id = c.claim_id
-      WHERE c.world_id = $1
+      WHERE c.world_id = $1 AND NOT c.locked
       GROUP BY c.claim_key, c.text, c.truth, c.severity, s.agent_key, r.heat
       ORDER BY believers DESC, c.claim_key`,
     [worldId],
@@ -321,7 +321,7 @@ export async function getBeliefHistory(
        FROM belief_updates u
        JOIN world_agents a ON a.world_id = u.world_id AND a.agent_id = u.agent_id
        JOIN world_claims c ON c.world_id = u.world_id AND c.claim_id = u.claim_id
-      WHERE u.world_id = $1 AND a.agent_key = $2 AND c.claim_key = $3
+      WHERE u.world_id = $1 AND a.agent_key = $2 AND c.claim_key = $3 AND NOT c.locked
       ORDER BY u.tick, u.seq`,
     [worldId, agentKey, claimKey],
   );
@@ -343,7 +343,7 @@ export async function getBeliefSnapshot(
        JOIN world_agents a ON a.world_id = u.world_id AND a.agent_id = u.agent_id
        JOIN world_factions f ON f.world_id = a.world_id AND f.faction_id = a.faction_id
        JOIN world_claims c ON c.world_id = u.world_id AND c.claim_id = u.claim_id
-      WHERE u.world_id = $1 AND c.claim_key = $2 AND u.tick <= $3
+      WHERE u.world_id = $1 AND c.claim_key = $2 AND u.tick <= $3 AND NOT c.locked
       ORDER BY a.agent_key, u.tick DESC, u.seq DESC`,
     [worldId, claimKey, tick],
   );

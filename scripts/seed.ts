@@ -21,7 +21,7 @@ function arg(name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const scenarioPath = arg('scenario') ?? join(here, '..', 'scenario', 'hollowmere-v1.json');
+  const scenarioPath = arg('scenario') ?? join(here, '..', 'scenario', 'hollowmere-v2.json');
   const seed = Number(arg('seed') ?? Date.now() % 2_147_483_647);
   const sessionId = arg('session') ?? `seed-cli-${Date.now()}`;
 

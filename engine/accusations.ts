@@ -24,6 +24,7 @@ import { clampUnit, fpMul, type Fixed } from './fixedpoint.ts';
 import type { Rng } from './rng.ts';
 import type { Seq } from './seq.ts';
 import type { EscalationStage } from './tension.ts';
+import { recordTelling } from './gossip.ts';
 
 export interface AccusationContext {
   worldId: string;
@@ -154,10 +155,11 @@ export async function emitAccusation(
   client: Client,
   input: EmitAccusationInput,
 ): Promise<Fixed> {
-  await client.query(
+  const event = await client.query<{ event_id: string }>(
     `INSERT INTO world_events
        (world_id, tick, seq, location_id, actor_agent_id, kind, payload, description)
-     VALUES ($1, $2, $3, $4, $5, 'accusation', $6, $7)`,
+     VALUES ($1, $2, $3, $4, $5, 'accusation', $6, $7)
+     RETURNING event_id`,
     [
       input.worldId, input.tick, input.seq.next(),
       input.locationId, input.accuserId,
@@ -183,6 +185,39 @@ export async function emitAccusation(
         input.tick,
       ],
     );
+    const listener = await client.query<{ agent_id: string; claim_id: string }>(
+      `SELECT listener.agent_id, rumor.claim_id
+         FROM world_rumors rumor
+         JOIN world_agents listener
+           ON listener.world_id = rumor.world_id AND listener.location_id = $3
+          AND listener.agent_id != $4 AND listener.status = 'alive'
+        WHERE rumor.world_id = $1 AND rumor.rumor_id = $2
+        ORDER BY listener.agent_key LIMIT 1`,
+      [input.worldId, input.rumorId, input.locationId, input.accuserId],
+    );
+    if (listener.rows[0]) {
+      await client.query(
+        `INSERT INTO world_rumor_spread
+           (world_id, rumor_id, agent_id, received_tick, distorted_text, from_agent_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (world_id, rumor_id, agent_id) DO NOTHING`,
+        [
+          input.worldId, input.rumorId, listener.rows[0].agent_id,
+          input.tick, input.claimText, input.accuserId,
+        ],
+      );
+      await recordTelling(client, {
+        worldId: input.worldId,
+        rumorId: input.rumorId,
+        claimId: listener.rows[0].claim_id,
+        fromAgentId: input.accuserId,
+        toAgentId: listener.rows[0].agent_id,
+        eventId: event.rows[0]!.event_id,
+        tick: input.tick,
+        seq: input.seq.next(),
+        channel: 'accusation',
+      });
+    }
   }
 
   return fpMul(TENSION.publicAccusation, input.severity);

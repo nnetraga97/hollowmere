@@ -15,7 +15,7 @@ The town is the visualization. The substrate is the point.
 
 | Concern | How it shows up here |
 |---|---|
-| **Persistent multi-agent memory** | 40 agents × isolated worlds × vector retrieval over an append-only memory stream |
+| **Persistent multi-agent memory** | 30 agents × isolated worlds × vector retrieval over an append-only memory stream |
 | **Misinformation propagation** | Ground truth is stored separately from belief, so a claim the engine *knows* is false can still take hold of the town — and be measured |
 | **Transactional consistency** | Player writes and scheduler writes contend on the same rows under `SERIALIZABLE`, in two separate processes |
 | **Intervention analysis** | Belief is reconstructible by simulation tick, so "did that conversation change the trajectory" is answerable |
@@ -90,7 +90,7 @@ the application working normally, not a staged one.
 
 | Directory | Contents |
 |---|---|
-| `db/` | `schema.sql` — 32 tables, composite world-scoped keys |
+| `db/` | `schema.sql` — 42 tables, composite world-scoped keys |
 | `scenario/` | Versioned immutable content + validating loader |
 | `engine/` | Rules, retrieval, gossip, beliefs, tension, triggers, cognition, `runTick`, `converse`, read models |
 | `scheduler/` | Lease-guarded non-overlapping loop + service entrypoint |
@@ -120,7 +120,7 @@ These are enforced, not aspirational — see `engine/schema.test.ts`.
 - **Scenario content is untrusted input.** The trigger DSL is a closed,
   allowlisted grammar; scenario JSON is never evaluated as code.
 - **Model output never selects an effect.** A plan is a choice from an
-  engine-built allowlist; a speech act is one of nine known values; the claim a
+  engine-built allowlist; a speech act is one of ten known values; the claim a
   player is talking about is resolved by the engine from its own data rather
   than by asking a model for an identifier. An injection corpus is part of the
   test suite.

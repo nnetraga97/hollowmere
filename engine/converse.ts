@@ -10,7 +10,7 @@
  *     the history, and the retry with the same idempotency key is a no-op
  *     rather than a second copy.
  *  2. **Classify** what kind of thing they just did. The act comes from the
- *     model, constrained to nine known values; who and what they were talking
+ *     model, constrained to ten known values; who and what they were talking
  *     about is resolved by the engine from its own data, never by asking the
  *     model to name an id.
  *  3. **Apply effects transactionally.** Either the whole social consequence
@@ -32,6 +32,22 @@ import { readBudget, recordUsage } from './budget.ts';
 import { emitAccusation } from './accusations.ts';
 import { recordBelief } from './beliefs.ts';
 import { seedRumor } from './gossip.ts';
+import {
+  DISCLOSURES,
+  parseDisclosure,
+  recordAuthoredRecord,
+  recordInquiryEvidence,
+  recordWitnessedContradiction,
+  type Disclosure,
+} from './evidence.ts';
+import { maybeUnlockExposure } from './exposure.ts';
+import {
+  applySummon,
+  decideSummon,
+  persuasionStrength,
+  queueHearingReveal,
+  type SummonDecision,
+} from './hearings.ts';
 import { setNegotiationWillingness } from './peace.ts';
 import { clampSigned, clampUnit, fpMul, type Fixed } from './fixedpoint.ts';
 import { createSeq, type Seq } from './seq.ts';
@@ -50,11 +66,12 @@ export type SpeechAct =
   | 'threaten'
   | 'inform'
   | 'inquire'
+  | 'summon'
   | 'smalltalk';
 
 export const SPEECH_ACTS: readonly SpeechAct[] = [
   'accuse', 'defend', 'corroborate', 'dispute', 'reconcile',
-  'threaten', 'inform', 'inquire', 'smalltalk',
+  'threaten', 'inform', 'inquire', 'summon', 'smalltalk',
 ];
 
 /**
@@ -106,6 +123,11 @@ export interface ConverseEffects {
   beliefAfter: Fixed | null;
   rumorSeeded: boolean;
   negotiationOpened: boolean;
+  hearingId: string | null;
+  hearingRejectedReason: string | null;
+  hearingRevealQueued: boolean;
+  disclosure: Disclosure | null;
+  evidenceRecorded: boolean;
 }
 
 export interface ConverseResult {
@@ -160,10 +182,18 @@ export async function converse(options: ConverseOptions): Promise<ConverseResult
       );
       const current = world.rows[0];
       if (!current) throw new Error(`unknown world ${options.worldId}`);
+      const utterance = await client.query<{ event_id: string }>(
+        `SELECT event_id FROM world_events
+          WHERE world_id = $1 AND kind = 'player_command' AND seq = $2
+          ORDER BY tick DESC LIMIT 1`,
+        [options.worldId, PLAYER_SEQ_BASE + existing.rows[0].command_seq * PLAYER_SEQ_STRIDE],
+      );
+      if (!utterance.rows[0]) throw new Error(`missing event for command ${existing.rows[0].command_id}`);
       return {
         agent,
         commandId: existing.rows[0].command_id,
         commandSeq: existing.rows[0].command_seq,
+        eventId: utterance.rows[0].event_id,
         prior: existing.rows[0].payload,
         tick: current.current_tick,
       };
@@ -190,10 +220,11 @@ export async function converse(options: ConverseOptions): Promise<ConverseResult
     );
 
     const seq = playerSeq(row.command_seq, SEQ_UTTERANCE);
-    await client.query(
+    const event = await client.query<{ event_id: string }>(
       `INSERT INTO world_events
          (world_id, tick, seq, location_id, kind, payload, description)
-       VALUES ($1, $2, $3, $4, 'player_command', $5, $6)`,
+       VALUES ($1, $2, $3, $4, 'player_command', $5, $6)
+       RETURNING event_id`,
       [
         options.worldId, row.current_tick, seq.next(), agent.locationId,
         JSON.stringify({ agentKey: options.agentKey, text: options.text }),
@@ -205,6 +236,7 @@ export async function converse(options: ConverseOptions): Promise<ConverseResult
       agent,
       commandId: inserted.rows[0]!.command_id,
       commandSeq: row.command_seq,
+      eventId: event.rows[0]!.event_id,
       prior: null as StoredOutcome | null,
       tick: row.current_tick,
     };
@@ -266,6 +298,29 @@ export async function converse(options: ConverseOptions): Promise<ConverseResult
     choices: { types: SPEECH_ACTS as readonly string[] },
   });
   const act = parseAct(classification.text);
+  const summonDecision = act === 'summon'
+    ? await withClient((client) => decideSummon(client, {
+        worldId: options.worldId,
+        tick,
+        commandSeq,
+        agentId: agent.agentId,
+        playerId: agent.playerId,
+        text: options.text,
+        inference,
+      }))
+    : null;
+  const disclosureResponse = act === 'inquire' && claim
+    ? await inference.complete({
+        task: 'inquire',
+        promptVersion: 'inquire-v1',
+        system: 'Choose how the NPC answers a source inquiry. Return only JSON {"disclosure":...}.',
+        user: options.text,
+        maxTokens: 50,
+        seed: deriveSeed(options.worldId, commandSeq, 'inquire'),
+        choices: { disclosures: DISCLOSURES },
+      })
+    : null;
+  const disclosure = disclosureResponse ? parseDisclosure(disclosureResponse.text) : null;
 
   // -----------------------------------------------------------------------
   // Step 3 — effects, all or nothing.
@@ -274,6 +329,9 @@ export async function converse(options: ConverseOptions): Promise<ConverseResult
     const seq = playerSeq(commandSeq, SEQ_EFFECTS);
     const effects = await applyEffects(client, {
       worldId: options.worldId, tick, seq, agent, act,
+      commandEventId: recorded.value.eventId,
+      summonDecision,
+      disclosure,
       claim: claim ? { claimId: claim.claimId, claimKey: claim.claimKey,
                        severity: claim.severity, text: claim.text,
                        subjectAgentId: claim.subjectAgentId,
@@ -301,9 +359,9 @@ export async function converse(options: ConverseOptions): Promise<ConverseResult
     // is safe under retry: a serialization failure rolls the increment back
     // along with everything else, so the call is counted exactly once.
     await recordUsage(client, options.worldId, {
-      calls: 1,
-      tokensIn: classification.tokensIn,
-      tokensOut: classification.tokensOut,
+      calls: 1 + (disclosureResponse ? 1 : 0),
+      tokensIn: classification.tokensIn + (disclosureResponse?.tokensIn ?? 0),
+      tokensOut: classification.tokensOut + (disclosureResponse?.tokensOut ?? 0),
       billable,
     });
 
@@ -397,6 +455,8 @@ function emptyEffects(): ConverseEffects {
     tensionDelta: 0, sentimentDelta: 0, reputationDelta: 0,
     beliefBefore: null, beliefAfter: null,
     rumorSeeded: false, negotiationOpened: false,
+    hearingId: null, hearingRejectedReason: null, hearingRevealQueued: false,
+    disclosure: null, evidenceRecorded: false,
   };
 }
 
@@ -438,6 +498,9 @@ interface EffectInput {
     claimId: string; claimKey: string; severity: Fixed; text: string;
     subjectAgentId: string; subjectFactionId: string; subjectKey: string;
   } | null;
+  commandEventId: string;
+  summonDecision: SummonDecision | null;
+  disclosure: Disclosure | null;
 }
 
 /**
@@ -460,17 +523,27 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
   switch (input.act) {
     case 'accuse': {
       if (!claim) break;
+      if (claim.claimKey === 'instigator_exposed') {
+        effects.hearingRevealQueued = await queueHearingReveal(client, {
+          worldId: input.worldId,
+          playerId: agent.playerId,
+          locationId: agent.locationId,
+          claimId: claim.claimId,
+        });
+        if (effects.hearingRevealQueued) break;
+      }
       // The player's accusation lands in this NPC's mouth: they now hold the
       // rumor and will carry it into the town's gossip on the next tick. This
       // is the whole misinformation-injection mechanic, and it works exactly
       // the same whether the claim is true, false, or unknowable.
-      await seedRumor(client, {
+      const rumorId = await seedRumor(client, {
         worldId: input.worldId, tick: input.tick, seq: input.seq,
         claimId: claim.claimId,
         originAgentId: agent.agentId,
         heat: CONVERSE.accusationHeat,
         valence: -clampUnit(claim.severity),
         text: claim.text,
+        channel: 'player',
       });
       effects.rumorSeeded = true;
 
@@ -481,7 +554,7 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
         subjectKey: claim.subjectKey, subjectFactionId: claim.subjectFactionId,
         claimKey: claim.claimKey, claimText: claim.text,
         severity: claim.severity, confidence: 0,
-        rumorId: null, rumorHeat: 0,
+        rumorId, rumorHeat: CONVERSE.accusationHeat,
       });
       effects.tensionDelta = rise;
       effects.reputationDelta = -CONVERSE.reputationForAccusing;
@@ -492,7 +565,7 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
       if (!claim) break;
       effects.beliefBefore = await currentBelief(client, input, claim.claimId);
       effects.beliefAfter = clampSigned(
-        effects.beliefBefore + fpMul(CONVERSE.persuasion, BELIEF.maxShiftPerTransmission),
+        effects.beliefBefore + await playerPersuasion(client, input),
       );
       break;
 
@@ -504,7 +577,7 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
       // actively denying it, and will say so when they next repeat it.
       effects.beliefBefore = await currentBelief(client, input, claim.claimId);
       effects.beliefAfter = clampSigned(
-        effects.beliefBefore - fpMul(CONVERSE.persuasion, BELIEF.maxShiftPerTransmission),
+        effects.beliefBefore - await playerPersuasion(client, input),
       );
       effects.sentimentDelta = input.act === 'defend' ? CONVERSE.sentimentWarming : 0;
       break;
@@ -531,8 +604,61 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
       effects.reputationDelta = -CONVERSE.reputationForAccusing;
       break;
 
+    case 'inquire': {
+      if (claim && input.disclosure) {
+        const provenance = await recordInquiryEvidence(client, {
+          worldId: input.worldId,
+          playerId: agent.playerId,
+          agentId: agent.agentId,
+          claimId: claim.claimId,
+          disclosure: input.disclosure,
+          tick: input.tick,
+        });
+        const record = await recordAuthoredRecord(client, {
+          worldId: input.worldId,
+          playerId: agent.playerId,
+          agentId: agent.agentId,
+          agentKey: agent.agentKey,
+          eventId: input.commandEventId,
+          tick: input.tick,
+        });
+        const contradiction = await recordWitnessedContradiction(client, {
+          worldId: input.worldId,
+          playerId: agent.playerId,
+          actorId: agent.agentId,
+          tick: input.tick,
+        });
+        effects.disclosure = input.disclosure;
+        effects.evidenceRecorded = Boolean(provenance) || record || contradiction;
+        await maybeUnlockExposure(client, {
+          worldId: input.worldId,
+          playerId: agent.playerId,
+          tick: input.tick,
+          seq: input.seq,
+        });
+      }
+      effects.sentimentDelta = CONVERSE.sentimentSmalltalk;
+      break;
+    }
+
+    case 'summon': {
+      if (!input.summonDecision) break;
+      const summoned = await applySummon(client, {
+        worldId: input.worldId,
+        playerId: agent.playerId,
+        agentId: agent.agentId,
+        agentName: agent.name,
+        agentLocationId: agent.locationId,
+        tick: input.tick,
+        seq: input.seq,
+        decision: input.summonDecision,
+      });
+      effects.hearingId = summoned.hearingId;
+      effects.hearingRejectedReason = summoned.rejectedReason;
+      break;
+    }
+
     case 'inform':
-    case 'inquire':
     case 'smalltalk':
       // Talking to someone is not nothing — it warms them slightly to a
       // stranger — but it moves no belief and no tension.
@@ -577,6 +703,22 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
   return effects;
 }
 
+async function playerPersuasion(client: Client, input: EffectInput): Promise<Fixed> {
+  const result = await client.query<{ reputation: number; trust: number }>(
+    `SELECT COALESCE(rep.reputation, 0) AS reputation,
+            COALESCE(avg(rel.trust), 5000)::INT8 AS trust
+       FROM world_agents a
+       LEFT JOIN player_reputation rep
+         ON rep.world_id = a.world_id AND rep.player_id = $3 AND rep.faction_id = a.faction_id
+       LEFT JOIN world_relationships rel
+         ON rel.world_id = a.world_id AND rel.src_agent_id = a.agent_id
+      WHERE a.world_id = $1 AND a.agent_id = $2
+      GROUP BY rep.reputation`,
+    [input.worldId, input.agent.agentId, input.agent.playerId],
+  );
+  return persuasionStrength(result.rows[0]?.reputation ?? 0, result.rows[0]?.trust ?? 5000);
+}
+
 async function currentBelief(
   client: Client, input: EffectInput, claimId: string,
 ): Promise<Fixed> {
@@ -599,7 +741,7 @@ async function currentBelief(
  * let it go quiets what that fisherman is repeating; persuading the head of a
  * House to call for calm quiets the whole town. That asymmetry is what makes
  * the peace path a matter of reaching the right two people rather than of
- * talking to forty.
+ * talking to thirty.
  */
 async function coolHostileRumors(
   client: Client, worldId: string, agent: AgentContext, tick: number,
@@ -652,7 +794,7 @@ async function loadClaimCandidates(
             c.subject_agent_id, s.agent_key AS subject_key, s.faction_id AS subject_faction_id
        FROM world_claims c
        JOIN world_agents s ON s.world_id = c.world_id AND s.agent_id = c.subject_agent_id
-      WHERE c.world_id = $1
+      WHERE c.world_id = $1 AND NOT c.locked
       ORDER BY c.claim_key`,
     [worldId],
   );

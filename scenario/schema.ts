@@ -72,7 +72,7 @@ export interface RouteDef {
 
 /**
  * A named daily schedule. `@home` and `@work` resolve per agent, which keeps
- * forty agents from each repeating a four-line routine.
+ * thirty agents from each repeating a four-line routine.
  */
 export type RoutineSlot = '@home' | '@work' | (string & {});
 export type RoutineStyleDef = Record<Phase, RoutineSlot>;
@@ -91,7 +91,7 @@ export interface AgentDef {
   credulity: number;
   /** How readily this agent passes it on. */
   talkativeness: number;
-  status?: 'alive' | 'injured' | 'missing' | 'dead';
+  status?: 'alive' | 'injured' | 'missing' | 'dead' | 'detained';
 }
 
 export interface ClaimDef {
@@ -100,6 +100,39 @@ export interface ClaimDef {
   subject: string;
   truth: Truth;
   severity: number;
+}
+
+export interface CulpritDef {
+  key: string;
+  motive: string;
+  profitClaim: string;
+  recordClaim: string;
+  claimTruth: Readonly<Record<string, Truth>>;
+}
+
+export interface AgentGoalDef {
+  agent: string;
+  key: string;
+  priority: number;
+}
+
+export const SCHEME_TACTICS = [
+  'blame_shift',
+  'corroborate_false',
+  'poison_the_well',
+  'feign_moderation',
+  'redirect_suspicion',
+  'recruit_amplifier',
+] as const;
+export type SchemeTactic = typeof SCHEME_TACTICS[number];
+
+export interface SchemeDef {
+  key: string;
+  index: number;
+  tactic: SchemeTactic;
+  audience: string;
+  claim?: string | null;
+  condition: Condition;
 }
 
 // --- Trigger DSL -----------------------------------------------------------
@@ -178,6 +211,9 @@ export interface Scenario {
   routineStyles: Record<string, RoutineStyleDef>;
   agents: readonly AgentDef[];
   claims: readonly ClaimDef[];
+  culprits: readonly CulpritDef[];
+  goals: readonly AgentGoalDef[];
+  schemes: readonly SchemeDef[];
   triggers: readonly TriggerDef[];
   opening: OpeningEventDef;
 }
@@ -214,6 +250,7 @@ const EFFECT_VERBS = new Set<string>([
   'set_negotiation',
   'end_world',
 ]);
+const SCHEME_TACTIC_SET = new Set<string>(SCHEME_TACTICS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -248,6 +285,9 @@ export function validateScenario(input: unknown): Scenario {
   const routes = s.routes ?? [];
   const agents = s.agents ?? [];
   const claims = s.claims ?? [];
+  const culprits = s.culprits ?? [];
+  const goals = s.goals ?? [];
+  const schemes = s.schemes ?? [];
   const triggers = s.triggers ?? [];
   const routineStyles = s.routineStyles ?? {};
 
@@ -270,6 +310,9 @@ export function validateScenario(input: unknown): Scenario {
   requireUnique('location', locations.map((l) => l.key));
   requireUnique('agent', agents.map((a) => a.key));
   requireUnique('claim', claims.map((c) => c.key));
+  requireUnique('culprit', culprits.map((c) => c.key));
+  requireUnique('scheme', schemes.map((scheme) => scheme.key));
+  requireUnique('scheme ladder index', schemes.map((scheme) => String(scheme.index)));
   requireUnique('trigger', triggers.map((t) => t.key));
 
   // --- factions
@@ -346,6 +389,44 @@ export function validateScenario(input: unknown): Scenario {
       fail(`claim ${c.key}: truth must be true, false, or unknown`);
     }
     if (!inUnitRange(c.severity)) fail(`claim ${c.key}: severity out of range`);
+  }
+
+  // --- culprit candidates, goals, and authored scheme fallback
+  for (const culprit of culprits) {
+    if (!agentKeys.has(culprit.key)) fail(`culprit ${culprit.key}: unknown agent`);
+    if (!culprit.motive) fail(`culprit ${culprit.key}: motive is required`);
+    if (!claimKeys.has(culprit.profitClaim)) {
+      fail(`culprit ${culprit.key}: unknown profit claim "${culprit.profitClaim}"`);
+    }
+    if (!claimKeys.has(culprit.recordClaim)) {
+      fail(`culprit ${culprit.key}: unknown record claim "${culprit.recordClaim}"`);
+    }
+    for (const [claimKey, truth] of Object.entries(culprit.claimTruth ?? {})) {
+      if (!claimKeys.has(claimKey)) fail(`culprit ${culprit.key}: unknown truth claim "${claimKey}"`);
+      if (truth !== 'true' && truth !== 'false' && truth !== 'unknown') {
+        fail(`culprit ${culprit.key}: invalid truth for "${claimKey}"`);
+      }
+    }
+  }
+  for (const goal of goals) {
+    if (!agentKeys.has(goal.agent)) fail(`goal ${goal.key}: unknown agent "${goal.agent}"`);
+    if (!goal.key) fail('goal key is required');
+    if (!Number.isInteger(goal.priority)) fail(`goal ${goal.key}: priority must be an integer`);
+  }
+  for (const scheme of schemes) {
+    if (!Number.isInteger(scheme.index) || scheme.index < 0) {
+      fail(`scheme ${scheme.key}: index must be a non-negative integer`);
+    }
+    if (!SCHEME_TACTIC_SET.has(scheme.tactic)) {
+      fail(`scheme ${scheme.key}: unknown tactic "${String(scheme.tactic)}"`);
+    }
+    if (!factionKeys.has(scheme.audience) && !locationKeys.has(scheme.audience)) {
+      fail(`scheme ${scheme.key}: unknown audience "${scheme.audience}"`);
+    }
+    if (scheme.claim != null && !claimKeys.has(scheme.claim)) {
+      fail(`scheme ${scheme.key}: unknown claim "${scheme.claim}"`);
+    }
+    validateCondition(scheme.condition, `scheme ${scheme.key}`, { factionKeys, agentKeys }, fail);
   }
 
   // --- triggers

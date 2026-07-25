@@ -14,7 +14,7 @@
  */
 
 import type { Client } from './db.ts';
-import { COGNITION, TIME } from './config.ts';
+import { COGNITION, HEARING, TIME } from './config.ts';
 import { PHASES, type Phase } from '../scenario/schema.ts';
 import type { Seq } from './seq.ts';
 
@@ -153,6 +153,7 @@ interface AgentRow {
   routine: Record<string, string>;
   current_plan: { targetLocationKey?: string | null } | null;
   updated_tick: number;
+  commitment_location_id: string | null;
 }
 
 /**
@@ -169,11 +170,16 @@ export async function runMovement(
   ctx: MovementContext,
 ): Promise<Movement[]> {
   const agents = await client.query<AgentRow>(
-    `SELECT agent_id, agent_key, location_id, routine, current_plan, updated_tick
-       FROM world_agents
-      WHERE world_id = $1 AND status IN ('alive', 'injured')
+    `SELECT a.agent_id, a.agent_key, a.location_id, a.routine, a.current_plan, a.updated_tick,
+            (SELECT c.location_id FROM world_agent_commitments c
+              WHERE c.world_id = a.world_id AND c.agent_id = a.agent_id
+                AND c.status = 'pending' AND c.response != 'decline'
+                AND $2 <= c.due_tick + $3
+              ORDER BY c.due_tick, c.hearing_id LIMIT 1) AS commitment_location_id
+       FROM world_agents a
+      WHERE a.world_id = $1 AND a.status IN ('alive', 'injured')
       ORDER BY agent_key`,
-    [ctx.worldId],
+    [ctx.worldId, ctx.tick, HEARING.holdTicks],
   );
 
   const moved: Movement[] = [];
@@ -184,7 +190,10 @@ export async function runMovement(
     // A plan goes stale deliberately: without the horizon, one decision made at
     // dawn would keep an agent away from their work for the rest of the world.
     const planFresh = ctx.tick - agent.updated_tick <= COGNITION.planHorizonTicks;
-    const targetKey =
+    const commitmentKey = agent.commitment_location_id
+      ? ctx.graph.keyById.get(agent.commitment_location_id)
+      : null;
+    const targetKey = commitmentKey ??
       (planFresh ? agent.current_plan?.targetLocationKey : null) ?? agent.routine[ctx.phase];
     const targetId = targetKey ? ctx.graph.idByKey.get(targetKey) : undefined;
     if (!targetId) continue;

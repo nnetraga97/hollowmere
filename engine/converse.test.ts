@@ -21,15 +21,17 @@ import { converse, parseAct, resolveClaim, SPEECH_ACTS, PLAYER_SEQ_BASE } from '
 import { runTick } from './runtick.ts';
 import { readWorldState } from './tension.ts';
 import { setNegotiationWillingness } from './peace.ts';
+import { persuasionStrength } from './hearings.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
+import { slowTest } from './slow-tests.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v1.json');
+const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
 describe('speech act parsing', () => {
-  test('accepts only the nine known acts', () => {
+  test('accepts only the ten known acts', () => {
     for (const act of SPEECH_ACTS) {
       assert.equal(parseAct(JSON.stringify({ type: act })), act);
     }
@@ -74,6 +76,12 @@ describe('claim resolution', () => {
     assert.equal(resolveClaim('', candidates), null);
     // One incidental word in common is not a subject.
     assert.equal(resolveClaim('the record was long', candidates), null);
+  });
+});
+
+describe('reputation-aware persuasion', () => {
+  test('the same argument carries more weight with higher standing', () => {
+    assert.ok(persuasionStrength(8_000, 5_000) > persuasionStrength(-8_000, 5_000));
   });
 });
 
@@ -320,7 +328,7 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
   });
 
-  test('reconciling with both leaders reaches peace before first blood', async () => {
+  test('reconciling with both leaders reaches peace before first blood', slowTest, async () => {
     const { worldId, sessionId } = await freshWorld(305);
     const inference = createStubClient();
 

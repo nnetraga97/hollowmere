@@ -39,7 +39,7 @@ import { instantiateWorld } from '../scenario/instantiate.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v1.json');
+const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
 
 function flag(name: string): string | null {
   const index = process.argv.indexOf(`--${name}`);

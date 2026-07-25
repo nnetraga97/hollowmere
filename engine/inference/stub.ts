@@ -156,7 +156,7 @@ const REFLECTIONS = [
 
 const SPEECH_ACTS = [
   'accuse', 'defend', 'corroborate', 'dispute', 'reconcile',
-  'threaten', 'inform', 'inquire', 'smalltalk',
+  'threaten', 'inform', 'inquire', 'summon', 'smalltalk',
 ];
 
 /**
@@ -166,6 +166,7 @@ const SPEECH_ACTS = [
  * a question is a threat. The first list whose cue appears wins.
  */
 const CUES: readonly (readonly [act: string, cues: readonly string[]])[] = [
+  ['summon', ['summon', 'hearing', 'meet me at', 'come to the plaza', 'gather at']],
   ['threaten', ['burn', 'kill you', 'ruin you', 'regret', 'or else', 'watch yourself']],
   ['reconcile', ['peace', 'terms', 'forgive', 'settle this', 'lay it down', 'no more blood',
                  'talk to them', 'come to the table', 'end this']],
@@ -242,6 +243,24 @@ function respond(request: CompletionRequest): string {
       const truncated = source.length > 90 ? `${source.slice(0, 90).trimEnd()}...` : source;
       return `${rng.pick(hedges)}${truncated.charAt(0).toLowerCase()}${truncated.slice(1)}`;
     }
+
+    case 'strategy':
+      return JSON.stringify({
+        tactic: pickFromChoices(request, 'tactics', rng),
+        target: pickFromChoices(request, 'targets', rng),
+        claim: pickFromChoices(request, 'claims', rng),
+        posture: pickFromChoices(request, 'postures', rng) ?? 'press',
+      });
+
+    case 'attendance':
+      return JSON.stringify({
+        response: pickFromChoices(request, 'responses', rng) ?? 'come',
+      });
+
+    case 'inquire':
+      return JSON.stringify({
+        disclosure: pickFromChoices(request, 'disclosures', rng) ?? 'deflect',
+      });
 
     default: {
       const exhaustive: never = request.task;

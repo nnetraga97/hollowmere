@@ -1,7 +1,7 @@
 /**
  * Cognition — the part of the tick that actually thinks.
  *
- * Forty agents cannot each call a model every five seconds, and they do not
+ * Thirty agents cannot each call a model every five seconds, and they do not
  * need to: the town's behaviour comes from rules, and thinking is reserved for
  * the handful of agents something is currently happening to. That set — the
  * spotlight — is recomputed every round and never persisted, because it is a
@@ -28,6 +28,7 @@ import type { Client } from './db.ts';
 import { BELIEF, COGNITION } from './config.ts';
 import { readBudget, recordUsage, type BudgetState } from './budget.ts';
 import { accuseByClaimKey } from './accusations.ts';
+import { loadAgentGoals, type AgentGoal } from './goals.ts';
 import { recall, recordAccesses } from './retrieval.ts';
 import type { RouteGraph } from './movement.ts';
 import { clampUnit, type Fixed } from './fixedpoint.ts';
@@ -282,6 +283,8 @@ export async function think(
     const situationText = situationTexts[index] as string;
 
     const beliefs = await loadActionableBeliefs(client, ctx.worldId, agent.agentId);
+    const goals = (await loadAgentGoals(client, ctx.worldId, agent.agentId))
+      .filter((goal) => goal.status === 'active');
     const destinations = reachableLocationKeys(ctx, agent);
     // Exact inputs only. The recalled memory ids are deliberately *not* in here
     // — see hashInputs.
@@ -292,6 +295,7 @@ export async function think(
       situationText,
       destinations,
       beliefs: beliefs.map((b) => b.claimKey),
+      goals: goals.map((goal) => [goal.key, goal.priority]),
     });
 
     const recorded = replaying
@@ -354,7 +358,7 @@ export async function think(
         task: 'plan',
         promptVersion: PLAN_PROMPT_VERSION,
         system: PLAN_SYSTEM,
-        user: planPrompt(agent, situationText, memories.map((m) => m.content), ctx.stage),
+        user: planPrompt(agent, situationText, memories.map((m) => m.content), ctx.stage, goals),
         maxTokens: 220,
         seed: planSeed,
         choices: {
@@ -499,10 +503,14 @@ function planPrompt(
   situationText: string,
   memories: readonly string[],
   stage: EscalationStage,
+  goals: readonly AgentGoal[],
 ): string {
   return [
     `You are ${agent.name} of ${agent.factionKey}. ${agent.persona.summary ?? ''}`,
     `The town is at the "${stage}" stage.`,
+    goals.length > 0
+      ? `What matters to you: ${goals.map((goal) => goal.key.replace(/_/g, ' ')).join('; ')}.`
+      : '',
     `Where you are: ${situationText}`,
     memories.length > 0 ? `What comes to mind:\n${memories.map((m) => `- ${m}`).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
@@ -614,9 +622,9 @@ export async function applyCognition(
   for (const decision of decisions) {
     await client.query(
       `INSERT INTO cognition_records
-         (world_id, tick, agent_id, input_hash, decision, model_id, prompt_version,
+         (world_id, tick, agent_id, task, input_hash, decision, model_id, prompt_version,
           tokens_in, tokens_out, latency_ms, observation_vector, reflection_vector)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+       VALUES ($1, $2, $3, 'plan', $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         ctx.worldId, ctx.tick, decision.agentId, decision.inputHash,
         JSON.stringify({
@@ -945,7 +953,7 @@ async function loadRecordedDecision(
   }>(
     `SELECT decision, input_hash, prompt_version, observation_vector, reflection_vector
        FROM cognition_records
-      WHERE world_id = $1 AND tick = $2 AND agent_id = $3
+      WHERE world_id = $1 AND tick = $2 AND agent_id = $3 AND task = 'plan'
       ORDER BY record_id
       LIMIT 1`,
     [worldId, tick, agentId],

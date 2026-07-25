@@ -120,11 +120,12 @@ export async function evaluatePeace(
   };
 }
 
-export type Ending = 'war' | 'peace' | 'expired';
+export type Ending = 'war' | 'peace' | 'exposed' | 'expired';
 
 const ENDING_DESCRIPTION: Record<Ending, string> = {
   war: 'The Houses take the streets. Hollowmere burns.',
   peace: 'Terms are agreed in the plaza. The Houses will speak again in a season.',
+  exposed: 'The instigator is exposed before both Houses and taken into custody.',
   expired: 'The season turns and the town is left as it was found.',
 };
 

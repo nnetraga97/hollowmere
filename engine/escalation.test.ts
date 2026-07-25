@@ -30,9 +30,10 @@ import {
 import { ESCALATION_STAGES } from '../scenario/schema.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
+import { slowTest } from './slow-tests.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v1.json');
+const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
 // ---------------------------------------------------------------------------
@@ -238,7 +239,7 @@ describe('escalation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL not 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
   });
 
-  test('the stage never reverses, however far tension falls', async () => {
+  test('the stage never reverses, however far tension falls', slowTest, async () => {
     const worldId = await freshWorld(102);
 
     for (let tick = 1; tick <= 120; tick++) {

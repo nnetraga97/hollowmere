@@ -30,7 +30,7 @@ import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v1.json');
+const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
 
 describe('belief shifting', () => {
   const base = {

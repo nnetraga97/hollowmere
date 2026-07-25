@@ -7,6 +7,8 @@
  * reference impossible to express rather than merely discouraged.
  */
 
+import { createHash } from 'node:crypto';
+
 import { withSerializable, type Client } from '../engine/db.ts';
 import { pickRumorOriginator, seedRumor } from '../engine/gossip.ts';
 import { createSeq } from '../engine/seq.ts';
@@ -53,6 +55,19 @@ export async function instantiateWorld(
     await insertRelationships(client, worldId, scenario.agents, agentIds);
     const claimIds = await insertClaims(client, worldId, scenario.claims, agentIds);
 
+    const culprit = selectCulprit(options.seed, options.scenarioVersionId, scenario.culprits);
+    if (culprit) {
+      await insertCulpritState(client, {
+        worldId,
+        culprit,
+        agentIds,
+        claimIds,
+        goals: scenario.goals,
+      });
+    } else {
+      await insertGoals(client, worldId, scenario.goals, agentIds, null);
+    }
+
     await insertInitialState(client, worldId, scenario.factions, factionIds);
     const playerId = await insertPlayer(
       client, worldId, options.sessionId,
@@ -81,6 +96,9 @@ interface AgentRow { agent_key: string; name: string; faction_key: string;
   routine: unknown; credulity: number; talkativeness: number }
 interface ClaimRow { claim_key: string; text: string; subject_agent_key: string;
   truth: string; severity: number }
+interface CulpritRow { culprit_key: string; motive_key: string; profit_claim_key: string;
+  record_claim_key: string; claim_truth: Record<string, 'true' | 'false' | 'unknown'> }
+interface GoalRow { agent_key: string; goal_key: string; priority: number }
 
 async function loadScenarioRows(client: Client, scenarioVersionId: string) {
   const version = await client.query<{ opening: OpeningEventDef }>(
@@ -123,6 +141,14 @@ async function loadScenarioRows(client: Client, scenarioVersionId: string) {
     `SELECT claim_key, text, subject_agent_key, truth, severity
        FROM claim_templates WHERE scenario_version_id = $1 ORDER BY claim_key`,
     [scenarioVersionId]);
+  const culprits = await client.query<CulpritRow>(
+    `SELECT culprit_key, motive_key, profit_claim_key, record_claim_key, claim_truth
+       FROM culprit_templates WHERE scenario_version_id = $1 ORDER BY culprit_key`,
+    [scenarioVersionId]);
+  const goals = await client.query<GoalRow>(
+    `SELECT agent_key, goal_key, priority FROM agent_goal_templates
+      WHERE scenario_version_id = $1 ORDER BY agent_key, priority DESC, goal_key`,
+    [scenarioVersionId]);
 
   return {
     opening: version.rows[0].opening,
@@ -132,6 +158,8 @@ async function loadScenarioRows(client: Client, scenarioVersionId: string) {
     routes: routes.rows,
     agents: agents.rows,
     claims: claims.rows,
+    culprits: culprits.rows,
+    goals: goals.rows,
   };
 }
 
@@ -263,7 +291,7 @@ async function insertRelationships(
     }
   }
 
-  // ~1,560 edges for forty agents. Chunked to stay well inside CockroachDB's
+  // 870 edges for thirty agents. Chunked to stay well inside CockroachDB's
   // per-statement parameter limit.
   const CHUNK = 200;
   for (let start = 0; start < edges.length; start += CHUNK) {
@@ -297,6 +325,79 @@ async function insertClaims(
     ids.set(c.claim_key, row.rows[0]!.claim_id);
   }
   return ids;
+}
+
+/** Culprit selection is derived, so it never consumes the simulation RNG stream. */
+export function selectCulprit(
+  seed: number,
+  scenarioVersionId: string,
+  candidates: readonly CulpritRow[],
+): CulpritRow | null {
+  const ordered = [...candidates].sort((a, b) => a.culprit_key.localeCompare(b.culprit_key));
+  if (ordered.length === 0) return null;
+  const digest = createHash('sha256').update(`${seed}:${scenarioVersionId}`).digest();
+  const index = digest.readUInt32BE(0) % ordered.length;
+  return ordered[index] as CulpritRow;
+}
+
+async function insertCulpritState(
+  client: Client,
+  input: {
+    worldId: string;
+    culprit: CulpritRow;
+    agentIds: ReadonlyMap<string, string>;
+    claimIds: Map<string, string>;
+    goals: readonly GoalRow[];
+  },
+): Promise<void> {
+  const culpritId = input.agentIds.get(input.culprit.culprit_key);
+  if (!culpritId) throw new Error(`culprit agent missing: ${input.culprit.culprit_key}`);
+
+  await client.query(
+    `INSERT INTO world_culprit (world_id, agent_id, motive_key) VALUES ($1, $2, $3)`,
+    [input.worldId, culpritId, input.culprit.motive_key],
+  );
+
+  for (const [claimKey, truth] of Object.entries(input.culprit.claim_truth ?? {})) {
+    await client.query(
+      `UPDATE world_claims SET truth = $3 WHERE world_id = $1 AND claim_key = $2`,
+      [input.worldId, claimKey, truth],
+    );
+  }
+
+  const exposed = await client.query<{ claim_id: string }>(
+    `INSERT INTO world_claims
+       (world_id, claim_key, text, subject_agent_id, truth, severity, authored, locked)
+     VALUES ($1, 'instigator_exposed', $2, $3, 'true', 10000, true, true)
+     RETURNING claim_id`,
+    [input.worldId, `${input.culprit.culprit_key.replace(/_/g, ' ')} engineered the feud and killed the prince.`, culpritId],
+  );
+  input.claimIds.set('instigator_exposed', exposed.rows[0]!.claim_id);
+
+  await insertGoals(client, input.worldId, input.goals, input.agentIds, input.culprit.culprit_key);
+  await client.query(
+    `INSERT INTO world_scheme_state (world_id, agent_id) VALUES ($1, $2)`,
+    [input.worldId, culpritId],
+  );
+}
+
+async function insertGoals(
+  client: Client,
+  worldId: string,
+  goals: readonly GoalRow[],
+  agentIds: ReadonlyMap<string, string>,
+  culpritKey: string | null,
+): Promise<void> {
+  for (const goal of goals) {
+    if (goal.goal_key === 'provoke_war' && goal.agent_key !== culpritKey) continue;
+    const agentId = agentIds.get(goal.agent_key);
+    if (!agentId) continue;
+    await client.query(
+      `INSERT INTO world_agent_goals (world_id, agent_id, goal_key, priority, status, updated_tick)
+       VALUES ($1, $2, $3, $4, 'active', 0)`,
+      [worldId, agentId, goal.goal_key, goal.priority],
+    );
+  }
 }
 
 async function insertInitialState(

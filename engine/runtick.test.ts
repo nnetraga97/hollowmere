@@ -25,9 +25,10 @@ import { acquireLease, findSchedulableWorlds, releaseLease, renewLease } from '.
 import { dayForTick, nextHop, phaseForTick, type RouteGraph } from './movement.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
+import { slowTest } from './slow-tests.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v1.json');
+const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
 /** The window the plan fixes for an unattended run, in ticks. */
@@ -214,7 +215,7 @@ describe('the tick against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL not se
     );
   });
 
-  test('an unattended town destroys itself inside the canonical window', async () => {
+  test('an unattended town destroys itself inside the canonical window', slowTest, async () => {
     const worldId = await freshWorld(42);
     const inference = createStubClient();
 

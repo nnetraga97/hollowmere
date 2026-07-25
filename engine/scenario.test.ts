@@ -16,10 +16,10 @@ import { dirname, join } from 'node:path';
 import { closePool, query } from './db.ts';
 import { ScenarioError, resolveRoutine, validateScenario } from '../scenario/schema.ts';
 import { checksumOf, loadScenarioFile, publishScenario } from '../scenario/publish.ts';
-import { instantiateWorld } from '../scenario/instantiate.ts';
+import { instantiateWorld, selectCulprit } from '../scenario/instantiate.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v1.json');
+const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
 
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
@@ -67,7 +67,7 @@ describe('scenario validation', () => {
   test('the shipped Hollowmere scenario is valid', async () => {
     const raw = JSON.parse(await readFile(SCENARIO_PATH, 'utf8'));
     const scenario = validateScenario(raw);
-    assert.equal(scenario.agents.length, 40, 'the town should have forty souls');
+    assert.equal(scenario.agents.length, 30, 'the town should have thirty souls');
     assert.equal(scenario.factions.filter((f) => f.belligerent).length, 2);
   });
 
@@ -168,6 +168,22 @@ describe('scenario validation', () => {
   });
 });
 
+describe('culprit selection', () => {
+  const candidates = [
+    { culprit_key: 'c', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {} },
+    { culprit_key: 'a', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {} },
+    { culprit_key: 'b', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {} },
+  ];
+
+  test('depends on seed and scenario version, not authored array order', () => {
+    const first = selectCulprit(42, 'scenario-id', candidates)?.culprit_key;
+    const reversed = selectCulprit(42, 'scenario-id', [...candidates].reverse())?.culprit_key;
+    assert.equal(first, reversed);
+    assert.ok(new Set(Array.from({ length: 20 }, (_, seed) =>
+      selectCulprit(seed, 'scenario-id', candidates)?.culprit_key)).size > 1);
+  });
+});
+
 describe('routine resolution', () => {
   test('expands @home and @work per agent', () => {
     const resolved = resolveRoutine(
@@ -248,11 +264,11 @@ dbSuite('publish and instantiate', () => {
       [world.worldId],
     );
 
-    assert.equal(counts?.agents, 40);
+    assert.equal(counts?.agents, 30);
     assert.equal(counts?.factions, 3);
     // Every ordered pair, so gossip weighting always has a defined edge.
-    assert.equal(counts?.relationships, 40 * 39);
-    assert.equal(counts?.claims, 10);
+    assert.equal(counts?.relationships, 30 * 29);
+    assert.equal(counts?.claims, 11);
     assert.equal(counts?.rumors, 3);
     assert.equal(counts?.faction_state, 3);
 

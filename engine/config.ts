@@ -54,7 +54,7 @@ export const GOSSIP = {
   /**
    * How many holders of one rumor do the telling in a tick. The talkative go
    * first. This bounds the work per rumor — the listener query runs once per
-   * holder — and keeps a rumor everyone has heard from costing forty queries a
+   * holder — and keeps a rumor everyone has heard from costing thirty queries a
    * tick to make no progress.
    */
   maxTellersPerRumor: 12,
@@ -115,7 +115,7 @@ export const TENSION = {
    *
    * Individual events are priced by how bad they are, but a town's mood does
    * not turn over in fifteen in-world minutes however much is said. Without the
-   * cap, one very hot rumor reaching forty people in a single tick takes the
+   * cap, one very hot rumor reaching thirty people in a single tick takes the
    * town from calm to war inside a minute of play — which is unreadable on
    * screen and makes every intervention pointless. The cap is what stretches
    * the arc across the canonical 192–288 ticks.
@@ -149,7 +149,7 @@ export const ACCUSATION = {
     war: fromPercent(16) as Fixed,
   },
 
-  /** Ceiling per tick, so a town of forty believers cannot all speak at once. */
+  /** Ceiling per tick, so a town of thirty believers cannot all speak at once. */
   maxPerTick: 3,
 
   /** How much an accusation puts a rumor back in circulation. */
@@ -168,7 +168,7 @@ export const COGNITION = {
    * deterministic path. A 30-minute world at two thinks per 30 s needs ~120;
    * the headroom covers conversation and distortion.
    */
-  callBudget: 400,
+  callBudget: 900,
   /**
    * How long an agent keeps walking toward what they decided. Beyond this the
    * plan is stale and the day's routine takes over again — otherwise one
@@ -202,6 +202,29 @@ export const CONVERSE = {
 
   reputationForAccusing: fromPercent(6) as Fixed,
   reputationForPeacemaking: fromPercent(5) as Fixed,
+} as const;
+
+export const SCHEME = {
+  strategyIntervalTicks: 12,
+  tacticDurationTicks: 6,
+  rumorHeat: fromPercent(72) as Fixed,
+} as const;
+
+export const DIALOGUE = {
+  intervalTicks: 6,
+  trustShift: fromPercent(2) as Fixed,
+} as const;
+
+export const HEARING = {
+  travelSlackTicks: 2,
+  holdTicks: 6,
+} as const;
+
+export const EVIDENCE = {
+  provenanceRequired: 3,
+  distinctClaimsRequired: 2,
+  contradictionRequired: 1,
+  recordRequired: 1,
 } as const;
 
 export const TIME = {

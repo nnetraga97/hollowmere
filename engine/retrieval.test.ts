@@ -27,7 +27,7 @@ import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v1.json');
+const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
 const DIMS = 1024;
 
 describe('distance conversion', () => {
@@ -344,7 +344,7 @@ dbSuite('retrieval against CockroachDB', () => {
     try {
       const [loner] = await query<{ agent_id: string }>(
         `SELECT agent_id FROM world_agents
-          WHERE world_id = $1 AND agent_key = 'lark_penn'`,
+          WHERE world_id = $1 AND agent_key = 'jenna_ryle'`,
         [worldId],
       );
       const results = await retrieveMemories(client, {

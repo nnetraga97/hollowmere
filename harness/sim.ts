@@ -30,7 +30,7 @@ import { instantiateWorld } from '../scenario/instantiate.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_SCENARIO = join(here, '..', 'scenario', 'hollowmere-v1.json');
+const DEFAULT_SCENARIO = join(here, '..', 'scenario', 'hollowmere-v2.json');
 
 export interface ScriptedCommand {
   /** Tick at which the player says this. */

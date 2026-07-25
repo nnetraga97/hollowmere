@@ -177,6 +177,49 @@ async function insertTemplates(
     );
   }
 
+  for (const culprit of scenario.culprits ?? []) {
+    await client.query(
+      `INSERT INTO culprit_templates
+         (scenario_version_id, culprit_key, motive_key, profit_claim_key,
+          record_claim_key, claim_truth)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        scenarioVersionId,
+        culprit.key,
+        culprit.motive,
+        culprit.profitClaim,
+        culprit.recordClaim,
+        JSON.stringify(culprit.claimTruth),
+      ],
+    );
+  }
+
+  for (const goal of scenario.goals ?? []) {
+    await client.query(
+      `INSERT INTO agent_goal_templates
+         (scenario_version_id, agent_key, goal_key, priority)
+       VALUES ($1, $2, $3, $4)`,
+      [scenarioVersionId, goal.agent, goal.key, goal.priority],
+    );
+  }
+
+  for (const scheme of scenario.schemes ?? []) {
+    await client.query(
+      `INSERT INTO scheme_templates
+         (scenario_version_id, scheme_key, ladder_index, tactic, audience, claim_key, condition)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        scenarioVersionId,
+        scheme.key,
+        scheme.index,
+        scheme.tactic,
+        scheme.audience,
+        scheme.claim ?? null,
+        JSON.stringify(scheme.condition),
+      ],
+    );
+  }
+
   for (const t of scenario.triggers) {
     await client.query(
       `INSERT INTO trigger_templates
