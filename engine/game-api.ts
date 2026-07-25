@@ -43,9 +43,16 @@ export interface TownMapView {
 export interface PlayerView {
   playerId: string;
   name: string;
+  background: string;
+  sympathyFactionKey: string | null;
   locationKey: string;
   reputation: { factionKey: string; value: number }[];
   pendingMove: { commandId: string; locationKey: string } | null;
+}
+
+export interface PlayerProfile {
+  background: string;
+  sympathyFactionKey: string | null;
 }
 
 export interface EvidenceView {
@@ -111,12 +118,14 @@ export interface DebugTruthView {
 }
 
 export async function assertSession(ref: SessionRef): Promise<{
-  playerId: string; locationId: string; locationKey: string; worldStatus: string;
+  playerId: string; playerName: string; playerProfile: PlayerProfile;
+  locationId: string; locationKey: string; worldStatus: string;
 }> {
   const rows = await query<{
-    player_id: string; location_id: string; location_key: string; status: string;
+    player_id: string; player_name: string; profile: Partial<PlayerProfile>;
+    location_id: string; location_key: string; status: string;
   }>(
-    `SELECT p.player_id, p.location_id, l.location_key, w.status
+    `SELECT p.player_id, p.name AS player_name, p.profile, p.location_id, l.location_key, w.status
        FROM world_players p
        JOIN worlds w ON w.world_id = p.world_id
        JOIN world_locations l ON l.world_id = p.world_id AND l.location_id = p.location_id
@@ -127,10 +136,30 @@ export async function assertSession(ref: SessionRef): Promise<{
   if (!row) throw new SessionAccessError();
   return {
     playerId: row.player_id,
+    playerName: row.player_name,
+    playerProfile: {
+      background: row.profile?.background ?? '',
+      sympathyFactionKey: row.profile?.sympathyFactionKey ?? null,
+    },
     locationId: row.location_id,
     locationKey: row.location_key,
     worldStatus: row.status,
   };
+}
+
+export async function setPlayerProfile(
+  ref: SessionRef,
+  name: string,
+  profile: PlayerProfile,
+): Promise<void> {
+  const rows = await query<{ player_id: string }>(
+    `UPDATE world_players
+        SET name = $3, profile = $4
+      WHERE world_id = $1 AND session_id = $2
+      RETURNING player_id`,
+    [ref.worldId, ref.sessionId, name, JSON.stringify(profile)],
+  );
+  if (!rows[0]) throw new SessionAccessError();
 }
 
 export class SessionAccessError extends Error {
@@ -221,7 +250,9 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
     world,
     player: {
       playerId: session.playerId,
-      name: 'the outsider',
+      name: session.playerName,
+      background: session.playerProfile.background,
+      sympathyFactionKey: session.playerProfile.sympathyFactionKey,
       locationKey: session.locationKey,
       reputation: reputations.map((row) => ({ factionKey: row.faction_key, value: row.reputation })),
       pendingMove: pending[0]

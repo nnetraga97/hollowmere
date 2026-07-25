@@ -8,11 +8,18 @@ async function decode<T>(response: Response): Promise<T> {
   return body;
 }
 
-export async function startSession(seed?: number): Promise<Bootstrap> {
+export interface PlayerEntry {
+  playerName?: string;
+  background?: string;
+  sympathyFactionKey?: 'aldreth' | 'corvane' | 'unaligned' | null;
+  seed?: number;
+}
+
+export async function startSession(entry: PlayerEntry = {}): Promise<Bootstrap> {
   return decode(await fetch('/api/session', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(seed === undefined ? {} : { seed }),
+    body: JSON.stringify(entry),
   }));
 }
 

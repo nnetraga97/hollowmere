@@ -423,11 +423,15 @@ CREATE TABLE IF NOT EXISTS world_players (
   player_id   UUID NOT NULL DEFAULT gen_random_uuid(),
   session_id  STRING NOT NULL,
   name        STRING NOT NULL DEFAULT 'the outsider',
+  profile     JSONB NOT NULL DEFAULT '{}',
   location_id UUID NOT NULL,
   PRIMARY KEY (world_id, player_id),
   UNIQUE (world_id, session_id),
   FOREIGN KEY (world_id, location_id) REFERENCES world_locations (world_id, location_id)
 );
+
+ALTER TABLE world_players
+  ADD COLUMN IF NOT EXISTS profile JSONB NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS player_reputation (
   world_id   UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,

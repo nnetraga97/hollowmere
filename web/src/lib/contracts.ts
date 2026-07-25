@@ -55,7 +55,8 @@ export interface GameSnapshot {
     inferenceCalls: number; estCostMicros: number;
   };
   player: {
-    playerId: string; name: string; locationKey: string;
+    playerId: string; name: string; background: string; sympathyFactionKey: string | null;
+    locationKey: string;
     reputation: { factionKey: string; value: number }[];
     pendingMove: { commandId: string; locationKey: string } | null;
   };

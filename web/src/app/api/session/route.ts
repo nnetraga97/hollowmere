@@ -3,19 +3,42 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import {
   assertSession, getGameSnapshot, getTownMap, instantiateWorld, query, resumeSessionWorld,
+  setPlayerProfile,
 } from '@/server/engine';
 import { jsonBody, requireSameOrigin, routeError } from '@/server/http';
 import { clearSession, readSession, writeSession } from '@/server/session';
 
 export const runtime = 'nodejs';
 
+interface SessionBody {
+  seed?: number;
+  playerName?: string;
+  background?: string;
+  sympathyFactionKey?: string | null;
+}
+
+const FACTION_KEYS = new Set(['aldreth', 'corvane', 'unaligned']);
+
 export async function POST(request: NextRequest) {
   try {
     requireSameOrigin(request);
+    const body = await jsonBody<SessionBody>(request).catch((): SessionBody => ({}));
+    const profileProvided = typeof body.playerName === 'string'
+      || typeof body.background === 'string'
+      || body.sympathyFactionKey !== undefined;
+    const playerName = typeof body.playerName === 'string' && body.playerName.trim()
+      ? body.playerName.trim().slice(0, 60)
+      : 'the outsider';
+    const playerProfile = {
+      background: typeof body.background === 'string' ? body.background.trim().slice(0, 360) : '',
+      sympathyFactionKey: typeof body.sympathyFactionKey === 'string'
+        && FACTION_KEYS.has(body.sympathyFactionKey) ? body.sympathyFactionKey : null,
+    };
     const existing = await readSession();
     if (existing) {
       try {
         const owned = await assertSession(existing);
+        if (profileProvided) await setPlayerProfile(existing, playerName, playerProfile);
         if (owned.worldStatus === 'paused') await resumeSessionWorld(existing);
         return NextResponse.json({
           session: { worldId: existing.worldId },
@@ -27,7 +50,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const body: { seed?: number } = await jsonBody<{ seed?: number }>(request).catch(() => ({}));
     const seed = Number.isSafeInteger(body.seed) ? Math.trunc(body.seed as number) : randomInt(1, 2_147_483_647);
     const scenarioVersion = process.env.SCENARIO_VERSION ?? 'hollowmere-v2';
     const versions = await query<{ scenario_version_id: string }>(
@@ -39,6 +61,8 @@ export async function POST(request: NextRequest) {
       scenarioVersionId: versions[0].scenario_version_id,
       seed,
       sessionId,
+      playerName,
+      playerProfile,
     });
     const ref = { sessionId, worldId: created.worldId };
     await writeSession(ref);

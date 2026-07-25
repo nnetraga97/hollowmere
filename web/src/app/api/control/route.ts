@@ -30,8 +30,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(await queueTimeScale(ref, body.value, body.idempotencyKey), { status: 202 });
     }
     if (body.action === 'restart') {
-      const versions = await query<{ scenario_version_id: string; seed: number }>(
-        `SELECT scenario_version_id, seed FROM worlds WHERE world_id = $1`, [ref.worldId],
+      const versions = await query<{
+        scenario_version_id: string; seed: number; player_name: string;
+        profile: { background?: string; sympathyFactionKey?: string | null };
+      }>(
+        `SELECT w.scenario_version_id, w.seed, p.name AS player_name, p.profile
+           FROM worlds w
+           JOIN world_players p ON p.world_id = w.world_id AND p.session_id = $2
+          WHERE w.world_id = $1`,
+        [ref.worldId, ref.sessionId],
       );
       if (!versions[0]) throw new Error('world no longer exists');
       await pauseSessionWorld(ref);
@@ -42,6 +49,11 @@ export async function POST(request: NextRequest) {
         scenarioVersionId: versions[0].scenario_version_id,
         seed,
         sessionId: ref.sessionId,
+        playerName: versions[0].player_name,
+        playerProfile: {
+          background: versions[0].profile?.background ?? '',
+          sympathyFactionKey: versions[0].profile?.sympathyFactionKey ?? null,
+        },
       });
       const next = { sessionId: ref.sessionId, worldId: created.worldId };
       await writeSession(next);

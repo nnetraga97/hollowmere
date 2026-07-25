@@ -23,6 +23,11 @@ export interface InstantiateOptions {
   scenarioVersionId: string;
   seed: number;
   sessionId: string;
+  playerName?: string;
+  playerProfile?: {
+    background: string;
+    sympathyFactionKey: string | null;
+  };
   /** Where the player starts. Defaults to the opening event's location. */
   playerLocationKey?: string;
 }
@@ -72,7 +77,7 @@ export async function instantiateWorld(
     const playerId = await insertPlayer(
       client, worldId, options.sessionId,
       locationIds.get(options.playerLocationKey ?? scenario.opening.location)!,
-      scenario.factions, factionIds,
+      scenario.factions, factionIds, options.playerName, options.playerProfile,
     );
 
     await applyOpening(client, worldId, scenario.opening, locationIds, claimIds);
@@ -422,11 +427,13 @@ async function insertInitialState(
 async function insertPlayer(
   client: Client, worldId: string, sessionId: string, locationId: string,
   factions: readonly FactionRow[], factionIds: ReadonlyMap<string, string>,
+  playerName = 'the outsider',
+  playerProfile: InstantiateOptions['playerProfile'] = { background: '', sympathyFactionKey: null },
 ): Promise<string> {
   const row = await client.query<{ player_id: string }>(
-    `INSERT INTO world_players (world_id, session_id, location_id)
-     VALUES ($1, $2, $3) RETURNING player_id`,
-    [worldId, sessionId, locationId],
+    `INSERT INTO world_players (world_id, session_id, name, profile, location_id)
+     VALUES ($1, $2, $3, $4, $5) RETURNING player_id`,
+    [worldId, sessionId, playerName, JSON.stringify(playerProfile), locationId],
   );
   const playerId = row.rows[0]!.player_id;
 
@@ -434,8 +441,11 @@ async function insertPlayer(
   for (const f of factions) {
     await client.query(
       `INSERT INTO player_reputation (world_id, player_id, faction_id, reputation)
-       VALUES ($1, $2, $3, 0)`,
-      [worldId, playerId, factionIds.get(f.faction_key)],
+       VALUES ($1, $2, $3, $4)`,
+      [
+        worldId, playerId, factionIds.get(f.faction_key),
+        playerProfile.sympathyFactionKey === f.faction_key ? 750 : 0,
+      ],
     );
   }
   return playerId;

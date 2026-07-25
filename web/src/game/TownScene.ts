@@ -3,21 +3,21 @@ import * as Phaser from 'phaser';
 import type { AgentView, GameSnapshot, TownMap } from '@/lib/contracts';
 import { EventBus } from './EventBus';
 import {
-  areAdjacent, interpolateRoute, LOCATION_RADIUS, MAP_SCALE, npcOffset,
-  shouldSuppressGameInput, stableHash, validateTownMap, withinInteractionRange,
+  areAdjacent, LOCATION_KEYS, LOCATION_RADIUS, MAP_SCALE, npcOffset,
+  shouldSuppressGameInput, validateTownMap, withinInteractionRange,
   WORLD_HEIGHT, WORLD_WIDTH, worldPosition,
 } from './mapManifest';
 
 const FACTION_TINT: Record<string, number> = {
-  aldreth: 0x83b7df,
-  corvane: 0xdf9569,
-  unaligned: 0xc1b7a6,
+  aldreth: 0x3b82f6,
+  corvane: 0xf97316,
+  unaligned: 0x94a3b8,
 };
 
 const FACTION_TEXT: Record<string, string> = {
-  aldreth: '#9bcdf2',
-  corvane: '#f0aa7f',
-  unaligned: '#d2cabd',
+  aldreth: '#73a7f7',
+  corvane: '#fb9850',
+  unaligned: '#b1bfce',
 };
 
 const FACTION_NAME: Record<string, string> = {
@@ -26,9 +26,11 @@ const FACTION_NAME: Record<string, string> = {
   unaligned: 'INDEPENDENT',
 };
 
-// The Kenney sheet also contains equipment and body-part frames. Restrict NPC
-// assignment to its two complete-character columns and human rows.
-const TOWNSPERSON_FRAMES = [216, 217, 270, 271, 324, 325, 378, 379, 432, 433, 486, 487] as const;
+const FEMALE_AGENT_KEYS = new Set([
+  'maren_aldreth', 'sella_dorn', 'oriel_faskin', 'annet_pike', 'mabel_thorn', 'tamsin_vye',
+  'edda_lyle', 'veranne_thule', 'hester_lowe', 'widow_sable', 'morna_dell', 'jenna_ryle',
+]);
+
 const PLAYER_FRAME = 595;
 
 export class TownScene extends Phaser.Scene {
@@ -38,7 +40,7 @@ export class TownScene extends Phaser.Scene {
   private playerMarker?: Phaser.GameObjects.Ellipse;
   private playerLabel?: Phaser.GameObjects.Text;
   private playerPlaced = false;
-  private agents = new Map<string, Phaser.GameObjects.Sprite>();
+  private agents = new Map<string, Phaser.GameObjects.Container>();
   private labels = new Map<string, Phaser.GameObjects.Text>();
   private locations = new Map<string, { x: number; y: number }>();
   private hearingMarkers: Phaser.GameObjects.GameObject[] = [];
@@ -60,18 +62,25 @@ export class TownScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.spritesheet('town-tiles', '/assets/vendor/kenney/tiny-town/tilemap_packed.png', {
-      frameWidth: 16, frameHeight: 16,
-    });
     this.load.spritesheet('characters', '/assets/vendor/kenney/roguelike-characters/roguelikeChar_transparent.png', {
       frameWidth: 16, frameHeight: 16, spacing: 1,
     });
+    this.load.image('map-texture', '/assets/hollowmere/map-texture.jpg');
+    this.load.image('aldreth-male', '/assets/hollowmere/portraits/aldreth_male.jpg');
+    this.load.image('aldreth-female', '/assets/hollowmere/portraits/aldreth_female.jpg');
+    this.load.image('corvane-male', '/assets/hollowmere/portraits/corvane_male.jpg');
+    this.load.image('corvane-female', '/assets/hollowmere/portraits/corvane_female.jpg');
+    this.load.image('independent-priest', '/assets/hollowmere/portraits/independent_priest.jpg');
+    this.load.image('independent-woman', '/assets/hollowmere/portraits/independent_woman.jpg');
+    for (const locationKey of LOCATION_KEYS) {
+      this.load.image(`location-${locationKey}`, `/assets/hollowmere/locations/${locationKey}.png`);
+    }
   }
 
   create(): void {
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    this.cameras.main.setZoom(1.2);
+    this.cameras.main.setZoom(1.12);
     this.obstacles = this.physics.add.staticGroup();
     if (this.input.keyboard) {
       const key = (code: number) => this.input.keyboard!.addKey(code, false);
@@ -163,13 +172,19 @@ export class TownScene extends Phaser.Scene {
   }
 
   private drawTown(map: TownMap): void {
+    this.add.image(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, 'map-texture')
+      .setDisplaySize(WORLD_WIDTH, WORLD_HEIGHT)
+      .setTint(0x686b70)
+      .setAlpha(0.32)
+      .setDepth(-4);
+
     const ground = this.add.graphics();
-    ground.fillStyle(0x1d2a20).fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    ground.fillStyle(0x172c36).fillRect(0, 0, 250, WORLD_HEIGHT);
-    ground.fillStyle(0x303424).fillRect(920, 0, WORLD_WIDTH - 920, WORLD_HEIGHT);
+    ground.fillStyle(0x0d0d12, 0.62).fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    ground.fillStyle(0x1f3850, 0.18).fillRect(0, 0, 260, WORLD_HEIGHT);
+    ground.fillStyle(0x4a2c1e, 0.16).fillRect(940, 0, WORLD_WIDTH - 940, WORLD_HEIGHT);
 
     for (const location of map.locations) this.locations.set(location.key, worldPosition(location));
-    ground.lineStyle(26, 0x3b342c, 1);
+    ground.lineStyle(18, 0x111116, 0.88);
     const seen = new Set<string>();
     for (const route of map.routes) {
       const key = [route.from, route.to].sort().join(':');
@@ -178,7 +193,7 @@ export class TownScene extends Phaser.Scene {
       const from = this.locations.get(route.from), to = this.locations.get(route.to);
       if (from && to) ground.lineBetween(from.x, from.y, to.x, to.y);
     }
-    ground.lineStyle(3, 0x746452, 0.45);
+    ground.lineStyle(2, 0x7b7368, 0.36);
     for (const route of map.routes) {
       const key = [route.from, route.to].sort().join(':edge');
       if (seen.has(key)) continue;
@@ -187,20 +202,32 @@ export class TownScene extends Phaser.Scene {
       if (from && to) ground.lineBetween(from.x, from.y, to.x, to.y);
     }
 
-    map.locations.forEach((location, index) => {
+    map.locations.forEach((location) => {
       const point = this.locations.get(location.key)!;
-      const marker = this.add.circle(point.x, point.y, LOCATION_RADIUS, 0x11130f, 0.62)
-        .setStrokeStyle(2, location.controllingFactionKey === 'aldreth' ? 0x557f9f
-          : location.controllingFactionKey === 'corvane' ? 0x9b664b : 0x766f63);
+      const factionColor = location.controllingFactionKey === 'aldreth' ? 0x3b82f6
+        : location.controllingFactionKey === 'corvane' ? 0xf97316 : 0x94a3b8;
+      const halo = this.add.circle(point.x, point.y, LOCATION_RADIUS + 8, factionColor, 0.035)
+        .setStrokeStyle(1, factionColor, 0.16)
+        .setDepth(0);
+      const marker = this.add.circle(point.x, point.y, LOCATION_RADIUS, 0x111116, 0.82)
+        .setStrokeStyle(2, factionColor, 0.58)
+        .setDepth(1);
       marker.setData('locationKey', location.key);
-      const buildingFrame = 72 + (index % 30);
-      this.add.sprite(point.x, point.y - 12, 'town-tiles', buildingFrame).setScale(3).setDepth(2);
-      const obstacle = this.add.rectangle(point.x, point.y - 12, 34, 26, 0x000000, 0);
+      halo.setData('locationKey', location.key);
+      const iconX = point.x - LOCATION_RADIUS * 0.72;
+      const iconY = point.y - LOCATION_RADIUS * 0.72;
+      this.add.circle(iconX, iconY, 18, 0x0d0d12, 0.96)
+        .setStrokeStyle(1, factionColor, 0.42)
+        .setDepth(18);
+      this.add.image(iconX, iconY, `location-${location.key}`)
+        .setDisplaySize(25, 25)
+        .setDepth(19);
+      const obstacle = this.add.rectangle(point.x, point.y - 7, 46, 46, 0x000000, 0);
       this.physics.add.existing(obstacle, true);
       this.obstacles?.add(obstacle);
-      this.add.text(point.x, point.y + 38, location.name, {
-        fontFamily: 'ui-monospace, monospace', fontSize: '12px', color: '#d7ccb9',
-        backgroundColor: '#151713cc', padding: { x: 5, y: 3 },
+      this.add.text(point.x, point.y + 40, location.name.toUpperCase(), {
+        fontFamily: 'Georgia, serif', fontStyle: 'bold', fontSize: '11px', color: '#e8dcc8',
+        backgroundColor: '#0d0d12ee', padding: { x: 8, y: 4 }, letterSpacing: 1.2,
       }).setOrigin(0.5).setDepth(8);
     });
   }
@@ -248,36 +275,32 @@ export class TownScene extends Phaser.Scene {
       const target = { x: location.x + offset.x, y: location.y + offset.y };
       let sprite = this.agents.get(agent.agentKey);
       if (!sprite) {
-        const frame = TOWNSPERSON_FRAMES[stableHash(agent.agentKey) % TOWNSPERSON_FRAMES.length];
-        sprite = this.add.sprite(target.x, target.y, 'characters', frame)
-          .setScale(2.1).setDepth(15).setInteractive({ useHandCursor: true });
+        const color = FACTION_TINT[agent.factionKey] ?? 0x94a3b8;
+        const portrait = this.add.image(0, 0, this.portraitFor(agent)).setDisplaySize(42, 42);
+        const frame = this.add.rectangle(0, 0, 48, 48, 0x111116, 0.92)
+          .setStrokeStyle(2, color, 0.88);
+        const label = this.add.text(0, -34, '', {
+          fontFamily: 'ui-monospace, monospace', fontStyle: 'bold', fontSize: '9px',
+          color: '#ded6c8', backgroundColor: '#0d0d12f2', padding: { x: 5, y: 3 },
+        }).setOrigin(0.5);
+        sprite = this.add.container(target.x, target.y, [frame, portrait, label])
+          .setSize(52, 68).setDepth(15).setInteractive({ useHandCursor: true });
         sprite.setData('locationKey', agent.locationKey);
         sprite.on('pointerdown', () => EventBus.emit('select-agent', { agentKey: agent.agentKey }));
         this.agents.set(agent.agentKey, sprite);
-        const label = this.add.text(target.x, target.y - 29, '', {
-          fontFamily: 'ui-monospace, monospace', fontStyle: 'bold', fontSize: '10px',
-          color: '#ded6c8', backgroundColor: '#10110eee', padding: { x: 4, y: 2 },
-        }).setOrigin(0.5).setDepth(30);
         this.labels.set(agent.agentKey, label);
       } else if (sprite.getData('locationKey') !== agent.locationKey) {
         sprite.setData('locationKey', agent.locationKey);
-        const start = { x: sprite.x, y: sprite.y };
-        const travel = { progress: 0 };
         this.tweens.add({
-          targets: travel, progress: 1,
-          duration: 900, ease: 'Sine.easeInOut',
-          onUpdate: () => {
-            const point = interpolateRoute(start, target, travel.progress);
-            sprite!.setPosition(point.x, point.y);
-            const label = this.labels.get(agent.agentKey);
-            if (label) label.setPosition(sprite!.x, sprite!.y - 29);
-          },
+          targets: sprite,
+          x: target.x,
+          y: target.y,
+          duration: 900,
+          ease: 'Sine.easeInOut',
         });
       } else {
         sprite.setPosition(target.x, target.y);
-        this.labels.get(agent.agentKey)?.setPosition(target.x, target.y - 29);
       }
-      sprite.setTint(FACTION_TINT[agent.factionKey] ?? 0xffffff);
       this.updateAgentLabel(agent, agent.agentKey === this.nearestAgent);
       if (agent.status === 'dead' || agent.status === 'detained') sprite.setAlpha(0.4);
       else sprite.setAlpha(1);
@@ -299,6 +322,13 @@ export class TownScene extends Phaser.Scene {
     label.setText(`${nearby ? 'E · ' : ''}${firstName} · ${faction}`);
     label.setColor(FACTION_TEXT[agent.factionKey] ?? '#ded6c8');
     label.setBackgroundColor(nearby ? '#2d2718f5' : '#10110eee');
+  }
+
+  private portraitFor(agent: AgentView): string {
+    const variant = FEMALE_AGENT_KEYS.has(agent.agentKey) ? 'female' : 'male';
+    if (agent.factionKey === 'aldreth') return `aldreth-${variant}`;
+    if (agent.factionKey === 'corvane') return `corvane-${variant}`;
+    return variant === 'male' ? 'independent-priest' : 'independent-woman';
   }
 
   private drawHearings(game: GameSnapshot): void {
