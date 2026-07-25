@@ -77,20 +77,11 @@ export function DebugClient() {
       void loadAgent(agentKey).then(setAgent).catch((cause) => setError(String(cause)));
     });
     const offTalk = EventBus.on('talk-agent', ({ agentKey }) => {
-      setSending(true);
-      void startConversation(agentKey).then((value) => {
-        setConversation(value);
-        setTalkingTo(value.agentKey);
-        setReply('');
-      }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
-        .finally(() => setSending(false));
+      setPanel('agent');
+      void loadAgent(agentKey).then(setAgent).catch((cause) => setError(String(cause)));
     });
     const offMove = EventBus.on('request-move', ({ locationKey }) => {
-      if (moveInFlight.current) return;
-      moveInFlight.current = true;
-      void movePlayer(locationKey, crypto.randomUUID())
-        .then(() => refresh())
-        .catch((cause) => { moveInFlight.current = false; setError(cause instanceof Error ? cause.message : String(cause)); });
+      void queueMove(locationKey);
     });
     return () => { offSelect(); offTalk(); offMove(); };
   }, [refresh]);
@@ -105,6 +96,34 @@ export function DebugClient() {
   }, [talkingTo]);
 
   const talkingAgent = useMemo(() => game?.agents.find((item) => item.agentKey === talkingTo) ?? null, [game, talkingTo]);
+
+  async function queueMove(locationKey: string) {
+    if (moveInFlight.current) return;
+    moveInFlight.current = true;
+    try {
+      await movePlayer(locationKey, crypto.randomUUID());
+      await refresh();
+    } catch (cause) {
+      moveInFlight.current = false;
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function beginConversation(agentKey: string) {
+    if (sending || game?.player.pendingMove) return;
+    setSending(true);
+    try {
+      const value = await startConversation(agentKey);
+      setConversation(value);
+      setTalkingTo(value.agentKey);
+      setReply('');
+      setPanel(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSending(false);
+    }
+  }
 
   async function sendDialogue(event: React.FormEvent) {
     event.preventDefault();
@@ -163,6 +182,14 @@ export function DebugClient() {
   const stageProgress = Math.round(game.world.globalTension / 100);
   const currentLocation = bootstrap.map.locations.find(({ key }) => key === game.player.locationKey)?.name
     ?? game.player.locationKey;
+  const tickSeconds = Math.max(0.1, 5 * 10_000 / game.world.timeScale);
+  const adjacentLocations = bootstrap.map.routes
+    .filter((route) => route.from === game.player.locationKey)
+    .map((route) => bootstrap.map.locations.find((location) => location.key === route.to))
+    .filter((location): location is NonNullable<typeof location> => Boolean(location));
+  const pendingDestination = game.player.pendingMove
+    ? bootstrap.map.locations.find((location) => location.key === game.player.pendingMove?.locationKey)
+    : null;
   return <main className="app-shell">
     <PhaserGame key={bootstrap.session.worldId} bootstrap={bootstrap} game={game} />
 
@@ -170,6 +197,7 @@ export function DebugClient() {
       <div className="brand"><strong>Hollowmere</strong><span>Town instrument · {game.player.name}</span></div>
       <dl className="instrument-strip">
         <div className="instrument"><dt>tick</dt><dd>{game.world.currentTick}</dd></div>
+        <div className="instrument"><dt>tick pace</dt><dd>{conversation ? 'held' : game.world.status === 'paused' ? 'paused' : `${tickSeconds.toFixed(tickSeconds < 1 ? 1 : 0)}s`}</dd></div>
         <div className="instrument stage-instrument"><dt>stage</dt><dd>{game.world.stage.replaceAll('_', ' ')}</dd></div>
         <div className="instrument tension-instrument"><dt>tension</dt><dd><span className="tension-track"><span style={{ width: `${stageProgress}%` }} /></span><b>{stageProgress}%</b></dd></div>
         <div className="instrument"><dt>phase</dt><dd>{game.world.phase}</dd></div>
@@ -205,9 +233,15 @@ export function DebugClient() {
         <span><i className="legend-mark legend-you" />You</span><span><i className="legend-mark legend-aldreth" />Aldreth</span>
         <span><i className="legend-mark legend-corvane" />Corvane</span><span><i className="legend-mark legend-independent" />Independent</span>
       </div>
-      <div className="shortcuts"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</span><span><kbd>E</kbd> speak</span></div>
+      <div className="shortcuts"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move locally</span><span><kbd>E</kbd> approach</span></div>
     </footer>
-    {game.player.pendingMove && <div className="pending">Movement queued for tick {game.world.currentTick + 1}: {game.player.pendingMove.locationKey}</div>}
+    <nav className="travel-nav" aria-label={`Roads from ${currentLocation}`}>
+      <span><b>{currentLocation}</b><small>one road per tick</small></span>
+      {adjacentLocations.map((location) => <button key={location.key}
+        disabled={Boolean(game.player.pendingMove || conversation) || game.world.status !== 'active'}
+        onClick={() => void queueMove(location.key)}>{location.name}<small>1 tick</small></button>)}
+    </nav>
+    {game.player.pendingMove && <div className="pending">Travelling to {pendingDestination?.name ?? game.player.pendingMove.locationKey} · arrives when tick {game.world.currentTick + 1} commits</div>}
     {error && <div className="toast" role="alert">{error}<button onClick={() => setError(null)}>dismiss</button></div>}
 
     {panel === 'chronicle' && <Panel title="Chronicle" onClose={() => setPanel(null)}>{chronicle.map((entry) => <article className={`chronicle kind-${entry.kind}`} key={`${entry.tick}-${entry.seq}`}><time>t{entry.tick}</time><div><b>{entry.kind}</b><p>{entry.description}</p><small>{entry.actorKey ?? 'world'} · {entry.locationKey ?? 'town-wide'}</small></div></article>)}</Panel>}
@@ -235,7 +269,7 @@ export function DebugClient() {
       })}</section>
     </Panel>}
     {panel === 'agent' && <Panel title={agent?.agent.name ?? 'Agent inspector'} onClose={() => setPanel(null)}>
-      {!agent ? <p className="empty">Choose an NPC on the map.</p> : <><p>{agent.summary}</p><p className="tags">{agent.traits.join(' · ')}</p><dl className="detail-list"><div><dt>faction</dt><dd>{agent.agent.factionKey}</dd></div><div><dt>location</dt><dd>{agent.agent.locationKey}</dd></div><div><dt>status</dt><dd>{agent.agent.status}</dd></div><div><dt>action</dt><dd>{agent.agent.currentAction ?? 'routine'}</dd></div></dl><h3>Personality</h3>{Object.entries(agent.personality).map(([name, value]) => <div className="metric-row" key={name}><b>{name}</b><span>{Math.round(value / 100)}%</span></div>)}<h3>Relationship with you</h3>{agent.playerRelationship ? <><div className="metric-row"><b>trust · affinity</b><span>{Math.round(agent.playerRelationship.trust / 100)} · {Math.round(agent.playerRelationship.affinity / 100)}</span></div><div className="metric-row"><b>fear · respect</b><span>{Math.round(agent.playerRelationship.fear / 100)} · {Math.round(agent.playerRelationship.respect / 100)}</span></div>{agent.playerRelationship.impression && <p className="notice">{agent.playerRelationship.impression}</p>}</> : <p className="empty">No impression yet.</p>}<h3>Recent dialogue</h3>{agent.recentDialogue.length ? agent.recentDialogue.map((item, index) => <div className="metric-row" key={`${item.tick}-${index}`}><b>t{item.tick}</b><span>{item.text}</span></div>) : <p className="empty">Nothing recorded.</p>}<h3>Strongest beliefs</h3>{agent.beliefs.map((belief) => <div className="metric-row" key={belief.claimKey}><b>{belief.claimKey}</b><span>{Math.round(belief.confidence / 100)}% · t{belief.updatedTick}</span></div>)}<h3>Relationships</h3>{agent.relationships.map((relationship) => <div className="metric-row" key={relationship.agentKey}><b>{relationship.agentKey}</b><span>sentiment {Math.round(relationship.sentiment / 100)} · trust {Math.round(relationship.trust / 100)}</span></div>)}</>}
+      {!agent ? <p className="empty">Choose an NPC on the map.</p> : <><p>{agent.summary}</p><p className="tags">{agent.traits.join(' · ')}</p><p className="approach-note">{agent.agent.name} is {agent.agent.currentAction ?? 'going about their routine'}. They have not engaged you yet.</p>{agent.agent.locationKey === game.player.locationKey && ['alive', 'injured'].includes(agent.agent.status) && <button className="speak-button" disabled={sending || Boolean(game.player.pendingMove)} onClick={() => void beginConversation(agent.agent.agentKey)}>Speak to {agent.agent.name}</button>}<dl className="detail-list"><div><dt>faction</dt><dd>{agent.agent.factionKey}</dd></div><div><dt>location</dt><dd>{agent.agent.locationKey}</dd></div><div><dt>status</dt><dd>{agent.agent.status}</dd></div><div><dt>action</dt><dd>{agent.agent.currentAction ?? 'routine'}</dd></div></dl><h3>Personality</h3>{Object.entries(agent.personality).map(([name, value]) => <div className="metric-row" key={name}><b>{name}</b><span>{Math.round(value / 100)}%</span></div>)}<h3>Relationship with you</h3>{agent.playerRelationship ? <><div className="metric-row"><b>trust · affinity</b><span>{Math.round(agent.playerRelationship.trust / 100)} · {Math.round(agent.playerRelationship.affinity / 100)}</span></div><div className="metric-row"><b>fear · respect</b><span>{Math.round(agent.playerRelationship.fear / 100)} · {Math.round(agent.playerRelationship.respect / 100)}</span></div>{agent.playerRelationship.impression && <p className="notice">{agent.playerRelationship.impression}</p>}</> : <p className="empty">No impression yet.</p>}<h3>Recent dialogue</h3>{agent.recentDialogue.length ? agent.recentDialogue.map((item, index) => <div className="metric-row" key={`${item.tick}-${index}`}><b>t{item.tick}</b><span>{item.text}</span></div>) : <p className="empty">Nothing recorded.</p>}<h3>Strongest beliefs</h3>{agent.beliefs.map((belief) => <div className="metric-row" key={belief.claimKey}><b>{belief.claimKey}</b><span>{Math.round(belief.confidence / 100)}% · t{belief.updatedTick}</span></div>)}<h3>Relationships</h3>{agent.relationships.map((relationship) => <div className="metric-row" key={relationship.agentKey}><b>{relationship.agentKey}</b><span>sentiment {Math.round(relationship.sentiment / 100)} · trust {Math.round(relationship.trust / 100)}</span></div>)}</>}
     </Panel>}
 
     {talkingTo && conversation && <section className="dialogue" aria-label={`Conversation with ${talkingAgent?.name ?? talkingTo}`}>

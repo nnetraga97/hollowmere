@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { readBudget, recordUsage } from './budget.ts';
+import { estimateCostMicros, readBudget, recordUsage } from './budget.ts';
 import { recordBelief } from './beliefs.ts';
 import { SCHEME } from './config.ts';
 import type { Client } from './db.ts';
@@ -14,6 +14,7 @@ import type { EscalationStage } from './tension.ts';
 import type { Fixed } from './fixedpoint.ts';
 import { seedRumor } from './gossip.ts';
 import { loadAgentGoals } from './goals.ts';
+import { stableId } from './ids.ts';
 
 export const STRATEGY_PROMPT_VERSION = 'strategy-v1';
 export const POSTURES = ['press', 'lie_low', 'redirect', 'force'] as const;
@@ -214,6 +215,24 @@ export async function applyStrategy(
       decision.latencyMs,
     ],
   );
+  if (decision.modelId !== 'deterministic-fallback' && decision.modelId !== 'replay') {
+    const sourceKey = String(input.tick);
+    await client.query(
+      `INSERT INTO world_inference_usage
+         (world_id, usage_id, category, source_key, model_id, calls, tokens_in, tokens_out,
+          est_cost_micros)
+       VALUES ($1, $2, 'instigator', $3, $4, 1, $5, $6, $7)
+       ON CONFLICT (world_id, category, source_key, attempt) DO NOTHING`,
+      [input.worldId, stableId(input.worldId, 'instigator', sourceKey), sourceKey,
+        decision.modelId, decision.tokensIn, decision.tokensOut,
+        estimateCostMicros({
+          calls: 1,
+          tokensIn: decision.tokensIn,
+          tokensOut: decision.tokensOut,
+          billable: !decision.modelId.includes('stub'),
+        })],
+    );
+  }
   await client.query(
     `UPDATE world_scheme_state
         SET posture = $3, ladder_index = $4, current_tactic = $5,

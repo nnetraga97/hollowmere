@@ -49,7 +49,7 @@ export interface HearingView {
 
 export interface ConversationTurn {
   turnId: string; ordinal: number; playerText: string; reply: string;
-  speechAct: string; fallback: boolean;
+  speechAct: string; referencedClaimKeys: string[]; fallback: boolean;
 }
 
 export interface Conversation {

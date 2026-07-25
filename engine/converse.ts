@@ -467,6 +467,7 @@ export async function applyStructuredConversationTurn(input: {
   reply: string;
   disclosure: Disclosure | null;
   hearingResponse: 'come' | 'decline' | 'come_but_tell_someone' | null;
+  referencedClaimKeys?: readonly string[];
   inference: InferenceClient;
 }): Promise<{ reply: string; effects: ConverseEffects; claimKey: string | null }> {
   const prepared = await withClient(async (client) => {
@@ -565,7 +566,11 @@ export async function applyStructuredConversationTurn(input: {
       [input.worldId, prepared.tick, playerSeq(prepared.commandSeq, SEQ_REPLY).next(),
         prepared.agent.locationId, prepared.agent.agentId,
         JSON.stringify({ act: input.act, claimKey: prepared.claim?.claimKey ?? null,
-          conversationTurnId: input.turnId }), `${prepared.agent.name}: ${reply}`],
+          referencedClaimKeys: [...new Set([
+            ...(input.referencedClaimKeys ?? []),
+            ...(prepared.claim?.claimKey ? [prepared.claim.claimKey] : []),
+          ])], conversationTurnId: input.turnId }),
+        `${prepared.agent.name}: ${reply}`],
     );
     await client.query(
       `UPDATE world_commands SET payload = payload || $3::JSONB

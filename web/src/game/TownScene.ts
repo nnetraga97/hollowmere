@@ -32,6 +32,13 @@ const FEMALE_AGENT_KEYS = new Set([
 ]);
 
 const PLAYER_FRAME = 595;
+const LOCAL_MOVEMENT_RADIUS = 82;
+
+interface LocationMarker {
+  marker: Phaser.GameObjects.Arc;
+  halo: Phaser.GameObjects.Arc;
+  travelLabel: Phaser.GameObjects.Text;
+}
 
 export class TownScene extends Phaser.Scene {
   private mapData: TownMap | null = null;
@@ -43,6 +50,8 @@ export class TownScene extends Phaser.Scene {
   private agents = new Map<string, Phaser.GameObjects.Container>();
   private labels = new Map<string, Phaser.GameObjects.Text>();
   private locations = new Map<string, { x: number; y: number }>();
+  private locationMarkers = new Map<string, LocationMarker>();
+  private authoritativePlayerLocation: string | null = null;
   private hearingMarkers: Phaser.GameObjects.GameObject[] = [];
   private obstacles?: Phaser.Physics.Arcade.StaticGroup;
   private keys?: {
@@ -120,6 +129,7 @@ export class TownScene extends Phaser.Scene {
       body.velocity.normalize().scale(150);
     }
     this.player.setFlipX(body.velocity.x < 0);
+    this.keepPlayerInsideLocation();
     this.syncPlayerMarker();
     this.updateProximity();
   }
@@ -211,7 +221,9 @@ export class TownScene extends Phaser.Scene {
         .setDepth(0);
       const marker = this.add.circle(point.x, point.y, LOCATION_RADIUS, 0x111116, 0.82)
         .setStrokeStyle(2, factionColor, 0.58)
-        .setDepth(1);
+        .setDepth(1)
+        .setInteractive()
+        .on('pointerdown', () => this.requestMove(location.key));
       marker.setData('locationKey', location.key);
       halo.setData('locationKey', location.key);
       const iconX = point.x - LOCATION_RADIUS * 0.72;
@@ -229,6 +241,11 @@ export class TownScene extends Phaser.Scene {
         fontFamily: 'Georgia, serif', fontStyle: 'bold', fontSize: '11px', color: '#e8dcc8',
         backgroundColor: '#0d0d12ee', padding: { x: 8, y: 4 }, letterSpacing: 1.2,
       }).setOrigin(0.5).setDepth(8);
+      const travelLabel = this.add.text(point.x, point.y - 66, '', {
+        fontFamily: 'ui-monospace, monospace', fontStyle: 'bold', fontSize: '10px',
+        color: '#171208', backgroundColor: '#ffdb78', padding: { x: 6, y: 3 },
+      }).setOrigin(0.5).setDepth(31).setVisible(false);
+      this.locationMarkers.set(location.key, { marker, halo, travelLabel });
     });
   }
 
@@ -256,10 +273,15 @@ export class TownScene extends Phaser.Scene {
     const previousWorld = this.state?.world.worldId;
     this.state = game;
     const playerLocation = this.locations.get(game.player.locationKey);
-    if (playerLocation && (!this.playerPlaced || previousWorld !== game.world.worldId)) {
+    const locationChanged = this.authoritativePlayerLocation !== game.player.locationKey;
+    if (playerLocation && (!this.playerPlaced || previousWorld !== game.world.worldId || locationChanged)) {
       this.player.setPosition(playerLocation.x, playerLocation.y + 58);
+      const body = this.player.body as Phaser.Physics.Arcade.Body;
+      body.setVelocity(0);
       this.playerPlaced = true;
+      this.authoritativePlayerLocation = game.player.locationKey;
     }
+    this.updateNavigationMarkers();
     this.syncAgents(game.agents);
     this.drawHearings(game);
   }
@@ -366,16 +388,41 @@ export class TownScene extends Phaser.Scene {
       const current = this.state.agents.find((agent) => agent.agentKey === this.nearestAgent);
       if (current) this.updateAgentLabel(current, true);
     }
+  }
 
-    if (this.state.player.pendingMove) return;
-    for (const location of this.mapData.locations) {
-      if (location.key === this.state.player.locationKey) continue;
-      if (!areAdjacent(this.mapData, this.state.player.locationKey, location.key)) continue;
-      const point = this.locations.get(location.key)!;
-      if (Phaser.Math.Distance.Between(this.player.x, this.player.y, point.x, point.y) <= LOCATION_RADIUS) {
-        EventBus.emit('request-move', { locationKey: location.key });
-        return;
-      }
+  private keepPlayerInsideLocation(): void {
+    if (!this.player || !this.state) return;
+    const anchor = this.locations.get(this.state.player.locationKey);
+    if (!anchor) return;
+    const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, anchor.x, anchor.y);
+    if (distance <= LOCAL_MOVEMENT_RADIUS) return;
+    const angle = Phaser.Math.Angle.Between(anchor.x, anchor.y, this.player.x, this.player.y);
+    this.player.setPosition(
+      anchor.x + Math.cos(angle) * LOCAL_MOVEMENT_RADIUS,
+      anchor.y + Math.sin(angle) * LOCAL_MOVEMENT_RADIUS,
+    );
+  }
+
+  private requestMove(locationKey: string): void {
+    if (!this.state || !this.mapData || this.inputCaptured) return;
+    if (this.state.world.status !== 'active' || this.state.player.pendingMove) return;
+    if (!areAdjacent(this.mapData, this.state.player.locationKey, locationKey)) return;
+    EventBus.emit('request-move', { locationKey });
+  }
+
+  private updateNavigationMarkers(): void {
+    if (!this.state || !this.mapData) return;
+    for (const [locationKey, objects] of this.locationMarkers) {
+      const current = locationKey === this.state.player.locationKey;
+      const adjacent = areAdjacent(this.mapData, this.state.player.locationKey, locationKey);
+      const available = adjacent && !this.state.player.pendingMove && this.state.world.status === 'active';
+      objects.travelLabel.setText(available ? 'TRAVEL · 1 TICK' : '').setVisible(available);
+      objects.marker.setStrokeStyle(
+        current ? 4 : available ? 3 : 2,
+        current ? 0xffdb78 : available ? 0xd6b65d : 0x59616b,
+        current || available ? 0.95 : 0.36,
+      );
+      objects.halo.setAlpha(current ? 0.14 : available ? 0.09 : 0.025);
     }
   }
 }

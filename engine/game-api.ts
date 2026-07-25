@@ -435,6 +435,13 @@ export async function queuePlayerMove(
     );
     if (pending.rowCount) throw new Error('a player move is already pending');
 
+    const conversation = await client.query(
+      `SELECT 1 FROM world_conversation_sessions
+        WHERE world_id = $1 AND player_id = $2 AND status IN ('open', 'closing') LIMIT 1`,
+      [ref.worldId, player.playerId],
+    );
+    if (conversation.rowCount) throw new Error('end the conversation before travelling');
+
     const target = await client.query<{ location_id: string }>(
       `SELECT t.location_id FROM world_locations t
         WHERE t.world_id = $1 AND t.location_key = $2

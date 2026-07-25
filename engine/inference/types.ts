@@ -42,8 +42,6 @@ export type InferenceTask =
   | 'inquire'
   /** Produce one structured reply inside an ongoing player conversation. */
   | 'conversation_turn'
-  /** Compress a completed player conversation into durable memory. */
-  | 'conversation_summary'
   /** Produce one structured NPC-to-NPC conversational exchange. */
   | 'npc_conversation';
 

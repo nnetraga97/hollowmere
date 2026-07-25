@@ -246,14 +246,9 @@ function respond(request: CompletionRequest): string {
         hearingResponse: type === 'summon'
           ? (pickFromChoices(request, 'hearingResponses', rng) ?? 'come')
           : null,
+        referencedClaimKeys: [],
       });
     }
-
-    case 'conversation_summary':
-      return JSON.stringify({
-        summary: 'The outsider and the agent spoke at length about the unrest in Hollowmere.',
-        impression: 'The conversation will color their next meeting.',
-      });
 
     case 'npc_conversation':
       return JSON.stringify({

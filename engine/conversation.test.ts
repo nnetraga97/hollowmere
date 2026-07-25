@@ -22,27 +22,38 @@ describe('player conversation output parsing', () => {
     assert.deepEqual(parseTurn(JSON.stringify({
       reply: 'I have heard enough.', speechAct: 'inquire',
       disclosure: 'deflect', hearingResponse: null,
-    })), {
+      referencedClaimKeys: ['rowan_at_the_quay'],
+    }), new Set(['rowan_at_the_quay'])), {
       reply: 'I have heard enough.', speechAct: 'inquire',
       disclosure: 'deflect', hearingResponse: null,
+      referencedClaimKeys: ['rowan_at_the_quay'],
     });
     assert.deepEqual(parseTurn(JSON.stringify({
       reply: 'Come to the square.', speechAct: 'summon',
-      disclosure: null, hearingResponse: 'come_but_tell_someone',
+      disclosure: null, hearingResponse: 'come_but_tell_someone', referencedClaimKeys: [],
     })), {
       reply: 'Come to the square.', speechAct: 'summon',
-      disclosure: null, hearingResponse: 'come_but_tell_someone',
+      disclosure: null, hearingResponse: 'come_but_tell_someone', referencedClaimKeys: [],
     });
   });
 
   test('rejects malformed and non-allowlisted outputs', () => {
     const invalid = [
       'not json',
-      JSON.stringify({ reply: '', speechAct: 'smalltalk', disclosure: null, hearingResponse: null }),
-      JSON.stringify({ reply: 'x'.repeat(2001), speechAct: 'smalltalk', disclosure: null, hearingResponse: null }),
-      JSON.stringify({ reply: 'Hello.', speechAct: 'invent', disclosure: null, hearingResponse: null }),
-      JSON.stringify({ reply: 'Hello.', speechAct: 'inquire', disclosure: 'invent', hearingResponse: null }),
-      JSON.stringify({ reply: 'Hello.', speechAct: 'summon', disclosure: null, hearingResponse: 'invent' }),
+      JSON.stringify({ reply: '', speechAct: 'smalltalk', disclosure: null,
+        hearingResponse: null, referencedClaimKeys: [] }),
+      JSON.stringify({ reply: 'x'.repeat(2001), speechAct: 'smalltalk', disclosure: null,
+        hearingResponse: null, referencedClaimKeys: [] }),
+      JSON.stringify({ reply: 'Hello.', speechAct: 'invent', disclosure: null,
+        hearingResponse: null, referencedClaimKeys: [] }),
+      JSON.stringify({ reply: 'Hello.', speechAct: 'inquire', disclosure: 'invent',
+        hearingResponse: null, referencedClaimKeys: [] }),
+      JSON.stringify({ reply: 'Hello.', speechAct: 'summon', disclosure: null,
+        hearingResponse: 'invent', referencedClaimKeys: [] }),
+      JSON.stringify({ reply: 'Hello.', speechAct: 'smalltalk', disclosure: null,
+        hearingResponse: null, referencedClaimKeys: ['invented_claim'] }),
+      JSON.stringify({ reply: 'Hello.', speechAct: 'smalltalk', disclosure: null,
+        hearingResponse: null }),
     ];
     for (const text of invalid) assert.equal(parseTurn(text), null);
   });
@@ -251,11 +262,14 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
       text: 'Do you remember me?', idempotencyKey: 'turn-2', inference: observing,
     });
     const prompt = JSON.parse(userPrompt) as {
-      scene: { location: { name: string }; publicEscalationStage: string };
+      scene: {
+        location: { name: string }; publicEscalationStage: string;
+        audience: { count: number; privacy: string };
+      };
       npc: { name: string; persona: string; personality: { honesty: number } };
       relationshipWithPlayer: { lastingImpression: string };
       recalledMemories: string[];
-      subjectiveBeliefs: unknown[];
+      knowledgeItems: unknown[];
       latestPlayerUtterance: string;
     };
     assert.match(systemPrompt, /speechAct classifies the latest PLAYER utterance/);
@@ -263,13 +277,55 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     assert.ok(speechActChoices.includes('summon'));
     assert.ok(prompt.scene.location.name.length > 0);
     assert.equal(prompt.scene.publicEscalationStage, 'calm');
+    assert.ok(Number.isInteger(prompt.scene.audience.count));
+    assert.ok(['private', 'public'].includes(prompt.scene.audience.privacy));
     assert.ok(prompt.npc.name.length > 0);
     assert.ok(prompt.npc.persona.length > 0);
     assert.ok(Number.isInteger(prompt.npc.personality.honesty));
     assert.match(prompt.relationshipWithPlayer.lastingImpression, /threat/i);
     assert.ok(prompt.recalledMemories.length > 0);
-    assert.ok(Array.isArray(prompt.subjectiveBeliefs));
+    assert.ok(Array.isArray(prompt.knowledgeItems));
+    assert.doesNotMatch(userPrompt, /audibleWitnesses/);
     assert.equal(prompt.latestPlayerUtterance, 'Do you remember me?');
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
+  test('unsupported named people fall back and cannot enter durable memory', async () => {
+    const ref = await freshWorld(711);
+    const stub = createStubClient();
+    const tasks: string[] = [];
+    const scripted = {
+      ...stub,
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        tasks.push(request.task);
+        const base = await stub.complete(request);
+        if (request.task !== 'conversation_turn') return base;
+        return { ...base, text: JSON.stringify({
+          reply: 'I heard it from Marla while she polished the lantern glass.',
+          speechAct: 'inquire', disclosure: 'deflect', hearingResponse: null,
+          referencedClaimKeys: [],
+        }) };
+      },
+    };
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const result = await takeConversationTurn({
+      worldId: ref.worldId, sessionId: ref.sessionId, conversationId: started.conversationId,
+      text: 'Who told you?', idempotencyKey: 'turn', inference: scripted,
+    });
+    assert.equal(result.turn.fallback, true);
+    assert.doesNotMatch(result.turn.reply, /Marla/);
+
+    await closeConversation({
+      worldId: ref.worldId, sessionId: ref.sessionId, conversationId: started.conversationId,
+      idempotencyKey: 'close', inference: scripted,
+    });
+    assert.deepEqual(tasks, ['conversation_turn'], 'closing must not ask a model to rewrite durable memory');
+    const memories = await query<{ content: string }>(
+      `SELECT content FROM world_memories WHERE world_id = $1 AND kind = 'dialogue'`,
+      [ref.worldId],
+    );
+    assert.ok(memories.length > 0);
+    assert.ok(memories.every((memory) => !memory.content.includes('Marla')));
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 
@@ -341,10 +397,10 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
       inference,
     });
     const prompt = JSON.parse(captured) as {
-      subjectiveBeliefs: { claim: string }[];
+      knowledgeItems: { claim: string }[];
     };
-    assert.ok(!prompt.subjectiveBeliefs.some((belief) => belief.claim === historical.text));
-    assert.ok(prompt.subjectiveBeliefs.some((belief) => belief.claim === future.text),
+    assert.ok(!prompt.knowledgeItems.some((belief) => belief.claim === historical.text));
+    assert.ok(prompt.knowledgeItems.some((belief) => belief.claim === future.text),
       'a strategy record from a future tick must not affect the current prompt');
     await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
   });
@@ -380,7 +436,7 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
         if (request.task !== 'conversation_turn') return base;
         return { ...base, text: JSON.stringify({
           reply: 'I can tell you who gave me the story.', speechAct: 'inquire',
-          disclosure: 'name_them', hearingResponse: null,
+          disclosure: 'name_them', hearingResponse: null, referencedClaimKeys: [],
         }) };
       },
     };
@@ -395,6 +451,16 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
         WHERE world_id = $1 AND kind = 'provenance'`, [ref.worldId],
     );
     assert.equal(evidence[0]!.count, 1);
+    await closeConversation({
+      worldId: ref.worldId, sessionId: ref.sessionId,
+      conversationId: started.conversationId, idempotencyKey: 'close', inference: scripted,
+    });
+    const summary = await query<{ summary: string }>(
+      `SELECT summary FROM world_conversation_sessions
+        WHERE world_id = $1 AND conversation_id = $2`,
+      [ref.worldId, started.conversationId],
+    );
+    assert.match(summary[0]!.summary, new RegExp(rumor[0]!.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 
@@ -408,7 +474,7 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
         if (request.task !== 'conversation_turn') return base;
         return { ...base, text: JSON.stringify({
           reply: 'I will come.', speechAct: 'summon', disclosure: null,
-          hearingResponse: 'come',
+          hearingResponse: 'come', referencedClaimKeys: [],
         }) };
       },
     };
@@ -439,7 +505,7 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
         if (request.task !== 'conversation_turn') return base;
         return { ...base, text: JSON.stringify({
           reply: 'I have made my decision.', speechAct: 'summon', disclosure: null,
-          hearingResponse: 'decline',
+          hearingResponse: 'decline', referencedClaimKeys: [],
         }) };
       },
     };

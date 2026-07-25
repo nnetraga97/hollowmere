@@ -468,7 +468,10 @@ async function loadDialoguePromptContext(
                AND scheme_record.agent_id = belief.agent_id
                AND scheme_record.task = 'strategy'
                AND scheme_record.decision->>'claimId' = belief.claim_id::STRING
-               AND scheme_record.tick <= $4
+               -- Strategy and dialogue are both prepared before either decision is
+               -- committed. A replay preserves the current tick's strategy record,
+               -- so only earlier records were visible when this prompt was recorded.
+               AND scheme_record.tick < $4
           )
      ) ranked
      WHERE rank <= 6
@@ -684,7 +687,7 @@ async function loadPairs(client: Client, worldId: string, tick: number): Promise
                  AND scheme_record.agent_id = sender.agent_id
                  AND scheme_record.task = 'strategy'
                  AND scheme_record.decision->>'claimId' = c.claim_id::STRING
-                 AND scheme_record.tick <= $2
+                 AND scheme_record.tick < $2
             ) AS from_scheme_claim,
             EXISTS (
               SELECT 1 FROM cognition_records scheme_record
@@ -692,7 +695,7 @@ async function loadPairs(client: Client, worldId: string, tick: number): Promise
                  AND scheme_record.agent_id = receiver.agent_id
                  AND scheme_record.task = 'strategy'
                  AND scheme_record.decision->>'claimId' = c.claim_id::STRING
-                 AND scheme_record.tick <= $2
+                 AND scheme_record.tick < $2
             ) AS to_scheme_claim
        FROM candidates
        JOIN world_agents sender
