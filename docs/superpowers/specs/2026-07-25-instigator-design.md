@@ -28,8 +28,9 @@ Measured against Park et al., *Generative Agents* (2023):
 | Plans decompose day → hour → 5–15 min, replanned on reaction | `{intention, targetLocationKey}` for one tick, expiring after 12 into a static routine table. |
 | Dynamic self-summary composed from reflections | Static `persona.summary` frozen at tick 0. |
 
-**In scope for this spec:** agent↔agent dialogue, and goals with multi-tick
-plans.
+**In scope for this spec:** agent↔agent dialogue, goals with multi-tick plans,
+and — following from both — player-convened hearings (§6), which need the same
+multi-tick-intent machinery to let an agent be somewhere on purpose.
 
 **Explicitly deferred:** model-rated importance, reflection trees, dynamic
 self-summary, relationship-aware prompts. These are what make agents *feel*
@@ -185,8 +186,9 @@ move. This is real deception: the misdirection is the model's, not the author's.
 
 **What the strategy call sees:** its own agenda, its goal, the claims it holds,
 who is present and reachable, what those people currently believe, how talkative
-and trusting they are, which witnesses are close to exposing it, and the current
-`heat_on_culprit`.
+and trusting they are, which witnesses are close to exposing it, the current
+`heat_on_culprit`, and **any hearing the player has announced within earshot**
+(§6) — who was summoned, where, and by when.
 
 **What it returns**, structured and allowlist-validated:
 
@@ -205,7 +207,8 @@ like an opponent:
   than start a new one.
 - `poison_the_well` — discredit a witness *before* they can testify. Working on
   the ferryman's reputation before he speaks is a strategy the model should be
-  able to find on its own.
+  able to find on its own; an announced hearing (§6) gives it both an obvious
+  target and a deadline.
 - `feign_moderation` — publicly counsel calm, to build trust with someone worth
   spending later.
 - `redirect_suspicion` — under heat, seed a claim against a *different* culprit
@@ -407,6 +410,84 @@ success: culprit `status='detained'`, goal `suspended`, their seeded rumors cool
 `worlds.ending`'s CHECK constraint gains `'exposed'`. Peace by the existing route
 remains reachable and unchanged.
 
+### Convening a hearing — the primary exposure route
+
+Reaching three specific people's belief thresholds by talking to each of them
+separately is arithmetically correct and dramatically dead. The natural way to
+expose someone is to gather credible witnesses and say it in front of them, so
+the accused cannot deny it privately one listener at a time. The fiction already
+knows this: `magistrate_opens_inquiry` summons both Houses to the plaza. It is
+simply not available to the player.
+
+Four things are missing, and the first is a defect in the existing engine.
+
+**(a) Reputation is write-only.** `player_reputation` is written at
+`converse.ts:570` and **read by nothing** — a grep of the engine returns one
+write and no reads. `CONVERSE.persuasion` is a flat 160% applied identically
+whether the player is trusted or has spent twenty minutes slandering people. The
+game tracks standing, displays it, and ignores it.
+
+Fixed independently of the hearing: persuasion becomes
+`base × f(reputation with the listener's faction) × g(trust)`, all fixed-point,
+clamped. This changes existing balance — see §9.
+
+**(b) A tenth speech act, `summon`.** Carries a location and a due tick. This is
+the first player utterance that asks for something rather than asserting
+something, which is why none of the existing nine fit.
+
+**(c) Commitments, so agents can be somewhere on purpose.**
+
+```sql
+CREATE TABLE world_agent_commitments (
+  world_id     UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  agent_id     UUID NOT NULL,
+  location_id  UUID NOT NULL,
+  due_tick     INT8 NOT NULL,
+  source       STRING NOT NULL CHECK (source IN ('player','trigger','agent')),
+  status       STRING NOT NULL CHECK (status IN ('pending','kept','broken')),
+  created_tick INT8 NOT NULL,
+  PRIMARY KEY (world_id, agent_id, due_tick),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, location_id) REFERENCES world_locations (world_id, location_id)
+);
+```
+
+`movement.ts` checks commitments **before** routine: a pending commitment whose
+`due_tick` is within travel distance overrides the phase's scheduled location.
+This is the same multi-tick-intent machinery §4 builds for goals, so it is
+largely already paid for.
+
+**Whether they come is a character decision**, per §4's principle — the model
+chooses from `{come, decline, come_but_tell_someone}` given trust, sentiment,
+reputation, and faction. The third option is the interesting one: an agent may
+agree in good faith and then mention it to the wrong person. **The player's own
+witnesses can leak the hearing.**
+
+**(d) Audience-scoped effects.** An accusation made where N agents are present
+applies belief movement to **all of them**, not only the conversational partner —
+scaled by each listener's own alignment through the existing `beliefs.ts` path,
+and with the aggregate tension change routed through `TENSION.maxRisePerTick` so
+a mass reveal cannot vault a stage. Saying it to a room is materially different
+from saying it five times in five streets, which today it is not.
+
+### Why this makes the antagonist better
+
+Summoning is **loud**. Each `summon` writes a `world_event` at the listener's
+location, and those events are exactly what the instigator's strategy call reads.
+So a hearing hands the antagonist a target and a deadline:
+
+- `poison_the_well` acquires an obvious use — discredit one of the announced
+  witnesses before the due tick.
+- `redirect_suspicion` acquires urgency.
+- If the culprit attends, they answer in front of the same audience, and the
+  audience-scoped effects cut both ways.
+
+The endgame stops being "accumulate three provenance links, then accuse" and
+becomes a confrontation with a race attached. The quiet route — persuading the
+leaders and the magistrate individually — remains valid for players who never
+think of convening anything, and is the fallback the winnability test in §10
+measures separately.
+
 ---
 
 ## 7. Adaptivity
@@ -442,15 +523,22 @@ model — see §6.
 ## 8. Module and schema summary
 
 **New engine modules:** `goals.ts`, `schemes.ts`, `dialogue.ts`, `evidence.ts`,
-`exposure.ts`.
+`exposure.ts`, `hearings.ts`.
 
-**Modified:** `converse.ts` (`inquire` effects, evidence capture),
+**Modified:** `converse.ts` (`inquire` effects, evidence capture, the `summon`
+act, audience-scoped effects, reputation-weighted persuasion),
 `runtick.ts` (dialogue and scheme steps), `cognition.ts` (goal-aware prompts,
-dialogue record reuse), `config.ts` (new constants),
-`scenario/schema.ts` + `instantiate.ts` (culprits block, per-world truth
-resolution, 30 agents), `db/schema.sql`, `engine/api.ts` (read models).
+dialogue record reuse), `movement.ts` (commitments outrank routine),
+`config.ts` (new constants), `scenario/schema.ts` + `instantiate.ts` (culprits
+block, per-world truth resolution, 30 agents), `db/schema.sql`,
+`engine/api.ts` (read models).
 
-**New tables:** `world_culprit`, `world_agent_goals`, `world_player_evidence`.
+**New tables:** `world_culprit`, `world_agent_goals`, `world_player_evidence`,
+`world_agent_commitments`.
+
+**New speech act:** `summon` — the tenth, and the first that asks for something
+rather than asserting something. `SPEECH_ACTS` and the classifier's allowlist
+both grow by one.
 
 **Altered:** `worlds.ending` CHECK gains `'exposed'`; `cognition_records` gains a
 `task` discriminator taking `plan`, `reflect`, `dialogue`, and `strategy`.
@@ -478,6 +566,19 @@ rather than replaying against it.
   reconciliation to peace. If it cannot, the game is not winnable and the
   thresholds in §6 are wrong.
 - **Budget pressure is real** (§5) and may force raising `callBudget`.
+- **Wiring reputation into persuasion rebalances every existing conversation
+  test.** `player_reputation` is currently write-only (§6), so every scripted
+  transcript in the suite — including the reconciliation-reaches-peace test —
+  has been running at a flat 160% persuasion. Once standing matters, an early
+  reconciliation campaign is *weaker* than it is today (the player starts at
+  zero) and a late one is stronger. Expect `converse.test.ts` and the peace path
+  to need re-baselining alongside the escalation tests, and expect the fix to
+  make the peace route slightly harder, which is probably correct.
+- **Audience-scoped effects are a tension amplifier.** N listeners means N belief
+  updates from one utterance. The `TENSION.maxRisePerTick` cap contains the
+  aggregate, but a hearing in a crowded plaza is the largest single event the
+  engine can produce, and it is player-triggerable at will. Worth watching for a
+  degenerate strategy where the player farms assemblies rather than investigating.
 - **A strategising antagonist is less tunable than a scripted one.** Under
   Bedrock the instigator's choices vary run to run, so the escalation curve is a
   distribution rather than a number. Two consequences: the canonical-arc
@@ -562,16 +663,48 @@ Added to the existing suite in `engine/*.test.ts`:
 - Belief in `instigator_exposed` reaching actionable confidence in both leaders
   and the magistrate ends the world with `ending='exposed'`; falling short of any
   one of the three does not.
-- **Winnability:** a scripted investigation transcript reaches `exposed` before
-  `first_blood` under the canonical seed. The same transcript run after
-  `force_war_now` has fired does not.
+- **Winnability, both routes:** a scripted investigation transcript reaches
+  `exposed` before `first_blood` under the canonical seed — measured separately
+  for the quiet route (persuading the leaders and magistrate individually) and
+  the hearing route. Both must be winnable; if only one is, the other is
+  mistuned. The same transcripts run after `force` posture has fired do not.
 - The prompt-injection corpus, run through `inquire` and through agent dialogue,
   produces no effect outside the allowlist, grants no evidence, and moves no
   stage.
 
+**Hearings**
+- A `summon` writes a `world_agent_commitments` row and a `world_event` at the
+  listener's location. The event is visible to the instigator's strategy inputs.
+- An agent under `come` diverts from routine and is at the location by
+  `due_tick`; `movement.ts` prefers the commitment over the phase's scheduled
+  location, and the commitment is marked `kept`.
+- An agent under `decline` never diverts; the commitment is marked `broken` at
+  `due_tick` and no movement event is written.
+- Under `come_but_tell_someone` the culprit receives the hearing in their
+  strategy inputs even when no summon was addressed to them — asserted by
+  running a world where the culprit is not summoned and confirming they know.
+- **Audience scope:** an accusation at a location with N present writes N
+  `belief_updates` rows, one per listener, each scaled by that listener's own
+  alignment — not N identical deltas.
+- The aggregate tension change from a hearing is clamped by
+  `TENSION.maxRisePerTick`, and a hearing cannot advance a stage within its own
+  tick.
+- A hearing with both leaders and the magistrate present, at sufficient evidence
+  and reputation, reaches `ending='exposed'`; the same hearing missing any one of
+  the three does not.
+
+**Reputation**
+- Persuasion scales with `player_reputation` against the listener's faction: the
+  identical utterance from a high-standing and a low-standing player produces
+  different belief deltas. This currently cannot fail, because nothing reads the
+  column.
+- Reputation is bounded, so no amount of standing lets one utterance exceed
+  `BELIEF.maxShiftPerTransmission`.
+
 **Determinism, unchanged**
 - Same `{scenarioVersion, seed, playerCommands}` under stub → byte-identical
   event, belief, and tension sequences, with the instigator active.
+- A commitment kept or broken is deterministic across two worlds from one seed.
 
 ---
 
