@@ -10,7 +10,8 @@
   "workspaces": [
     "engine",
     "scheduler",
-    "harness"
+    "harness",
+    "web"
   ],
   "scripts": {
     "preflight": "./scripts/preflight.sh",
@@ -21,14 +22,18 @@
     "typecheck": "tsc --noEmit",
     "test": "node --env-file-if-exists=.env --test-timeout=60000 --test \"engine/**/*.test.ts\"",
     "test:full": "HOLLOWMERE_SLOW_TESTS=1 node --env-file-if-exists=.env --test-timeout=900000 --test \"engine/**/*.test.ts\"",
-    "check": "npm run typecheck && npm test",
-    "check:full": "npm run typecheck && npm run test:full",
+    "check": "npm run typecheck && npm test && npm run check:web",
+    "check:full": "npm run typecheck && npm run test:full && npm run check:web",
+    "check:web": "npm run web:typecheck && npm --workspace @hollowmere/web test && npm run web:build",
     "check:bedrock": "node --env-file-if-exists=.env scripts/check-bedrock.ts",
     "seed": "node --env-file-if-exists=.env scripts/seed.ts",
     "sim": "node --env-file-if-exists=.env harness/sim.ts",
     "repl": "node --env-file-if-exists=.env harness/repl.ts",
     "scheduler": "node --env-file-if-exists=.env scheduler/worker.ts",
-    "dashboard": "node --env-file-if-exists=.env web/server.ts"
+    "dashboard": "npm --workspace @hollowmere/web run dev",
+    "web": "npm --workspace @hollowmere/web run dev",
+    "web:build": "npm --workspace @hollowmere/web run build",
+    "web:typecheck": "npm --workspace @hollowmere/web run typecheck"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

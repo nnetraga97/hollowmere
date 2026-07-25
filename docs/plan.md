@@ -547,6 +547,13 @@ Small **allowlisted, validated** condition/effect DSL — integer comparisons ov
 ### Phase 2 — Game client
 Phaser 3 over the same engine API. CC0 assets (Kenney.nl / LPC) — **not** Stardew's. Game-first viewport, WASD, walk-up dialogue via SSE, toggle panels for social graph + chronicle.
 
+**Implemented on `codex/phase-2-phaser`:** Next.js 16 + Phaser 3.90 workspace,
+signed session-scoped worlds, route-validated movement, colocated SSE dialogue,
+the playable Hollowmere map, agent inspection, graph/chronicle/claim/tension
+instruments, safe pause/speed/restart controls, and opt-in Engine Truth. Evidence
+and hearing views follow the instigator spec and remain capability-gated until
+the parallel engine implementation is committed and merged.
+
 ### Phase 3 — Cloud + AWS
 `ccloud` provisioning · migrate to CockroachDB Cloud · **Managed MCP + Town Investigator** (read-only role) · ECS/Fargate web + scheduler · optional S3 chronicle exports.
 

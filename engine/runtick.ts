@@ -407,9 +407,12 @@ async function applyPendingCommands(
           await client.query(
             `UPDATE world_players p
                 SET location_id = l.location_id
-               FROM world_locations l
+               FROM world_locations l, world_routes r
               WHERE p.world_id = $1 AND l.world_id = $1 AND l.location_key = $2
-                AND p.player_id = $3`,
+                AND p.player_id = $3
+                AND r.world_id = p.world_id
+                AND r.from_location_id = p.location_id
+                AND r.to_location_id = l.location_id`,
             [worldId, locationKey, command.payload.playerId ?? null],
           );
         }

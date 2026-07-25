@@ -29,8 +29,14 @@ loader · inference (stub + Bedrock) · retrieval · gossip + beliefs · tension
 stages, peace and triggers · `runTick` + scheduler · `converse` · headless
 harness + REPL · read-only debug dashboard.
 
-Next: the Phaser client (Phase 2), then CockroachDB Cloud, Managed MCP, and
-ECS/Fargate (Phase 3).
+Phase 2 now has a production-shaped Next.js + Phaser debug client on the
+`codex/phase-2-phaser` branch: a playable town map, session-isolated APIs,
+walk-up streaming dialogue, safe simulation controls, and the dashboard's
+diagnostic views. Evidence and hearing panels are wired to the instigator spec
+and activate when that engine implementation is integrated.
+
+Next: finish the instigator-engine merge, then CockroachDB Cloud, Managed MCP,
+and ECS/Fargate (Phase 3).
 
 ### The town, left alone
 
@@ -69,7 +75,7 @@ Then watch a town destroy itself:
 npm run sim -- --ticks 360 --seed 42    # headless: tension curve, chronicle, belief
 npm run repl                            # interactive: tick, talk, belief, graph
 npm run scheduler                       # the service that advances worlds
-npm run dashboard                       # read-only instrument on :8099
+npm run web                             # playable Phaser instrument on :3000
 ```
 
 `npm run preflight` is a gate, not a formality: it verifies that vector indexing,
@@ -95,7 +101,7 @@ the application working normally, not a staged one.
 | `engine/` | Rules, retrieval, gossip, beliefs, tension, triggers, cognition, `runTick`, `converse`, read models |
 | `scheduler/` | Lease-guarded non-overlapping loop + service entrypoint |
 | `harness/` | `sim.ts` headless runner, `repl.ts` interactive shell |
-| `web/` | Read-only debug dashboard (no build step, no dependencies) |
+| `web/` | Next.js + Phaser playable debug client, session APIs, and React instruments |
 | `scripts/` | Preflight, migrate, seed, Bedrock check |
 | `infra/` | Local 3-node cluster |
 | `docs/` | Plan and status, preflight findings, AWS setup |
