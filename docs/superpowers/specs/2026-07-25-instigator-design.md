@@ -199,6 +199,22 @@ least one carrying an agenda or a rumor above `GOSSIP.minHeat`, ordered on
   of §6.
 - Belief and trust movement through the existing `beliefs.ts` path.
 
+**Provenance is written by the rules, never parsed out of generated text.** The
+pair selection and the scheme decide who tells whom which claim; the engine
+writes the `world_rumor_spread` row and the belief update from *that*, and the
+model's line is flavor text attached to a decision already made. Nothing is
+extracted from the model's output and turned into a fact.
+
+This is not fastidiousness. Multi-agent dialogue in this exact architecture is
+documented to hallucinate and to *propagate* the resulting errors through agent
+memory (§11). Every other system tolerates that as a believability cost; here it
+would be fatal, because the win condition rests on provenance integrity. An agent
+who forms a memory that someone told them something never said produces a
+`from_agent_id` chain that lies, sends the player to an innocent townsperson, and
+leaves the world unwinnable with no recovery path. Rules-written provenance makes
+that unrepresentable, and makes screening-and-regeneration frameworks unnecessary
+for correctness — they would only improve prose.
+
 **Budget.** `COGNITION.callBudget` is 400. One exchange per tick over a 360-tick
 run is 360 calls on its own, which starves cognition. Resolution: gate to one
 exchange per 6 ticks — 60 exchanges over a full run, one model call each — with
@@ -218,7 +234,7 @@ and must draw **unconditionally**, per decisions 13 and 23.
 
 ## 6. Deception, evidence, and exposure
 
-### Deception is a data property
+### Deception is a data property — and the model is never told the plot
 
 The instigator's own `agent_beliefs` row for the claims they push sits
 **negative** — they know it is false; they invented it — while they seed and
@@ -228,6 +244,24 @@ belief *is* the deception, and it is auditable in existing tables.
 
 Audience-varying contradiction comes from the scheme naming which claim to push
 at which faction: blame Corvane at the quay, blame Aldreth at the mill.
+
+**The model is never told it is playing the instigator.** This is a hard rule,
+adopted from the hidden-role literature (§11): agents asked to reason as a
+concealed role and then speak as an innocent one leak the concealed role, because
+the mismatch between private reasoning and public speech confuses the model into
+voicing the private thought. Instructing a model to lie well is also a poor bet —
+observed deception is mostly equivocation and rarely effective.
+
+So the instigator's dialogue prompt contains the **cover story only**: who they
+are, which claim they hold, and who they are speaking to. "You are Rusk Baelen.
+You believe House Corvane ordered the prince's death. Say so to Ned Quilley."
+The model plays a sincere partisan; it has no concealed role to leak because it
+has no concealed role at all. The scheming lives entirely in rule-driven scheme
+selection, which the model never sees.
+
+This upgrades the engine's existing invariant from *model output never selects an
+effect* to **model output never knows the plot** — and it is cheaper, since the
+agenda never enters a prompt.
 
 ### Evidence — three channels
 
@@ -351,6 +385,11 @@ Added to the existing suite in `engine/*.test.ts`:
 - A colocated third agent perceives the exchange through `loadSituation`.
 - Pair selection is identical across two worlds built from one seed.
 - An exhausted budget degrades dialogue to templated text and keeps ticking.
+- **Provenance survives an adversarial model.** With an inference client whose
+  generated line names a *different* agent as the source, or contains injected
+  instructions to that effect, `world_rumor_spread.from_agent_id` still records
+  the agent the rules selected. This is the guard on finding 2 in §11, and the
+  reason the world stays winnable.
 - **Replay:** a recorded run with dialogue replays with zero inference calls,
   reproducing the same events and belief table — the existing `replay.test.ts`
   discipline extended to the new record type.
@@ -360,6 +399,11 @@ Added to the existing suite in `engine/*.test.ts`:
   while they publicly accuse with it.
 - The instigator pushes different claims to different factions, and the
   contradiction is detectable from `world_events` alone.
+- **The agenda never enters a prompt.** Assert over the constructed prompt for an
+  instigator dialogue turn that it contains no goal key, no scheme key, and no
+  reference to the culprit role. This is the guard on finding 1 in §11; without a
+  test it will be reintroduced the first time someone tries to improve the
+  instigator's dialogue.
 
 **Evidence and exposure**
 - `inquire` returns the true `from_agent_id` above the trust threshold and
@@ -383,11 +427,77 @@ Added to the existing suite in `engine/*.test.ts`:
 
 ---
 
-## 11. Attribution
+## 11. Research basis, and what it changed
+
+Reviewed before committing to this design. Two findings changed it; both changes
+are simplifications.
+
+### What the literature validates
+
+**Hybrid authored-plus-emergent is the consensus, not a compromise.** Interactive
+drama work converges on the shape used here: *Drama Llama* (2025) fires authored
+"storylets" when story conditions match and injects stage directions into an
+otherwise emergent scene; *StoryVerse* (FDG 2024) introduces "abstract acts" to
+mediate between authorial intent and emergent LLM character behaviour. The scheme
+ladder in §4 — authored steps gated by preconditions over live world state — is
+the same construct. Neither pure-scripted nor pure-emergent has a credible
+advocate.
+
+**Cost pressure is more severe than assumed, which vindicates the rules-heavy
+split.** A four-player GPT-4 simulation has been costed at ~$5,400; the original
+25-agent two-day Smallville run cost thousands in credits. *Lyfe Agents* (2023)
+reports 10–100× cost reduction chiefly via an **option-action** split — high-level
+"options" selected infrequently, low-level actions executed cheaply — which is
+structurally the same as goals plus schemes here. The 60-exchange cap in §5 is
+the design, not a limitation. Lyfe Agents also had agents solve a murder mystery
+collaboratively, so a mystery on this kind of substrate is demonstrated.
+
+### Finding 1 — hidden-role leakage (changed §6)
+
+Agents assigned a concealed role and asked to speak as though they held a
+different one **reliably leak the concealed role**: reasoning as X and then
+speaking as not-X produces a mismatch that surfaces the private thought in public
+speech. This is reported repeatedly across the Werewolf/Avalon/Among Us line of
+work. Related: observed deception is mostly *equivocation* rather than lying, and
+rarely improves outcomes — so instructing a model to lie well is a bad bet.
+
+The first draft of §6 walked into this by having the model voice a character
+whose private belief contradicts their public claim. **Amended:** the model is
+never told it is the instigator, and the agenda never enters a prompt. See §6.
+
+### Finding 2 — dialogue hallucination propagates (changed §5)
+
+*Cohesive Conversations* (COLM 2024) found repetition, inconsistency,
+hallucination, and **propagation of erroneous information through agent memory**
+in exactly the Generative Agents multi-agent dialogue setup §5 adds. Their remedy
+is a screening/diagnosis/regeneration pass over generated utterances.
+
+For most systems that is a believability cost. Here it would be fatal: the win
+condition rests on provenance integrity, and a hallucinated "who told me" makes
+the world unwinnable. **Amended:** provenance is rules-written and never parsed
+from model output, which makes the failure unrepresentable rather than corrected
+after the fact. See §5.
+
+### Considered and rejected
+
+**A centralised director agent** that watches the simulation and injects beats to
+keep the story moving — the main structural alternative in the drama-management
+literature. Rejected on two grounds: it undermines "the town did this to itself",
+and it introduces a component whose decisions are not auditable from the history,
+which is against the grain of every other subsystem here.
+
+**Summarize-and-forget memory** (Lyfe Agents). Real cost savings, but aimed at
+long-running agents; a world caps at 30 minutes and 360 ticks. Not needed.
+
+---
+
+## 12. Attribution
 
 Agent architecture continues to follow Park et al., *Generative Agents* (2023).
 The antagonist-with-concealed-agenda structure follows the interactive-drama and
-drama-management line of work rather than the social-simulation line; see
-*Towards Enhanced Immersion and Agency for LLM-based Interactive Drama* (2025)
-and *HAMLET* (2025). Escalation dynamics remain Crucible-inspired in dynamics
-only — original town, characters, and text.
+drama-management line rather than the social-simulation line; see *Towards
+Enhanced Immersion and Agency for LLM-based Interactive Drama* (2025), *HAMLET*
+(2025), *Drama Llama* (2025), and *StoryVerse* (FDG 2024). Cost architecture
+follows *Lyfe Agents* (2023). Dialogue-integrity handling responds to *Cohesive
+Conversations* (COLM 2024). Escalation dynamics remain Crucible-inspired in
+dynamics only — original town, characters, and text.
