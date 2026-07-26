@@ -311,6 +311,27 @@ dbSuite('retrieval against CockroachDB', () => {
     }
   });
 
+  test('access replay skips a recorded memory removed by rewind', async () => {
+    const client = await getPool().connect();
+    try {
+      const existing = await query<{ memory_id: string }>(
+        `SELECT memory_id FROM world_memories
+          WHERE world_id = $1 AND agent_id = $2 ORDER BY memory_id LIMIT 1`,
+        [worldId, agentId],
+      );
+      const missing = '00000000-0000-4000-8000-000000000001';
+      await recordAccesses(client, worldId, [existing[0]!.memory_id, missing], 43);
+      const accesses = await query<{ memory_id: string }>(
+        `SELECT memory_id FROM memory_accesses
+          WHERE world_id = $1 AND accessed_tick = 43 ORDER BY memory_id`,
+        [worldId],
+      );
+      assert.deepEqual(accesses.map((row) => row.memory_id), [existing[0]!.memory_id]);
+    } finally {
+      client.release();
+    }
+  });
+
   test('a recalled memory becomes more recent', async () => {
     const client = await getPool().connect();
     try {

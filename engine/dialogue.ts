@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { BELIEF, DIALOGUE, GOSSIP } from './config.ts';
+import { BELIEF, COGNITION, DIALOGUE, GOSSIP } from './config.ts';
 import { recordBelief, shiftConfidence } from './beliefs.ts';
 import { estimateCostMicros, readBudget, recordUsage } from './budget.ts';
 import type { Client } from './db.ts';
@@ -9,8 +9,9 @@ import type { InferenceClient } from './inference/index.ts';
 import type { Rng } from './rng.ts';
 import type { Seq } from './seq.ts';
 import { stableId } from './ids.ts';
+import { recall, recordAccesses } from './retrieval.ts';
 
-export const SPEECH_PROMPT_VERSION = 'speech-v3';
+export const SPEECH_PROMPT_VERSION = 'speech-v4';
 
 export type DialogueSpeaker = 'sender' | 'listener';
 
@@ -41,6 +42,15 @@ export interface DialogueDecision {
   tokensIn: number;
   tokensOut: number;
   latencyMs: number;
+  senderMemoryVector: readonly number[] | null;
+  listenerMemoryVector: readonly number[] | null;
+  senderRecalledMemoryIds: readonly string[];
+  listenerRecalledMemoryIds: readonly string[];
+  embeddingModelId: string | null;
+  embeddingTokensIn: number;
+  embeddingCalls: number;
+  senderMemoryText: string;
+  listenerMemoryText: string;
 }
 
 interface PairRow {
@@ -158,7 +168,7 @@ export async function thinkDialogue(
   const instigator = pairs.find((pair) => pair.tactic !== null);
   const pair = instigator ?? pairs[draw % pairs.length]!;
   const context = await loadDialoguePromptContext(client, input.worldId, pair, input.tick);
-  const userPrompt = buildDialoguePrompt(context, input.tick);
+  const memoryQueries = dialogueMemoryQueries(pair);
   const inputHash = createHash('sha256').update(JSON.stringify({
     tick: input.tick,
     from: pair.from_agent_key,
@@ -166,15 +176,45 @@ export async function thinkDialogue(
     claim: pair.claim_key,
     tactic: pair.tactic,
     promptVersion: SPEECH_PROMPT_VERSION,
-    userPrompt,
+    promptWithoutRecall: buildDialoguePrompt(context, input.tick),
+    memoryQueries,
   })).digest('hex');
 
   if (input.replay) return loadRecordedDialogue(client, input.worldId, input.tick, pair, inputHash);
 
   const budget = await readBudget(client, input.worldId);
-  if (budget.exhausted) {
+  if (budget.inferenceCalls + 2 > COGNITION.callBudget) {
     return makeDecision(pair, inputHash, fallbackExchange(pair), 'deterministic-fallback');
   }
+
+  // One batched embedding call serves two agent-scoped ANN lookups and the two
+  // grounded memories the exchange will form. The per-agent SQL calls stay
+  // separate so CockroachDB can use the (world_id, agent_id, embedding) prefix.
+  const senderMemory = dialogueMemoryText(pair, 'sender');
+  const listenerMemory = dialogueMemoryText(pair, 'listener');
+  const embedded = await input.inference.embed([
+    memoryQueries.sender,
+    memoryQueries.listener,
+    senderMemory,
+    listenerMemory,
+  ]);
+  const senderRecalled = await recall(client, {
+    worldId: input.worldId,
+    agentId: pair.from_agent_id,
+    queryVector: embedded.vectors[0]!,
+    tick: input.tick,
+    limit: 5,
+  });
+  const listenerRecalled = await recall(client, {
+    worldId: input.worldId,
+    agentId: pair.to_agent_id,
+    queryVector: embedded.vectors[1]!,
+    tick: input.tick,
+    limit: 5,
+  });
+  context.senderMemories = senderRecalled.map((memory) => memory.content);
+  context.listenerMemories = listenerRecalled.map((memory) => memory.content);
+  const userPrompt = buildDialoguePrompt(context, input.tick);
 
   const response = await input.inference.complete({
     task: 'npc_conversation',
@@ -187,7 +227,17 @@ export async function thinkDialogue(
   });
   const exchange = parseExchange(response.text, pair);
   return {
-    ...makeDecision(pair, inputHash, exchange, response.modelId),
+    ...makeDecision(pair, inputHash, exchange, response.modelId, {
+      senderMemoryVector: embedded.vectors[2]!,
+      listenerMemoryVector: embedded.vectors[3]!,
+      senderRecalledMemoryIds: senderRecalled.map((memory) => memory.memoryId),
+      listenerRecalledMemoryIds: listenerRecalled.map((memory) => memory.memoryId),
+      embeddingModelId: embedded.modelId,
+      embeddingTokensIn: embedded.tokensIn,
+      embeddingCalls: 1,
+      senderMemoryText: senderMemory,
+      listenerMemoryText: listenerMemory,
+    }),
     tokensIn: response.tokensIn,
     tokensOut: response.tokensOut,
     latencyMs: response.latencyMs,
@@ -201,22 +251,26 @@ export async function applyDialogue(
   const decision = input.decision;
   if (!decision) return 0;
 
+  const { senderMemoryVector, listenerMemoryVector, ...recordedDecision } = decision;
+
   await client.query(
     `INSERT INTO cognition_records
        (world_id, tick, agent_id, task, input_hash, decision, model_id, prompt_version,
-        tokens_in, tokens_out, latency_ms)
-     VALUES ($1, $2, $3, 'dialogue', $4, $5, $6, $7, $8, $9, $10)`,
+        tokens_in, tokens_out, latency_ms, observation_vector, reflection_vector)
+     VALUES ($1, $2, $3, 'dialogue', $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       input.worldId,
       input.tick,
       decision.fromAgentId,
       decision.inputHash,
-      JSON.stringify(decision),
+      JSON.stringify(recordedDecision),
       decision.modelId,
       SPEECH_PROMPT_VERSION,
       decision.tokensIn,
       decision.tokensOut,
       decision.latencyMs,
+      senderMemoryVector ? `[${senderMemoryVector.join(',')}]` : null,
+      listenerMemoryVector ? `[${listenerMemoryVector.join(',')}]` : null,
     ],
   );
   let firstEventId: string | null = null;
@@ -246,6 +300,63 @@ export async function applyDialogue(
     firstEventId ??= event.rows[0]!.event_id;
   }
   if (!firstEventId) throw new Error('dialogue transcript had no first event');
+
+  // Both vectors come from one batch. Requiring the pair keeps live and replay
+  // on the same Seq path; an older/fallback recording with no vectors forms no
+  // partial memory and therefore cannot shift later tick identities.
+  if (senderMemoryVector && listenerMemoryVector) {
+    const memories = [
+      {
+        agentId: decision.fromAgentId,
+        otherAgentId: decision.toAgentId,
+        holder: 'sender' as const,
+        vector: senderMemoryVector,
+      },
+      {
+        agentId: decision.toAgentId,
+        otherAgentId: decision.fromAgentId,
+        holder: 'listener' as const,
+        vector: listenerMemoryVector,
+      },
+    ];
+    for (const memory of memories) {
+      const memoryId = stableId(
+        input.worldId, 'npc-dialogue-memory', input.tick, memory.agentId,
+      );
+      await client.query(
+        `INSERT INTO world_memories
+           (world_id, memory_id, agent_id, tick, seq, kind, content, embedding,
+            importance, subject_agent_id, claim_id)
+         VALUES ($1, $2, $3, $4, $5, 'dialogue', $6, $7, $8, $9, $10)
+         ON CONFLICT (world_id, memory_id) DO NOTHING`,
+        [
+          input.worldId,
+          memoryId,
+          memory.agentId,
+          input.tick,
+          input.seq.next(),
+          memory.holder === 'sender' ? decision.senderMemoryText : decision.listenerMemoryText,
+          `[${memory.vector.join(',')}]`,
+          DIALOGUE.memoryImportance,
+          memory.otherAgentId,
+          decision.claimId,
+        ],
+      );
+      await client.query(
+        `INSERT INTO memory_source_edges
+           (world_id, edge_id, memory_id, source_kind, source_event_id)
+         VALUES ($1, $2, $3, 'event', $4)
+         ON CONFLICT (world_id, edge_id) DO NOTHING`,
+        [input.worldId, stableId(input.worldId, memoryId, 'source'), memoryId, firstEventId],
+      );
+      await client.query(
+        `UPDATE world_agent_reflection_state
+            SET accumulated_importance = accumulated_importance + $3
+          WHERE world_id = $1 AND agent_id = $2`,
+        [input.worldId, memory.agentId, DIALOGUE.reflectionContribution],
+      );
+    }
+  }
 
   await client.query(
     `INSERT INTO world_rumor_spread
@@ -329,8 +440,9 @@ export async function applyDialogue(
     );
   }
   await recordUsage(client, input.worldId, {
-    calls: decision.modelId === 'deterministic-fallback' || decision.modelId === 'replay' ? 0 : 1,
-    tokensIn: decision.tokensIn,
+    calls: decision.modelId === 'deterministic-fallback' || decision.modelId === 'replay'
+      ? 0 : 1 + decision.embeddingCalls,
+    tokensIn: decision.tokensIn + decision.embeddingTokensIn,
     tokensOut: decision.tokensOut,
     billable: decision.modelId !== 'deterministic-fallback' &&
       decision.modelId !== 'replay' && !decision.modelId.includes('stub'),
@@ -348,6 +460,23 @@ export async function applyDialogue(
         estimateCostMicros({ calls: 1, tokensIn: decision.tokensIn,
           tokensOut: decision.tokensOut, billable: !decision.modelId.includes('stub') })],
     );
+    if (decision.embeddingCalls > 0 && decision.embeddingModelId) {
+      const embeddingSourceKey = `${sourceKey}:memory-recall`;
+      const embeddingBillable = !decision.embeddingModelId.includes('stub');
+      await client.query(
+        `INSERT INTO world_inference_usage
+           (world_id, usage_id, category, source_key, model_id, calls, tokens_in,
+            est_cost_micros)
+         VALUES ($1, $2, 'embedding', $3, $4, $5, $6, $7)
+         ON CONFLICT (world_id, category, source_key, attempt) DO NOTHING`,
+        [input.worldId, stableId(input.worldId, 'embedding', embeddingSourceKey),
+          embeddingSourceKey, decision.embeddingModelId, decision.embeddingCalls,
+          decision.embeddingTokensIn,
+          estimateCostMicros({ calls: decision.embeddingCalls,
+            tokensIn: decision.embeddingTokensIn, tokensOut: 0,
+            billable: embeddingBillable })],
+      );
+    }
   }
   return 1;
 }
@@ -359,6 +488,11 @@ function makeDecision(
   inputHash: string,
   turns: DialogueTurn[],
   modelId: string,
+  memory: Partial<Pick<DialogueDecision,
+    'senderMemoryVector' | 'listenerMemoryVector' |
+    'senderRecalledMemoryIds' | 'listenerRecalledMemoryIds' |
+    'embeddingModelId' | 'embeddingTokensIn' | 'embeddingCalls' |
+    'senderMemoryText' | 'listenerMemoryText'>> = {},
 ): DialogueDecision {
   const line = turns.find((turn) => turn.speaker === 'sender')?.text ?? pair.claim_text;
   const response = turns.find((turn) => turn.speaker === 'listener')?.text ??
@@ -384,7 +518,31 @@ function makeDecision(
     tokensIn: 0,
     tokensOut: 0,
     latencyMs: 0,
+    senderMemoryVector: memory.senderMemoryVector ?? null,
+    listenerMemoryVector: memory.listenerMemoryVector ?? null,
+    senderRecalledMemoryIds: memory.senderRecalledMemoryIds ?? [],
+    listenerRecalledMemoryIds: memory.listenerRecalledMemoryIds ?? [],
+    embeddingModelId: memory.embeddingModelId ?? null,
+    embeddingTokensIn: memory.embeddingTokensIn ?? 0,
+    embeddingCalls: memory.embeddingCalls ?? 0,
+    senderMemoryText: memory.senderMemoryText ?? dialogueMemoryText(pair, 'sender'),
+    listenerMemoryText: memory.listenerMemoryText ?? dialogueMemoryText(pair, 'listener'),
   };
+}
+
+function dialogueMemoryQueries(pair: PairRow): { sender: string; listener: string } {
+  const scene = `At ${pair.location_name}, the topic is: ${pair.claim_text}`;
+  return {
+    sender: `${pair.from_name} is deciding how to raise this topic with ${pair.to_name}. ${scene}`,
+    listener: `${pair.to_name} is hearing this topic from ${pair.from_name}. ${scene}`,
+  };
+}
+
+/** Engine-authored memory: identities and claim text all come from database rows. */
+function dialogueMemoryText(pair: PairRow, holder: DialogueSpeaker): string {
+  return holder === 'sender'
+    ? `${pair.from_name} told ${pair.to_name}: "${pair.claim_text}"`
+    : `${pair.to_name} remembers ${pair.from_name} telling them: "${pair.claim_text}"`;
 }
 
 export function parseDialogueTurns(text: string): DialogueTurn[] | null {
@@ -432,18 +590,6 @@ async function loadDialoguePromptContext(
         AND agent_id NOT IN ($3, $4)
       ORDER BY agent_key`,
     [worldId, pair.location_id, pair.from_agent_id, pair.to_agent_id],
-  );
-  const memories = await client.query<{ agent_id: string; content: string }>(
-    `SELECT agent_id, content FROM (
-       SELECT agent_id, content,
-              row_number() OVER (PARTITION BY agent_id ORDER BY tick DESC, seq DESC) AS rank
-         FROM world_memories
-        WHERE world_id = $1 AND agent_id IN ($2, $3)
-          AND kind IN ('dialogue', 'reflection', 'rumor', 'observation')
-     ) ranked
-     WHERE rank <= 5
-     ORDER BY agent_id, rank`,
-    [worldId, pair.from_agent_id, pair.to_agent_id],
   );
   const beliefs = await client.query<{
     agent_id: string; text: string; subject: string; confidence: number;
@@ -496,16 +642,14 @@ async function loadDialoguePromptContext(
       ORDER BY commitment.due_tick, agent.agent_key`,
     [worldId, pair.from_agent_id, pair.to_agent_id],
   );
-  const memoriesFor = (agentId: string) => memories.rows
-    .filter((row) => row.agent_id === agentId).map((row) => row.content);
   const beliefsFor = (agentId: string) => beliefs.rows
     .filter((row) => row.agent_id === agentId)
     .map((row) => ({ text: row.text, subject: row.subject, confidence: row.confidence }));
   return {
     pair,
     audience: audience.rows.map((row) => row.name),
-    senderMemories: memoriesFor(pair.from_agent_id),
-    listenerMemories: memoriesFor(pair.to_agent_id),
+    senderMemories: [],
+    listenerMemories: [],
     senderBeliefs: beliefsFor(pair.from_agent_id),
     listenerBeliefs: beliefsFor(pair.to_agent_id),
     commitments: commitments.rows.map((row) => ({
@@ -743,10 +887,14 @@ async function loadRecordedDialogue(
   const result = await client.query<{
     input_hash: string;
     prompt_version: string;
-    decision: DialogueDecision;
+    decision: Partial<DialogueDecision> & Pick<DialogueDecision, 'line'>;
+    observation_vector: string | null;
+    reflection_vector: string | null;
   }>(
-    `SELECT input_hash, prompt_version, decision FROM cognition_records
+    `SELECT input_hash, prompt_version, decision, observation_vector, reflection_vector
+       FROM cognition_records
       WHERE world_id = $1 AND tick = $2 AND agent_id = $3 AND task = 'dialogue'
+      ORDER BY record_id
       LIMIT 1`,
     [worldId, tick, pair.from_agent_id],
   );
@@ -763,5 +911,24 @@ async function loadRecordedDialogue(
     { speaker: 'listener' as const,
       text: row.decision.response ?? 'I will remember what you said.' },
   ];
-  return makeDecision(pair, inputHash, turns, 'replay');
+  const senderRecalledMemoryIds = row.decision.senderRecalledMemoryIds ?? [];
+  const listenerRecalledMemoryIds = row.decision.listenerRecalledMemoryIds ?? [];
+  await recordAccesses(client, worldId, senderRecalledMemoryIds, tick);
+  await recordAccesses(client, worldId, listenerRecalledMemoryIds, tick);
+  return makeDecision(pair, inputHash, turns, 'replay', {
+    senderMemoryVector: parseVector(row.observation_vector),
+    listenerMemoryVector: parseVector(row.reflection_vector),
+    senderRecalledMemoryIds,
+    listenerRecalledMemoryIds,
+    senderMemoryText: row.decision.senderMemoryText ?? dialogueMemoryText(pair, 'sender'),
+    listenerMemoryText: row.decision.listenerMemoryText ?? dialogueMemoryText(pair, 'listener'),
+  });
+}
+
+/** CockroachDB's pg driver returns VECTOR values in `[1,2,...]` text form. */
+function parseVector(value: string | null): readonly number[] | null {
+  if (!value) return null;
+  const parsed = JSON.parse(value) as unknown;
+  return Array.isArray(parsed) && parsed.every((item) => typeof item === 'number')
+    ? parsed as number[] : null;
 }

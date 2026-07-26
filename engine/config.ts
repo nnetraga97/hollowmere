@@ -213,6 +213,9 @@ export const SCHEME = {
 export const DIALOGUE = {
   intervalTicks: 6,
   trustShift: fromPercent(2) as Fixed,
+  /** A direct exchange is salient, but contributes only half-weight to reflection. */
+  memoryImportance: fromPercent(60) as Fixed,
+  reflectionContribution: fromPercent(30) as Fixed,
 } as const;
 
 export const HEARING = {

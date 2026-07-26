@@ -219,14 +219,22 @@ export async function recordAccesses(
   if (memoryIds.length === 0) return;
 
   const params: unknown[] = [worldId, tick];
-  const tuples = memoryIds.map((id) => {
+  const requested = memoryIds.map((id) => {
     params.push(id);
-    return `($1, $${params.length}, $2)`;
+    return `($${params.length}::UUID)`;
   });
 
+  // Rewind deliberately preserves cognition recordings but removes memories
+  // created by external player conversations, which ticks do not replay. A
+  // recorded decision may therefore name a valid memory from the live run that
+  // is absent in the rebuilt projection. Join against the current memory set so
+  // replay restores every access it can without failing on that expected gap.
   await client.query(
     `INSERT INTO memory_accesses (world_id, memory_id, accessed_tick)
-     VALUES ${tuples.join(', ')}`,
+     SELECT $1, requested.memory_id, $2
+       FROM (VALUES ${requested.join(', ')}) AS requested(memory_id)
+       JOIN world_memories memory
+         ON memory.world_id = $1 AND memory.memory_id = requested.memory_id`,
     params,
   );
 }

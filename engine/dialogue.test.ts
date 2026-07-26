@@ -149,6 +149,23 @@ describe('NPC dialogue', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
     assert.notEqual(events[0]!.actor_agent_id, events[1]!.actor_agent_id);
     assert.ok(events[0]!.claim_key);
     assert.deepEqual(events.slice(1).map((event) => event.claim_key), [null, null, null]);
+    const memories = await query<{
+      agent_id: string; content: string; importance: number; sources: number;
+    }>(
+      `SELECT memory.agent_id, memory.content, memory.importance,
+              count(source.edge_id)::INT8 AS sources
+         FROM world_memories memory
+         LEFT JOIN memory_source_edges source
+           ON source.world_id = memory.world_id AND source.memory_id = memory.memory_id
+        WHERE memory.world_id = $1 AND memory.tick = 12 AND memory.kind = 'dialogue'
+        GROUP BY memory.agent_id, memory.content, memory.importance
+        ORDER BY memory.agent_id`,
+      [world.worldId],
+    );
+    assert.equal(memories.length, 2, 'both participants form a durable exchange memory');
+    assert.ok(memories.every((memory) => memory.sources === 1));
+    assert.ok(memories.every((memory) => memory.importance > 0));
+    assert.ok(memories.every((memory) => memory.content.includes(prompt.selectedTopic.claim)));
     await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
   });
 

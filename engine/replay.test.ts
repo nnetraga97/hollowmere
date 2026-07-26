@@ -172,6 +172,12 @@ describe('replay', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
     const live = await snapshot(worldId);
     assert.ok(live.records > 0, 'the world thought at least once');
     assert.ok(live.memories > 0, 'and formed memories while it did');
+    const liveDialogueMemories = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM world_memories
+        WHERE world_id = $1 AND kind = 'dialogue'`, [worldId],
+    );
+    assert.ok((liveDialogueMemories[0]?.count ?? 0) > 0,
+      'the live recording must contain NPC dialogue memories, or vector replay is untested');
 
     const rewound = await rewindWorld(worldId);
     assert.equal(rewound.fromTick, TICKS);
@@ -195,6 +201,12 @@ describe('replay', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
     assert.equal(replayed.stage, live.stage, 'the same stage was reached');
     assert.equal(replayed.tension, live.tension, 'along the same tension curve');
     assert.equal(replayed.memories, live.memories, 'and the same memories were formed');
+    const replayedDialogueMemories = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM world_memories
+        WHERE world_id = $1 AND kind = 'dialogue'`, [worldId],
+    );
+    assert.equal(replayedDialogueMemories[0]?.count, liveDialogueMemories[0]?.count,
+      'both NPC dialogue vectors and memories survive the recording round-trip');
 
     // Vectors come from the record, so the memories are genuinely retrievable —
     // not rows with a NULL embedding that would silently fall out of every ANN

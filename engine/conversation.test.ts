@@ -242,6 +242,36 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
       idempotencyKey: 'close-1', inference: stub,
     });
 
+    const durable = await query<{
+      memory_id: string; agent_id: string; content: string; tick: number;
+    }>(
+      `SELECT memory_id, agent_id, content, tick FROM world_memories
+        WHERE world_id = $1 AND kind = 'dialogue'
+        ORDER BY importance DESC, memory_id LIMIT 1`,
+      [ref.worldId],
+    );
+    assert.match(durable[0]!.content, /I will ruin you/);
+
+    // Fill and overrun the old latest-eight window. These memories are newer
+    // and maximally important but have no player-turn provenance, so the pinned
+    // relationship slot must still carry the threat into the next prompt.
+    const fillerTexts = Array.from({ length: 12 }, (_, index) =>
+      `Routine market observation number ${index + 1}.`);
+    const fillerVectors = await stub.embed(fillerTexts);
+    for (const [index, text] of fillerTexts.entries()) {
+      await query(
+        `INSERT INTO world_memories
+           (world_id, agent_id, tick, seq, kind, content, embedding, importance)
+         VALUES ($1, $2, $3, $4, 'observation', $5, $6, 10000)`,
+        [ref.worldId, durable[0]!.agent_id, index + 1, 8_000_000 + index,
+          text, `[${fillerVectors.vectors[index]!.join(',')}]`],
+      );
+    }
+    await query(`UPDATE worlds SET current_tick = 27 WHERE world_id = $1`, [ref.worldId]);
+
+    // A new pool proves this is database memory, not process-local context.
+    await closePool();
+
     const second = await startConversation({ ...ref, idempotencyKey: 'start-2' });
     let systemPrompt = '';
     let userPrompt = '';
@@ -284,9 +314,17 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     assert.ok(Number.isInteger(prompt.npc.personality.honesty));
     assert.match(prompt.relationshipWithPlayer.lastingImpression, /threat/i);
     assert.ok(prompt.recalledMemories.length > 0);
+    assert.ok(prompt.recalledMemories.some((memory) => memory.includes('I will ruin you')),
+      'the salient player memory must survive restart and more than eight newer memories');
     assert.ok(Array.isArray(prompt.knowledgeItems));
     assert.doesNotMatch(userPrompt, /audibleWitnesses/);
     assert.equal(prompt.latestPlayerUtterance, 'Do you remember me?');
+    const accesses = await query<{ accessed_tick: number }>(
+      `SELECT accessed_tick FROM memory_accesses
+        WHERE world_id = $1 AND memory_id = $2 ORDER BY accessed_tick DESC LIMIT 1`,
+      [ref.worldId, durable[0]!.memory_id],
+    );
+    assert.equal(accesses[0]?.accessed_tick, 27);
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 

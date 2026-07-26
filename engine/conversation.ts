@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { estimateCostMicros, readBudget, recordUsage } from './budget.ts';
+import { COGNITION } from './config.ts';
 import { query, withClient, withSerializable, type Client } from './db.ts';
 import { stableId } from './ids.ts';
 import {
@@ -9,8 +10,9 @@ import {
 import {
   applyStructuredConversationTurn, SPEECH_ACTS, type SpeechAct,
 } from './converse.ts';
+import { recall, recordAccesses } from './retrieval.ts';
 
-export const CONVERSATION_TURN_PROMPT_VERSION = 'conversation-turn-v3';
+export const CONVERSATION_TURN_PROMPT_VERSION = 'conversation-turn-v4';
 const HOLD_MINUTES = 5;
 const TURN_TIMEOUT_SECONDS = 45;
 const MEMORY_SEQ_BASE = 2_000_000;
@@ -293,7 +295,8 @@ async function completeReservedTurn(
 ): Promise<void> {
   const context = await withClient(async (client) => {
     const sessions = await client.query<{
-      agent_id: string; agent_name: string; agent_status: string; current_action: string | null;
+      agent_id: string; player_id: string; agent_name: string; agent_status: string;
+      current_action: string | null;
       persona: { summary?: string; traits?: string[] };
       kindness: number; engagement: number; honesty: number;
       faction_key: string; faction_name: string; location_key: string; location_name: string;
@@ -301,7 +304,7 @@ async function completeReservedTurn(
       player_name: string; player_profile: { background?: string };
       current_tick: number; day: number; phase: string; escalation_stage: string;
     }>(
-      `SELECT a.agent_id, a.name AS agent_name, a.status AS agent_status, a.current_action,
+      `SELECT a.agent_id, p.player_id, a.name AS agent_name, a.status AS agent_status, a.current_action,
               a.persona, a.kindness, a.engagement, a.honesty,
               f.faction_key, f.name AS faction_name,
               l.location_key, l.name AS location_name,
@@ -325,15 +328,6 @@ async function completeReservedTurn(
       `SELECT ordinal, player_text, reply FROM world_conversation_turns
         WHERE world_id = $1 AND conversation_id = $2 AND turn_id != $3
         ORDER BY ordinal`, [input.worldId, input.conversationId, turnId],
-    );
-    const memories = await client.query<{ content: string }>(
-      `SELECT m.content FROM world_memories m
-         JOIN world_conversation_sessions s ON s.world_id = m.world_id
-              AND s.target_agent_id = m.agent_id
-        WHERE m.world_id = $1 AND s.conversation_id = $2
-          AND m.kind IN ('dialogue', 'reflection', 'rumor', 'observation')
-        ORDER BY m.tick DESC, m.seq DESC LIMIT 8`,
-      [input.worldId, input.conversationId],
     );
     const beliefs = await client.query<{
       claim_key: string; text: string; confidence: number; subject_name: string;
@@ -402,7 +396,7 @@ async function completeReservedTurn(
     if (!reserved.rows[0]) throw new Error('conversation turn is no longer pending');
     return {
       agent: sessions.rows[0], transcript: transcript.rows,
-      memories: memories.rows.map((row) => row.content), beliefs: beliefs.rows,
+      memories: [] as string[], beliefs: beliefs.rows,
       audience: audience.rows.map((row) => row.name), commitments: commitments.rows,
       allAgentNames: agents.rows.map((row) => row.name),
       reserved: reserved.rows[0],
@@ -421,7 +415,24 @@ async function completeReservedTurn(
     modelId: context.reserved.model_id ?? 'deterministic-fallback',
     latencyMs: context.reserved.latency_ms,
   };
-  if (!parsed && !budget.exhausted) {
+  // Retrieval and completion are one semantic operation and cost two provider
+  // calls. Do neither unless both fit: spending the final call on a query vector
+  // and then falling back would buy the player no reply.
+  if (!parsed && budget.inferenceCalls + 2 <= COGNITION.callBudget) {
+    const embedded = await input.inference.embed([
+      playerMemoryQuery(context.agent, input.text),
+    ]);
+    await recordEmbeddingUsage(
+      input.worldId, `${turnId}:recall`, embedded,
+      isBillableInferenceMode(input.inference.mode),
+    );
+    context.memories = await withClient((client) => loadPlayerConversationMemories(client, {
+      worldId: input.worldId,
+      agentId: context.agent.agent_id,
+      playerId: context.agent.player_id,
+      tick: context.agent.current_tick,
+      queryVector: embedded.vectors[0]!,
+    }));
     const response = await input.inference.complete({
       task: 'conversation_turn', promptVersion: CONVERSATION_TURN_PROMPT_VERSION,
       system: TURN_SYSTEM,
@@ -598,6 +609,8 @@ async function finalizeConversation(
   status: 'closed' | 'timed_out',
 ): Promise<void> {
   const deltas = relationshipDeltas(view.turns);
+  const targetImportance = conversationImportance(view.turns);
+  const observerImportance = Math.max(3_000, Math.trunc(targetImportance / 2));
   await withSerializable(async (client) => {
     const rows = await client.query<{
       player_id: string; target_agent_id: string; opened_tick: number; current_tick: number;
@@ -642,6 +655,7 @@ async function finalizeConversation(
       const memorySeq = seq + offset++;
       const memoryId = stableId(input.worldId, input.conversationId, 'memory', participant.agent_id);
       const content = participant.role === 'target' ? summary : `Overheard: ${summary}`;
+      const importance = participant.role === 'target' ? targetImportance : observerImportance;
       await client.query(
         `INSERT INTO world_memories
            (world_id, memory_id, agent_id, tick, seq, kind, content, embedding, importance,
@@ -649,7 +663,7 @@ async function finalizeConversation(
          VALUES ($1, $2, $3, $4, $5, 'dialogue', $6, $7, $8, $9)
          ON CONFLICT (world_id, memory_id) DO NOTHING`,
         [input.worldId, memoryId, participant.agent_id, row.current_tick, memorySeq,
-          content, `[${vector.join(',')}]`, participant.role === 'target' ? 6500 : 3500,
+          content, `[${vector.join(',')}]`, importance,
           row.target_agent_id],
       );
       for (const turn of view.turns) {
@@ -665,7 +679,7 @@ async function finalizeConversation(
         `UPDATE world_agent_reflection_state
             SET accumulated_importance = accumulated_importance + $3
           WHERE world_id = $1 AND agent_id = $2`,
-        [input.worldId, participant.agent_id, participant.role === 'target' ? 6500 : 3500],
+        [input.worldId, participant.agent_id, importance],
       );
     }
     await client.query(
@@ -768,6 +782,67 @@ interface TurnPromptContext {
   latestPlayerUtterance: string;
 }
 
+function playerMemoryQuery(
+  agent: { agent_name: string; location_name: string; impression: string | null },
+  latestPlayerUtterance: string,
+): string {
+  return [
+    `Conversation with ${agent.agent_name} at ${agent.location_name}.`,
+    `The outsider now says: "${reportedSpeechExcerpt(latestPlayerUtterance)}"`,
+    agent.impression ? `Existing relationship impression: ${agent.impression}` : '',
+  ].filter(Boolean).join(' ');
+}
+
+/**
+ * Hybrid recall plus one durable relationship anchor.
+ *
+ * The ANN/importance/recency union answers "what is relevant now". The pinned
+ * slot answers a different product promise: the most salient prior exchange
+ * with this player remains in the prompt even after the recent-memory window
+ * has filled. Provenance, not memory text, proves that it came from this player.
+ */
+async function loadPlayerConversationMemories(
+  client: Client,
+  input: {
+    worldId: string;
+    agentId: string;
+    playerId: string;
+    tick: number;
+    queryVector: readonly number[];
+  },
+): Promise<string[]> {
+  const recalled = await recall(client, {
+    worldId: input.worldId,
+    agentId: input.agentId,
+    queryVector: input.queryVector,
+    tick: input.tick,
+    limit: 8,
+  });
+  const pinned = await client.query<{ memory_id: string; content: string }>(
+    `SELECT DISTINCT m.memory_id, m.content, m.importance, m.tick
+       FROM world_memories m
+       JOIN memory_source_edges edge
+         ON edge.world_id = m.world_id AND edge.memory_id = m.memory_id
+        AND edge.source_kind = 'turn'
+       JOIN world_conversation_turns turn_row
+         ON turn_row.world_id = edge.world_id AND turn_row.turn_id = edge.source_turn_id
+       JOIN world_conversation_sessions session
+         ON session.world_id = turn_row.world_id
+        AND session.conversation_id = turn_row.conversation_id
+      WHERE m.world_id = $1 AND m.agent_id = $2 AND session.player_id = $3
+      ORDER BY m.importance DESC, m.tick DESC, m.memory_id
+      LIMIT 1`,
+    [input.worldId, input.agentId, input.playerId],
+  );
+  const anchor = pinned.rows[0];
+  if (!anchor) return recalled.map((memory) => memory.content);
+  if (recalled.some((memory) => memory.memoryId === anchor.memory_id)) {
+    return recalled.map((memory) => memory.content);
+  }
+  await recordAccesses(client, input.worldId, [anchor.memory_id], input.tick);
+  return [anchor.content, ...recalled.slice(0, 7).map((memory) => memory.content)];
+}
+
 function buildTurnPrompt(context: TurnPromptContext): string {
   const agent = context.agent;
   return JSON.stringify({
@@ -867,8 +942,41 @@ function fallbackTurn(text: string): ParsedTurn {
 function deterministicSummary(view: ConversationView, claimTexts: readonly string[] = []): string {
   if (!view.turns.length) return `${view.agentName} and the outsider parted without speaking.`;
   const acts = [...new Set(view.turns.map((turn) => turn.speechAct))].join(', ');
+  const excerpts = selectReportedSpeech(view.turns)
+    .map((text) => `The outsider said: "${reportedSpeechExcerpt(text)}"`)
+    .join(' ');
   const claims = claimTexts.length > 0 ? ` Claims discussed: ${claimTexts.join(' | ')}.` : '';
-  return `${view.agentName} spoke with the outsider for ${view.turns.length} turn${view.turns.length === 1 ? '' : 's'} (${acts}).${claims}`;
+  return `${view.agentName} spoke with the outsider for ${view.turns.length} turn${view.turns.length === 1 ? '' : 's'} (${acts}). ${excerpts}${claims}`;
+}
+
+function selectReportedSpeech(turns: readonly ConversationTurnView[]): string[] {
+  const weight = (act: SpeechAct): number =>
+    act === 'threaten' ? 4
+      : act === 'accuse' || act === 'dispute' ? 3
+        : act === 'reconcile' || act === 'defend' ? 2 : 1;
+  return [...turns]
+    .sort((a, b) => weight(b.speechAct) - weight(a.speechAct) || a.ordinal - b.ordinal)
+    .slice(0, 2)
+    .sort((a, b) => a.ordinal - b.ordinal)
+    .map((turn) => turn.playerText);
+}
+
+function reportedSpeechExcerpt(text: string): string {
+  const singleLine = text
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/"/g, "'");
+  if (singleLine.length <= 200) return singleLine;
+  return `${singleLine.slice(0, 197)}...`;
+}
+
+function conversationImportance(turns: readonly ConversationTurnView[]): number {
+  const acts = new Set(turns.map((turn) => turn.speechAct));
+  if (acts.has('threaten')) return 9_000;
+  if (acts.has('accuse') || acts.has('dispute')) return 7_500;
+  if (acts.has('reconcile') || acts.has('defend')) return 7_000;
+  return 6_000;
 }
 
 async function groundedConversationSummary(worldId: string, view: ConversationView): Promise<string> {
