@@ -494,6 +494,64 @@ CREATE TABLE IF NOT EXISTS player_agent_relationships (
   FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
 );
 
+-- Two independent, recoverable relationship arcs. `stage` is authored-scene
+-- progression, not exclusivity: the same player may commit to both candidates.
+-- Flags live in a normalized child table because branching rules compare them;
+-- JSONB is reserved for recorded/display-only payloads in this schema.
+CREATE TABLE IF NOT EXISTS player_romance_arcs (
+  world_id       UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  player_id      UUID NOT NULL,
+  agent_id       UUID NOT NULL,
+  stage          INT8 NOT NULL DEFAULT 0 CHECK (stage BETWEEN 0 AND 6),
+  status         STRING NOT NULL DEFAULT 'open' CHECK (status IN
+                   ('open', 'growing', 'courting', 'committed', 'platonic',
+                    'complicated', 'strained')),
+  last_event_tick INT8 NULL,
+  updated_tick   INT8 NOT NULL DEFAULT 0,
+  PRIMARY KEY (world_id, player_id, agent_id),
+  FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS player_romance_flags (
+  world_id    UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  player_id   UUID NOT NULL,
+  agent_id    UUID NOT NULL,
+  flag_key    STRING NOT NULL,
+  gained_tick INT8 NOT NULL,
+  PRIMARY KEY (world_id, player_id, agent_id, flag_key),
+  FOREIGN KEY (world_id, player_id, agent_id)
+    REFERENCES player_romance_arcs (world_id, player_id, agent_id) ON DELETE CASCADE
+);
+
+-- Append-only authored-scene history. The spoken response and aftermath are
+-- recorded so later UI/prompt rendering never changes old choices if content is
+-- edited in a future scenario version.
+CREATE TABLE IF NOT EXISTS player_romance_events (
+  world_id          UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  romance_event_id  UUID NOT NULL,
+  player_id         UUID NOT NULL,
+  agent_id          UUID NOT NULL,
+  tick              INT8 NOT NULL,
+  seq               INT8 NOT NULL,
+  command_seq       INT8 NOT NULL,
+  scene_key         STRING NOT NULL,
+  choice_key        STRING NOT NULL,
+  response          STRING NOT NULL,
+  aftermath         STRING NOT NULL,
+  impression        STRING NOT NULL,
+  status_after      STRING NOT NULL CHECK (status_after IN
+                      ('open', 'growing', 'courting', 'committed', 'platonic',
+                       'complicated', 'strained')),
+  revealed_claim_keys JSONB NOT NULL DEFAULT '[]',
+  PRIMARY KEY (world_id, romance_event_id),
+  UNIQUE (world_id, player_id, agent_id, scene_key),
+  UNIQUE (world_id, tick, seq),
+  UNIQUE (world_id, command_seq),
+  FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
+);
+
 CREATE TABLE IF NOT EXISTS world_agent_reflection_state (
   world_id              UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
   agent_id              UUID NOT NULL,
@@ -972,7 +1030,8 @@ CREATE TABLE IF NOT EXISTS world_commands (
   command_seq     INT8 NOT NULL,
   kind            STRING NOT NULL CHECK (kind IN
     ('converse', 'conversation_start', 'conversation_turn', 'conversation_close',
-     'finalize_conversation', 'summon', 'move_player', 'restart', 'set_time_scale')),
+     'finalize_conversation', 'summon', 'move_player', 'restart', 'set_time_scale',
+     'romance_choice')),
   payload         JSONB NOT NULL DEFAULT '{}',
   received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   applied_tick    INT8 NULL,
@@ -985,7 +1044,7 @@ ALTER TABLE world_commands DROP CONSTRAINT IF EXISTS check_kind;
 ALTER TABLE world_commands ADD CONSTRAINT check_kind
   CHECK (kind IN ('converse', 'conversation_start', 'conversation_turn',
                   'conversation_close', 'finalize_conversation', 'summon',
-                  'move_player', 'restart', 'set_time_scale'));
+                  'move_player', 'restart', 'set_time_scale', 'romance_choice'));
 
 -- Pending commands are drained in order each tick.
 CREATE INDEX IF NOT EXISTS world_commands_pending_idx

@@ -44,6 +44,9 @@ const INITIAL_NEUTRAL = { sentiment: 0, trust: 5_000 };
  * row it references — the FKs are composite and not all of them cascade.
  */
 const HISTORY_TABLES = [
+  'player_romance_events',
+  'player_romance_flags',
+  'player_romance_arcs',
   'world_player_evidence',
   'world_agent_commitments',
   'world_hearings',
