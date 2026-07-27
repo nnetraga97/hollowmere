@@ -2,8 +2,8 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
-  assertSession, getGameSnapshot, getTownMap, instantiateWorld, query, resumeSessionWorld,
-  setPlayerProfile,
+  assertSession, errorLogFields, getGameSnapshot, getTownMap, instantiateWorld, logInfo,
+  logWarn, query, resumeSessionWorld, setPlayerProfile,
 } from '@/server/engine';
 import { jsonBody, requireSameOrigin, routeError } from '@/server/http';
 import { clearSession, readSession, writeSession } from '@/server/session';
@@ -40,12 +40,21 @@ export async function POST(request: NextRequest) {
         const owned = await assertSession(existing);
         if (profileProvided) await setPlayerProfile(existing, playerName, playerProfile);
         if (owned.worldStatus === 'paused') await resumeSessionWorld(existing);
+        logInfo('session_reused', {
+          worldId: existing.worldId,
+          profileUpdated: profileProvided,
+          resumed: owned.worldStatus === 'paused',
+        });
         return NextResponse.json({
           session: { worldId: existing.worldId },
           map: await getTownMap(existing),
           game: await getGameSnapshot(existing),
         }, { headers: { 'cache-control': 'no-store' } });
-      } catch {
+      } catch (error) {
+        logWarn('session_cookie_invalidated', {
+          worldId: existing.worldId,
+          ...errorLogFields(error),
+        });
         await clearSession();
       }
     }
@@ -66,12 +75,13 @@ export async function POST(request: NextRequest) {
     });
     const ref = { sessionId, worldId: created.worldId };
     await writeSession(ref);
+    logInfo('session_created', { worldId: ref.worldId, seed, scenarioVersion });
     return NextResponse.json({
       session: { worldId: ref.worldId },
       map: await getTownMap(ref),
       game: await getGameSnapshot(ref),
     }, { status: 201, headers: { 'cache-control': 'no-store' } });
   } catch (error) {
-    return routeError(error);
+    return routeError(error, { method: 'POST', route: '/api/session' });
   }
 }

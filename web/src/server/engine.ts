@@ -11,4 +11,7 @@ export {
 export { chooseRomanceMoment, getRomanceArcs } from '../../../engine/romance.ts';
 export { query } from '../../../engine/db.ts';
 export { createInferenceClient } from '../../../engine/inference/index.ts';
+export {
+  errorLogFields, logDebug, logError, logInfo, logWarn,
+} from '../../../engine/log.ts';
 export { instantiateWorld } from '../../../scenario/instantiate.ts';

@@ -2,7 +2,7 @@ import { randomInt } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
-  instantiateWorld, pauseSessionWorld, query, queueTimeScale, resumeSessionWorld,
+  instantiateWorld, logInfo, pauseSessionWorld, query, queueTimeScale, resumeSessionWorld,
 } from '@/server/engine';
 import { jsonBody, requireSameOrigin, requireSession, routeError } from '@/server/http';
 import { writeSession } from '@/server/session';
@@ -21,13 +21,23 @@ export async function POST(request: NextRequest) {
     const ref = await requireSession();
     const body = await jsonBody<ControlBody>(request);
     if (body.action === 'pause') {
-      return NextResponse.json({ changed: await pauseSessionWorld(ref) });
+      const changed = await pauseSessionWorld(ref);
+      logInfo('world_pause_requested', { worldId: ref.worldId, changed });
+      return NextResponse.json({ changed });
     }
     if (body.action === 'resume') {
-      return NextResponse.json({ changed: await resumeSessionWorld(ref) });
+      const changed = await resumeSessionWorld(ref);
+      logInfo('world_resume_requested', { worldId: ref.worldId, changed });
+      return NextResponse.json({ changed });
     }
     if (body.action === 'timeScale') {
-      return NextResponse.json(await queueTimeScale(ref, body.value, body.idempotencyKey), { status: 202 });
+      const result = await queueTimeScale(ref, body.value, body.idempotencyKey);
+      logInfo('world_time_scale_queued', {
+        worldId: ref.worldId,
+        timeScale: body.value,
+        replayed: result.replayed,
+      });
+      return NextResponse.json(result, { status: 202 });
     }
     if (body.action === 'restart') {
       const versions = await query<{
@@ -57,10 +67,15 @@ export async function POST(request: NextRequest) {
       });
       const next = { sessionId: ref.sessionId, worldId: created.worldId };
       await writeSession(next);
+      logInfo('world_restarted', {
+        previousWorldId: ref.worldId,
+        worldId: created.worldId,
+        seed,
+      });
       return NextResponse.json({ worldId: created.worldId, seed }, { status: 201 });
     }
     throw new Error('unknown control action');
   } catch (error) {
-    return routeError(error);
+    return routeError(error, { method: 'POST', route: '/api/control' });
   }
 }

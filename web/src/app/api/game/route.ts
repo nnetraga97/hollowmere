@@ -11,6 +11,6 @@ export async function GET() {
     const game = await getGameSnapshot(await requireSession());
     return NextResponse.json(game, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
-    return routeError(error);
+    return routeError(error, { method: 'GET', route: '/api/game' });
   }
 }

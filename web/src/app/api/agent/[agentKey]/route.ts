@@ -13,6 +13,6 @@ export async function GET(_request: Request, context: { params: Promise<{ agentK
       headers: { 'cache-control': 'no-store' },
     });
   } catch (error) {
-    return routeError(error);
+    return routeError(error, { method: 'GET', route: '/api/agent/[agentKey]' });
   }
 }

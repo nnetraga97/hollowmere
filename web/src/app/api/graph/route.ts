@@ -14,6 +14,6 @@ export async function GET(request: NextRequest) {
       headers: { 'cache-control': 'no-store' },
     });
   } catch (error) {
-    return routeError(error);
+    return routeError(error, { method: 'GET', route: '/api/graph' });
   }
 }

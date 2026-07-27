@@ -103,6 +103,10 @@ the application working normally, not a staged one.
 | `harness/` | `sim.ts` headless runner, `repl.ts` interactive shell |
 | `web/` | Next.js + Phaser playable debug client, session APIs, and React instruments |
 | `scripts/` | Preflight, migrate, seed, Bedrock check |
+
+Server processes emit structured JSON logs for inference, database retries,
+scheduler activity, API mutations, and failures. See
+[`docs/observability.md`](docs/observability.md) for event names and log levels.
 | `infra/` | Local 3-node cluster |
 | `docs/` | Plan and status, preflight findings, AWS setup |
 

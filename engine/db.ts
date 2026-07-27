@@ -15,6 +15,8 @@
 
 import pg from 'pg';
 
+import { errorLogFields, logError, logInfo, logWarn } from './log.ts';
+
 const INT8_OID = 20;
 
 /**
@@ -39,11 +41,14 @@ export function getPool(): pg.Pool {
     if (!connectionString) {
       throw new Error('DATABASE_URL is not set');
     }
+    const max = Number(process.env.DB_POOL_MAX ?? 10);
     pool = new pg.Pool({
       connectionString,
-      max: Number(process.env.DB_POOL_MAX ?? 10),
+      max,
       application_name: 'hollowmere',
     });
+    logInfo('database_pool_created', { ...databaseTarget(connectionString), max });
+    pool.on('error', (error) => logError('database_pool_error', errorLogFields(error)));
   }
   return pool;
 }
@@ -52,6 +57,7 @@ export async function closePool(): Promise<void> {
   if (pool) {
     await pool.end();
     pool = undefined;
+    logInfo('database_pool_closed');
   }
 }
 
@@ -60,8 +66,17 @@ export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params: readonly unknown[] = [],
 ): Promise<T[]> {
-  const result = await getPool().query<T>(text, params as unknown[]);
-  return result.rows;
+  try {
+    const result = await getPool().query<T>(text, params as unknown[]);
+    return result.rows;
+  } catch (error) {
+    logError('database_query_failed', {
+      statementType: statementType(text),
+      parameterCount: params.length,
+      ...errorLogFields(error),
+    });
+    throw error;
+  }
 }
 
 /**
@@ -133,9 +148,20 @@ export async function withSerializable<T>(
           // The connection may already be unusable; the outer throw is what matters.
         });
         if (!isRetryable(error)) {
+          logError('database_transaction_failed', {
+            label,
+            attempt: attempt + 1,
+            ...errorLogFields(error),
+          });
           throw error;
         }
         if (attempt >= maxRetries) {
+          logError('database_transaction_retries_exhausted', {
+            label,
+            attempts: attempt + 1,
+            maxRetries,
+            ...errorLogFields(error),
+          });
           throw new Error(
             `${label}: gave up after ${maxRetries} serialization retries`,
             { cause: error },
@@ -144,12 +170,37 @@ export async function withSerializable<T>(
         // Exponential backoff. Deliberately not jittered: the engine forbids
         // Math.random, and at this concurrency the herd is small enough that
         // plain backoff resolves contention.
-        await sleep(Math.min(2 ** attempt * 5, 200));
+        const delayMs = Math.min(2 ** attempt * 5, 200);
+        logWarn('database_transaction_retry', {
+          label,
+          attempt: attempt + 1,
+          maxRetries,
+          delayMs,
+          ...errorLogFields(error),
+        });
+        await sleep(delayMs);
       }
     }
   } finally {
     client.release();
   }
+}
+
+function databaseTarget(connectionString: string): Record<string, unknown> {
+  try {
+    const url = new URL(connectionString);
+    return {
+      databaseHost: url.hostname,
+      databasePort: url.port || null,
+      databaseName: url.pathname.replace(/^\//, '') || null,
+    };
+  } catch {
+    return { databaseHost: 'unparseable' };
+  }
+}
+
+function statementType(text: string): string {
+  return text.trimStart().match(/^([A-Za-z]+)/)?.[1]?.toUpperCase() ?? 'UNKNOWN';
 }
 
 function sleep(ms: number): Promise<void> {

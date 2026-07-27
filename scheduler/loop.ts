@@ -27,6 +27,7 @@ import { SCALE } from '../engine/fixedpoint.ts';
 import { query } from '../engine/db.ts';
 import type { InferenceClient } from '../engine/inference/index.ts';
 import { sweepExpiredConversations } from '../engine/conversation.ts';
+import { errorLogFields, logEntry } from '../engine/log.ts';
 
 export interface SchedulerOptions {
   inference: InferenceClient;
@@ -66,7 +67,9 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
   const leaseTtlMs = options.leaseTtlMs ?? 30_000;
   const pollIntervalMs = options.pollIntervalMs ?? 2_000;
   const maxWorlds = options.maxWorlds ?? 25;
-  const log = options.log ?? ((entry) => console.log(JSON.stringify(entry)));
+  const log = options.log ?? ((entry) => logEntry(entry as {
+    level: 'debug' | 'info' | 'warn' | 'error'; event: string;
+  }));
 
   const runners = new Map<string, Promise<void>>();
   let running = false;
@@ -85,8 +88,13 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
           if (!renewed) leaseLost = true;
           else consecutiveRenewalErrors = 0;
         })
-        .catch(() => {
+        .catch((error) => {
           consecutiveRenewalErrors++;
+          log({
+            level: 'warn', event: 'lease_renewal_failed', worldId,
+            consecutiveErrors: consecutiveRenewalErrors,
+            ...errorLogFields(error),
+          });
           if (consecutiveRenewalErrors >= 3) leaseLost = true;
         })
         .finally(() => {

@@ -11,7 +11,10 @@ import { hostname } from 'node:os';
 
 import { closePool } from '../engine/db.ts';
 import { createInferenceClient } from '../engine/inference/index.ts';
+import { errorLogFields, logError, logInfo } from '../engine/log.ts';
 import { createScheduler } from './loop.ts';
+
+process.env.SERVICE_NAME ??= 'hollowmere-scheduler';
 
 const owner = process.env.SCHEDULER_OWNER ?? `${hostname()}:${process.pid}`;
 
@@ -23,6 +26,7 @@ const scheduler = createScheduler({
 });
 
 scheduler.start();
+logInfo('scheduler_process_ready', { owner, pid: process.pid });
 
 /**
  * Shut down cleanly on the signals a container orchestrator actually sends.
@@ -34,7 +38,22 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     if (stopping) return;
     stopping = true;
-    console.log(JSON.stringify({ level: 'info', event: 'shutdown', signal, owner }));
-    void scheduler.stop().then(closePool).then(() => process.exit(0));
+    logInfo('shutdown_started', { signal, owner });
+    void scheduler.stop().then(closePool).then(() => {
+      logInfo('shutdown_completed', { signal, owner });
+      process.exit(0);
+    }).catch((error) => {
+      logError('shutdown_failed', { signal, owner, ...errorLogFields(error) });
+      process.exit(1);
+    });
   });
 }
+
+process.on('unhandledRejection', (error) => {
+  logError('unhandled_rejection', errorLogFields(error));
+});
+
+process.on('uncaughtException', (error) => {
+  logError('uncaught_exception', errorLogFields(error));
+  process.exit(1);
+});

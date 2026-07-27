@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   closeConversation, ConversationRateLimitError, startConversation,
-  parseTurn, sweepExpiredConversations, takeConversationTurn,
+  parseTurn, parseTurnWithDiagnostics, sweepExpiredConversations, takeConversationTurn,
 } from './conversation.ts';
 import { closePool, query } from './db.ts';
 import { createStubClient } from './inference/index.ts';
@@ -56,6 +56,16 @@ describe('player conversation output parsing', () => {
         hearingResponse: null }),
     ];
     for (const text of invalid) assert.equal(parseTurn(text), null);
+  });
+
+  test('identifies why a structured output was rejected', () => {
+    assert.equal(parseTurnWithDiagnostics('not json').rejection?.code, 'invalid_json');
+    assert.deepEqual(parseTurnWithDiagnostics(JSON.stringify({
+      reply: 'I heard Rowan was there.', speechAct: 'inform', disclosure: null,
+      hearingResponse: null, referencedClaimKeys: ['invented_claim'],
+    })).rejection, {
+      code: 'unknown_claim_key', detail: 'received "invented_claim"',
+    });
   });
 });
 

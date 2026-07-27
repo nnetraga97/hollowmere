@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { SessionAccessError } from './engine';
+import { errorLogFields, logError, logWarn, SessionAccessError } from './engine';
 import { readSession } from './session';
 
 export function requireSameOrigin(request: NextRequest): void {
@@ -20,12 +20,19 @@ export class HttpError extends Error {
   }
 }
 
-export function routeError(error: unknown): NextResponse {
+export interface RouteLogContext {
+  method: string;
+  route: string;
+}
+
+export function routeError(error: unknown, context: RouteLogContext): NextResponse {
   const status = error instanceof HttpError
     ? error.status
     : error instanceof SessionAccessError ? 403 : 400;
   const message = error instanceof Error ? error.message : String(error);
-  if (status >= 500) console.error(JSON.stringify({ level: 'error', event: 'web_route_failed', message }));
+  const fields = { ...context, status, ...errorLogFields(error) };
+  if (status >= 500) logError('web_request_failed', fields);
+  else logWarn('web_request_rejected', fields);
   return NextResponse.json({ error: message }, { status });
 }
 
