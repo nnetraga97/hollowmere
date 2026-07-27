@@ -11,8 +11,9 @@ import {
   applyStructuredConversationTurn, SPEECH_ACTS, type SpeechAct,
 } from './converse.ts';
 import { recall, recordAccesses } from './retrieval.ts';
+import { romanceCandidate, type RomanceProfile, type RomanceStatus } from './romance-content.ts';
 
-export const CONVERSATION_TURN_PROMPT_VERSION = 'conversation-turn-v4';
+export const CONVERSATION_TURN_PROMPT_VERSION = 'conversation-turn-v5';
 const HOLD_MINUTES = 5;
 const TURN_TIMEOUT_SECONDS = 45;
 const MEMORY_SEQ_BASE = 2_000_000;
@@ -295,20 +296,22 @@ async function completeReservedTurn(
 ): Promise<void> {
   const context = await withClient(async (client) => {
     const sessions = await client.query<{
-      agent_id: string; player_id: string; agent_name: string; agent_status: string;
+      agent_id: string; agent_key: string; player_id: string; agent_name: string; agent_status: string;
       current_action: string | null;
       persona: { summary?: string; traits?: string[] };
       kindness: number; engagement: number; honesty: number;
       faction_key: string; faction_name: string; location_key: string; location_name: string;
       trust: number; affinity: number; fear: number; respect: number; impression: string | null;
+      romance_stage: number | null; romance_status: RomanceStatus | null;
       player_name: string; player_profile: { background?: string };
       current_tick: number; day: number; phase: string; escalation_stage: string;
     }>(
-      `SELECT a.agent_id, p.player_id, a.name AS agent_name, a.status AS agent_status, a.current_action,
+      `SELECT a.agent_id, a.agent_key, p.player_id, a.name AS agent_name, a.status AS agent_status, a.current_action,
               a.persona, a.kindness, a.engagement, a.honesty,
               f.faction_key, f.name AS faction_name,
               l.location_key, l.name AS location_name,
               r.trust, r.affinity, r.fear, r.respect, r.impression,
+              romance.stage AS romance_stage, romance.status AS romance_status,
               p.name AS player_name, p.profile AS player_profile,
               w.current_tick, state.day, state.phase, state.escalation_stage
          FROM world_conversation_sessions s
@@ -320,6 +323,8 @@ async function completeReservedTurn(
          JOIN world_state state ON state.world_id = s.world_id
          JOIN player_agent_relationships r ON r.world_id = s.world_id
               AND r.player_id = s.player_id AND r.agent_id = s.target_agent_id
+         LEFT JOIN player_romance_arcs romance ON romance.world_id = s.world_id
+              AND romance.player_id = s.player_id AND romance.agent_id = s.target_agent_id
         WHERE s.world_id = $1 AND s.conversation_id = $2 AND p.session_id = $3
           AND s.status = 'open'`, [input.worldId, input.conversationId, input.sessionId],
     );
@@ -396,6 +401,11 @@ async function completeReservedTurn(
     if (!reserved.rows[0]) throw new Error('conversation turn is no longer pending');
     return {
       agent: sessions.rows[0], transcript: transcript.rows,
+      romanceContext: romancePromptContext(
+        sessions.rows[0].agent_key,
+        sessions.rows[0].romance_stage,
+        sessions.rows[0].romance_status,
+      ),
       memories: [] as string[], beliefs: beliefs.rows,
       audience: audience.rows.map((row) => row.name), commitments: commitments.rows,
       allAgentNames: agents.rows.map((row) => row.name),
@@ -745,6 +755,7 @@ Rules:
 - Do not name a rumor source in reply. For a provenance question, choose disclosure and let the engine append any authorized source statement.
 - Do not independently promise or refuse hearing attendance in reply. For a summons, choose hearingResponse and let the engine append the authoritative outcome.
 - If the context does not support a factual answer, answer cautiously, admit uncertainty, deflect, or ask a natural follow-up.
+- If a romance context is supplied, preserve its voice, boundaries, affection style, and current relationship status. Intimacy must be mutual and PG-13. Never assume exclusivity, express jealousy about another route, or punish the player for another bond.
 
 Metric scales:
 - kindness, engagement, honesty, trust, and fear run from 0 (none/low) to 10000 (extreme/high).
@@ -795,6 +806,11 @@ interface TurnPromptContext {
     commitment_status: string; hearing_status: string;
   }[];
   allAgentNames?: readonly string[];
+  romanceContext: {
+    status: RomanceStatus;
+    completedChapters: number;
+    profile: RomanceProfile;
+  } | null;
   latestPlayerUtterance: string;
 }
 
@@ -897,6 +913,20 @@ function buildTurnPrompt(context: TurnPromptContext): string {
       respect: agent.respect,
       lastingImpression: agent.impression,
     },
+    romanceContext: context.romanceContext ? {
+      status: context.romanceContext.status,
+      completedChapters: context.romanceContext.completedChapters,
+      noExclusivityAssumed: true,
+      privateCharacter: context.romanceContext.profile.privateSelf,
+      centralWound: context.romanceContext.profile.centralWound,
+      deepestWant: context.romanceContext.profile.deepestWant,
+      contradiction: context.romanceContext.profile.contradiction,
+      humor: context.romanceContext.profile.humor,
+      affectionStyle: context.romanceContext.profile.affectionStyle,
+      conflictStyle: context.romanceContext.profile.conflictStyle,
+      boundaries: context.romanceContext.profile.boundaries,
+      behavioralLogic: context.romanceContext.profile.actionLogic,
+    } : null,
     knowledgeItems: context.beliefs.map((belief) => ({
       claimKey: belief.claim_key,
       claim: belief.text,
@@ -1080,6 +1110,20 @@ function relationshipImpression(turns: readonly ConversationTurnView[]): string 
   if (acts.has('accuse')) return 'The outsider pressed a dangerous accusation.';
   if (turns.length >= 4) return 'The outsider stayed and listened.';
   return 'The outsider stopped to speak.';
+}
+
+function romancePromptContext(
+  agentKey: string,
+  completedChapters: number | null,
+  status: RomanceStatus | null,
+): TurnPromptContext['romanceContext'] {
+  const candidate = romanceCandidate(agentKey);
+  if (!candidate) return null;
+  return {
+    status: status ?? 'open',
+    completedChapters: completedChapters ?? 0,
+    profile: candidate.profile,
+  };
 }
 
 function relationshipDeltas(turns: readonly ConversationTurnView[]) {

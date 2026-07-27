@@ -13,6 +13,7 @@ import {
   type FactionView, type TickMetrics, type WorldSummary,
 } from './api.ts';
 import { getHeldConversation, type ConversationView } from './conversation.ts';
+import { getRomanceArcs, type RomanceArcView } from './romance.ts';
 
 export interface SessionRef {
   sessionId: string;
@@ -94,6 +95,7 @@ export interface GameSnapshot {
   cognition: CognitionView[];
   metrics: TickMetrics[];
   conversation: ConversationView | null;
+  romances: RomanceArcView[];
   capabilities: { instigator: boolean; hearings: boolean; evidence: boolean };
 }
 
@@ -228,7 +230,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
   const world = await getWorldSummary(ref.worldId);
   if (!world) throw new SessionAccessError();
 
-  const [agents, factions, claims, cognition, metrics, reputations, pending, evidence, hearings] =
+  const [agents, factions, claims, cognition, metrics, reputations, pending, evidence, hearings, romances] =
     await Promise.all([
       listAgents(ref.worldId),
       getFactions(ref.worldId),
@@ -251,6 +253,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
       ),
       readEvidence(ref, false),
       readHearings(ref),
+      getRomanceArcs(ref),
     ]);
 
   return {
@@ -274,6 +277,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
     cognition,
     metrics,
     conversation: await getHeldConversation(ref),
+    romances,
     capabilities: {
       instigator: await tableExists('world_culprit'),
       hearings: await tableExists('world_hearings'),

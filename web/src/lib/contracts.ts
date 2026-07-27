@@ -89,7 +89,44 @@ export interface GameSnapshot {
   }[];
   metrics: { tick: number; durationMs: number; retryCount: number }[];
   conversation: Conversation | null;
+  romances: RomanceArc[];
   capabilities: { instigator: boolean; hearings: boolean; evidence: boolean };
+}
+
+export type RomanceStatus = 'open' | 'growing' | 'courting' | 'committed'
+  | 'platonic' | 'complicated' | 'strained';
+
+export interface RomanceProfile {
+  routeTitle: string; role: string; publicFace: string; privateSelf: string;
+  centralWound: string; deepestWant: string; contradiction: string; humor: string;
+  affectionStyle: string; conflictStyle: string; boundaries: string[]; tells: string[];
+  plotRole: string; actionLogic: string[];
+}
+
+export interface RomanceMoment {
+  sceneKey: string; chapter: number; chapterCount: number; title: string; kicker: string;
+  setting: string; narration: string; callbacks: string[]; opening: string;
+  choices: { key: string; label: string; intent: string }[];
+}
+
+export interface RomanceHistory {
+  tick: number; sceneKey: string; title: string; choiceKey: string; choiceLabel: string;
+  response: string; aftermath: string; statusAfter: RomanceStatus; revealedClaimKeys: string[];
+}
+
+export interface RomanceArc {
+  agentKey: string; name: string; shortName: string; factionKey: string;
+  agentStatus: string; agentLocationKey: string; routeTitle: string; profile: RomanceProfile;
+  stage: number; chapterCount: number; status: RomanceStatus;
+  bond: { trust: number; affinity: number; fear: number; respect: number };
+  flags: string[]; revealedClaimKeys: string[]; history: RomanceHistory[];
+  available: boolean; availabilityReason: string | null; moment: RomanceMoment | null;
+  epilogue: string;
+}
+
+export interface RomanceChoiceResult {
+  eventId: string; replayed: boolean; agentKey: string; sceneKey: string; choiceKey: string;
+  response: string; aftermath: string; effectSummary: string[]; arc: RomanceArc;
 }
 
 export interface Bootstrap {

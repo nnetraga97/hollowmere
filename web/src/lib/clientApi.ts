@@ -1,5 +1,6 @@
 import type {
-  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, SocialGraph, TensionPoint,
+  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, RomanceChoiceResult,
+  SocialGraph, TensionPoint,
 } from './contracts';
 
 async function decode<T>(response: Response): Promise<T> {
@@ -52,6 +53,15 @@ export async function loadAgent(agentKey: string): Promise<AgentDetail> {
 
 export async function loadTruth(): Promise<DebugTruth> {
   return decode(await fetch('/api/debug/truth', { cache: 'no-store' }));
+}
+
+export async function chooseRomance(input: {
+  agentKey: string; sceneKey: string; choiceKey: string; locationKey: string;
+}): Promise<RomanceChoiceResult> {
+  return decode(await fetch('/api/romance', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...input, idempotencyKey: crypto.randomUUID() }),
+  }));
 }
 
 export async function control(body: Record<string, unknown>) {

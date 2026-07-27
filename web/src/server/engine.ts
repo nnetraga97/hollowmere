@@ -8,6 +8,7 @@ export {
   DEFAULT_CONVERSATION_RATE_LIMIT_PER_MINUTE, getHeldConversation,
   startConversation, takeConversationTurn,
 } from '../../../engine/conversation.ts';
+export { chooseRomanceMoment, getRomanceArcs } from '../../../engine/romance.ts';
 export { query } from '../../../engine/db.ts';
 export { createInferenceClient } from '../../../engine/inference/index.ts';
 export { instantiateWorld } from '../../../scenario/instantiate.ts';

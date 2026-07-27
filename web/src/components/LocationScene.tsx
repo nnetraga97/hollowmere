@@ -1,12 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
-import { ArrowLeft, Heart, MessageCircle, Users } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, BookHeart, Heart, MessageCircle, Users } from 'lucide-react';
 
 import {
   atlasPosition, formatAction, LOCATION_SCENES, portraitPath, rankLocationAgents, relationshipLevel,
 } from '@/game/locationScenes';
-import type { AgentDetail, Bootstrap, GameSnapshot } from '@/lib/contracts';
+import type {
+  AgentDetail, Bootstrap, GameSnapshot, RomanceArc, RomanceChoiceResult,
+} from '@/lib/contracts';
+import { RomanceScene } from './RomanceScene';
 
 interface LocationSceneProps {
   bootstrap: Bootstrap;
@@ -14,18 +17,26 @@ interface LocationSceneProps {
   locationKey: string;
   selectedAgent: AgentDetail | null;
   bondChange: { agentKey: string; trust: number; affinity: number; fear: number; respect: number } | null;
+  romance: RomanceArc | null;
   busy: boolean;
   onBack: () => void;
   onInspect: (agentKey: string) => void;
   onTalk: (agentKey: string) => void;
+  onRomanceChoice: (input: {
+    agentKey: string; sceneKey: string; choiceKey: string; locationKey: string;
+  }) => Promise<RomanceChoiceResult>;
 }
 
 export function LocationScene({
-  bootstrap, game, locationKey, selectedAgent, bondChange, busy, onBack, onInspect, onTalk,
+  bootstrap, game, locationKey, selectedAgent, bondChange, romance, busy,
+  onBack, onInspect, onTalk, onRomanceChoice,
 }: LocationSceneProps) {
   const returnButton = useRef<HTMLButtonElement>(null);
   const onBackRef = useRef(onBack);
+  const [romanceOpen, setRomanceOpen] = useState(false);
+  const romanceOpenRef = useRef(false);
   onBackRef.current = onBack;
+  romanceOpenRef.current = romanceOpen;
   const location = bootstrap.map.locations.find(({ key }) => key === locationKey);
   const scene = LOCATION_SCENES[locationKey] ?? {
     kicker: 'A corner of Hollowmere',
@@ -38,21 +49,35 @@ export function LocationScene({
   ), [game.agents, game.world.day, game.world.seed, locationKey]);
   const active = selectedAgent && encounters.some(({ agentKey }) => agentKey === selectedAgent.agent.agentKey)
     ? selectedAgent : null;
+  const activeRomance = active?.agent.agentKey === romance?.agentKey ? romance : null;
 
   useEffect(() => {
     if (!active && encounters[0]) onInspect(encounters[0].agentKey);
   }, [active, encounters, onInspect]);
 
+  useEffect(() => setRomanceOpen(false), [active?.agent.agentKey]);
+
   useEffect(() => {
     returnButton.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onBackRef.current();
+      if (event.key === 'Escape' && !romanceOpenRef.current) onBackRef.current();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  return <section className="location-scene" role="dialog" aria-modal="true" aria-label={`${location?.name ?? locationKey} scene`}>
+  useEffect(() => {
+    if (!romanceOpen) returnButton.current?.focus();
+  }, [romanceOpen]);
+
+  return <section className="location-scene" role={romanceOpen ? undefined : 'dialog'} aria-modal={romanceOpen ? undefined : 'true'} aria-label={`${location?.name ?? locationKey} scene`}>
+    {romanceOpen && activeRomance?.moment ? <RomanceScene
+      arc={activeRomance}
+      locationKey={locationKey}
+      busy={busy}
+      onClose={() => setRomanceOpen(false)}
+      onChoose={onRomanceChoice}
+    /> : <>
     <div className="location-backdrop" style={{ backgroundPosition: atlasPosition(locationKey) }} aria-hidden="true" />
     <div className="location-weather" aria-hidden="true" />
     <header className="location-scene-header">
@@ -98,6 +123,7 @@ export function LocationScene({
         <p className="focus-summary">{active.summary}</p>
         <p className="focus-reason"><b>Why here:</b> {formatAction(active.agent.currentAction)}.</p>
         <BondMeter relationship={active.playerRelationship} />
+        {activeRomance && <RomanceCard arc={activeRomance} onOpen={() => setRomanceOpen(true)} busy={busy} />}
         {bondChange?.agentKey === active.agent.agentKey && <div className="bond-impact" role="status">
           <span>Conversation remembered</span>
           <strong>{formatSigned(bondChange.trust)} trust · {formatSigned(bondChange.affinity)} affinity</strong>
@@ -113,6 +139,35 @@ export function LocationScene({
     </aside>}
 
     <p className="scene-ambience"><span aria-hidden="true">“</span>{scene.ambience}<span aria-hidden="true">”</span></p>
+    </>}
+  </section>;
+}
+
+function RomanceCard({ arc, onOpen, busy }: { arc: RomanceArc; onOpen: () => void; busy: boolean }) {
+  const complete = arc.stage >= arc.chapterCount;
+  return <section className="romance-card" aria-label={`${arc.routeTitle} relationship route`}>
+    <header>
+      <span><BookHeart size={15} aria-hidden="true" /> {arc.routeTitle}</span>
+      <b>{arc.status}</b>
+    </header>
+    <p>{arc.profile.plotRole}</p>
+    <div className="romance-route-progress"><i><b style={{ width: `${(arc.stage / arc.chapterCount) * 100}%` }} /></i><span>{arc.stage} / {arc.chapterCount} moments</span></div>
+    {complete
+      ? <p className="romance-route-note">{arc.epilogue}</p>
+      : <button className="romance-open" disabled={busy || !arc.available} onClick={onOpen}>
+          <Heart size={16} aria-hidden="true" /> {arc.available ? `Stay a little longer with ${arc.shortName}` : 'A private moment is not ready'}
+        </button>}
+    {!complete && !arc.available && <small className="romance-lock-reason">{arc.availabilityReason}</small>}
+    <details className="romance-character-notes">
+      <summary>What you have learned about {arc.shortName}</summary>
+      <dl>
+        <div><dt>Behind the public face</dt><dd>{arc.profile.privateSelf}</dd></div>
+        <div><dt>What {arc.shortName} wants</dt><dd>{arc.profile.deepestWant}</dd></div>
+        <div><dt>How affection appears</dt><dd>{arc.profile.affectionStyle}</dd></div>
+        <div><dt>Boundaries</dt><dd>{arc.profile.boundaries.join(' ')}</dd></div>
+      </dl>
+    </details>
+    <small className="romance-no-lockout">Independent route · no jealousy or exclusivity lock</small>
   </section>;
 }
 

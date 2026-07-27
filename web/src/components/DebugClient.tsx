@@ -1,15 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, FileSearch, Map, Network, Pause, Play, RotateCcw, Scale, UserRound } from 'lucide-react';
+import { ArrowRight, BookOpen, FileSearch, Heart, Map, Network, Pause, Play, RotateCcw, Scale, UserRound } from 'lucide-react';
 
 import { EventBus } from '@/game/EventBus';
 import { atlasPosition, portraitPath, relationshipLevel } from '@/game/locationScenes';
 import type {
-  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, SocialGraph,
+  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot,
+  RomanceChoiceResult, SocialGraph,
 } from '@/lib/contracts';
 import {
-  closeConversation, control, loadAgent, loadChronicle, loadGame, loadGraph, loadTruth, movePlayer,
+  chooseRomance, closeConversation, control, loadAgent, loadChronicle, loadGame, loadGraph, loadTruth, movePlayer,
   startConversation, startSession, streamConversationTurn, type PlayerEntry,
 } from '@/lib/clientApi';
 import { PhaserGame } from './PhaserGame';
@@ -219,6 +220,25 @@ export function DebugClient() {
     }
   }
 
+  async function makeRomanceChoice(input: {
+    agentKey: string; sceneKey: string; choiceKey: string; locationKey: string;
+  }): Promise<RomanceChoiceResult> {
+    if (sending) throw new Error('another action is still resolving');
+    setSending(true);
+    try {
+      const result = await chooseRomance(input);
+      await refresh();
+      setAgent(await loadAgent(input.agentKey));
+      return result;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(message);
+      throw cause;
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function applyControl(body: Record<string, unknown>) {
     try {
       await control(body);
@@ -266,10 +286,12 @@ export function DebugClient() {
       locationKey={sceneLocationKey}
       selectedAgent={agent}
       bondChange={bondChange}
+      romance={game.romances.find((item) => item.agentKey === agent?.agent.agentKey) ?? null}
       busy={sending}
       onBack={() => { setSceneLocationKey(null); setAgent(null); }}
       onInspect={inspectAgent}
       onTalk={(agentKey) => void beginConversation(agentKey)}
+      onRomanceChoice={makeRomanceChoice}
     />}
     {journey && <section className="journey-cinematic" aria-live="polite">
       <div className="journey-backdrop" style={{ backgroundPosition: atlasPosition(journey.to) }} aria-hidden="true" />
@@ -392,6 +414,11 @@ export function DebugClient() {
     {truthWarning && !truth && <div className="modal-backdrop"><section className="modal"><span className="eyebrow">Spoiler boundary</span><h2>Reveal Engine Truth?</h2><p>This exposes the culprit, live scheme, and whether each clue is genuine or a misdirection. It only reads your current private world.</p><div className="modal-actions"><button onClick={() => setTruthWarning(false)}>Cancel</button><button className="danger" onClick={() => void loadTruth().then((value) => { setTruth(value); setTruthWarning(false); }).catch((cause) => setError(String(cause)))}>Reveal</button></div></section></div>}
     {truth && <section className="truth-drawer"><header><div><span className="eyebrow">Engine Truth</span><h2>{truth.culprit?.agentKey ?? 'No instigator data'}</h2></div><button onClick={() => setTruth(null)}>×</button></header>{truth.available ? <><p>Motive: {truth.culprit?.motiveKey ?? '—'} · exposed t{truth.culprit?.exposedTick ?? '—'}</p><p>Posture: {truth.scheme?.posture ?? '—'} · tactic: {truth.scheme?.currentTactic ?? '—'} · next strategy t{truth.scheme?.nextStrategyTick ?? '—'}</p>{truth.evidence.map((item) => <div className="metric-row" key={item.evidenceId}><b>{item.kind} · {item.accusedKey ?? 'unknown'}</b><span>{item.genuine ? 'genuine' : 'misdirection'}</span></div>)}</> : <p>The instigator implementation is not present in this worktree yet.</p>}</section>}
 
-    {game.world.ending && <div className="ending"><span className="eyebrow">World ended</span><h1>{game.world.ending}</h1><p>The ledger remains open for inspection.</p><button onClick={() => void applyControl({ action: 'restart' })}>Start another town</button></div>}
+    {game.world.ending && <div className="ending"><span className="eyebrow">World ended</span><h1>{game.world.ending}</h1><p>The ledger remains open for inspection.</p>
+      {game.romances.filter((arc) => arc.stage > 0).map((arc) => <article className="ending-romance" key={arc.agentKey}>
+        <span><Heart size={15} fill="currentColor" aria-hidden="true" /> {arc.routeTitle} · {arc.status}</span>
+        <p>{arc.epilogue}</p>
+      </article>)}
+      <button onClick={() => void applyControl({ action: 'restart' })}>Start another town</button></div>}
   </main>;
 }
