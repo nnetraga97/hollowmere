@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, FileSearch, Map, Network, Pause, Play, RotateCcw, Scale, UserRound } from 'lucide-react';
+import { ArrowRight, BookOpen, FileSearch, Map, Network, Pause, Play, RotateCcw, Scale, UserRound } from 'lucide-react';
 
 import { EventBus } from '@/game/EventBus';
+import { atlasPosition, portraitPath, relationshipLevel } from '@/game/locationScenes';
 import type {
   AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, SocialGraph,
 } from '@/lib/contracts';
@@ -12,6 +13,7 @@ import {
   startConversation, startSession, streamConversationTurn, type PlayerEntry,
 } from '@/lib/clientApi';
 import { PhaserGame } from './PhaserGame';
+import { LocationScene } from './LocationScene';
 import { Panel } from './Panel';
 import { SocialGraphView } from './Charts';
 import { LandingScreen } from './LandingScreen';
@@ -34,7 +36,13 @@ export function DebugClient() {
   const [truth, setTruth] = useState<DebugTruth | null>(null);
   const [truthWarning, setTruthWarning] = useState(false);
   const [entering, setEntering] = useState(false);
+  const [sceneLocationKey, setSceneLocationKey] = useState<string | null>(null);
+  const [journey, setJourney] = useState<{ from: string; to: string } | null>(null);
+  const [bondChange, setBondChange] = useState<{
+    agentKey: string; trust: number; affinity: number; fear: number; respect: number;
+  } | null>(null);
   const moveInFlight = useRef(false);
+  const lastLocation = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -58,6 +66,10 @@ export function DebugClient() {
       setGame(created.game);
       setConversation(created.game.conversation);
       setTalkingTo(created.game.conversation?.agentKey ?? null);
+      if (created.game.conversation) inspectAgent(created.game.conversation.agentKey);
+      setSceneLocationKey(null);
+      setJourney(null);
+      lastLocation.current = created.game.player.locationKey;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -71,20 +83,59 @@ export function DebugClient() {
     return () => window.clearInterval(timer);
   }, [bootstrap, refresh]);
 
+  const inspectAgent = useCallback((agentKey: string, openPanel = false) => {
+    if (openPanel) setPanel('agent');
+    void loadAgent(agentKey).then(setAgent).catch((cause) => setError(String(cause)));
+  }, []);
+
+  const queueMove = useCallback(async (locationKey: string) => {
+    if (!game || !bootstrap || moveInFlight.current) return;
+    if (locationKey === game.player.locationKey) {
+      setSceneLocationKey(locationKey);
+      setPanel(null);
+      return;
+    }
+    moveInFlight.current = true;
+    setSceneLocationKey(null);
+    setPanel(null);
+    setJourney({ from: game.player.locationKey, to: locationKey });
+    try {
+      await movePlayer(locationKey, crypto.randomUUID());
+      await refresh();
+    } catch (cause) {
+      moveInFlight.current = false;
+      setJourney(null);
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [bootstrap, game, refresh]);
+
   useEffect(() => {
     const offSelect = EventBus.on('select-agent', ({ agentKey }) => {
-      setPanel('agent');
-      void loadAgent(agentKey).then(setAgent).catch((cause) => setError(String(cause)));
+      inspectAgent(agentKey, true);
     });
     const offTalk = EventBus.on('talk-agent', ({ agentKey }) => {
-      setPanel('agent');
-      void loadAgent(agentKey).then(setAgent).catch((cause) => setError(String(cause)));
+      inspectAgent(agentKey, true);
     });
     const offMove = EventBus.on('request-move', ({ locationKey }) => {
       void queueMove(locationKey);
     });
-    return () => { offSelect(); offTalk(); offMove(); };
-  }, [refresh]);
+    const offEnter = EventBus.on('enter-location', ({ locationKey }) => {
+      setSceneLocationKey(locationKey);
+      setPanel(null);
+    });
+    return () => { offSelect(); offTalk(); offMove(); offEnter(); };
+  }, [inspectAgent, queueMove]);
+
+  useEffect(() => {
+    if (!game) return;
+    if (lastLocation.current && lastLocation.current !== game.player.locationKey) {
+      setJourney(null);
+      setSceneLocationKey(game.player.locationKey);
+      setPanel(null);
+      setAgent(null);
+    }
+    lastLocation.current = game.player.locationKey;
+  }, [game]);
 
   useEffect(() => {
     if (panel === 'chronicle') void loadChronicle().then(setChronicle).catch((cause) => setError(String(cause)));
@@ -92,22 +143,14 @@ export function DebugClient() {
   }, [panel]);
 
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent('hollowmere-input-focus', { detail: Boolean(talkingTo) }));
-  }, [talkingTo]);
+    window.dispatchEvent(new CustomEvent('hollowmere-input-focus', {
+      detail: Boolean(talkingTo) || Boolean(sceneLocationKey),
+    }));
+  }, [sceneLocationKey, talkingTo]);
 
   const talkingAgent = useMemo(() => game?.agents.find((item) => item.agentKey === talkingTo) ?? null, [game, talkingTo]);
-
-  async function queueMove(locationKey: string) {
-    if (moveInFlight.current) return;
-    moveInFlight.current = true;
-    try {
-      await movePlayer(locationKey, crypto.randomUUID());
-      await refresh();
-    } catch (cause) {
-      moveInFlight.current = false;
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }
+  const talkingDetail = agent?.agent.agentKey === talkingTo ? agent : null;
+  const talkingBond = relationshipLevel(talkingDetail?.playerRelationship);
 
   async function beginConversation(agentKey: string) {
     if (sending || game?.player.pendingMove) return;
@@ -117,7 +160,9 @@ export function DebugClient() {
       setConversation(value);
       setTalkingTo(value.agentKey);
       setReply('');
+      setBondChange(null);
       setPanel(null);
+      inspectAgent(agentKey);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -136,6 +181,8 @@ export function DebugClient() {
       await streamConversationTurn({ conversationId: conversation!.conversationId, text, idempotencyKey: crypto.randomUUID() },
         (token) => setReply((current) => current + token));
       await refresh();
+      const updated = await loadAgent(talkingTo);
+      setAgent(updated);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -147,10 +194,23 @@ export function DebugClient() {
     if (!conversation || sending) return;
     setSending(true);
     try {
+      const before = talkingDetail ?? await loadAgent(conversation.agentKey);
       await closeConversation(conversation.conversationId);
+      const updated = await loadAgent(conversation.agentKey);
+      setAgent(updated);
+      if (before.playerRelationship && updated.playerRelationship) {
+        setBondChange({
+          agentKey: conversation.agentKey,
+          trust: updated.playerRelationship.trust - before.playerRelationship.trust,
+          affinity: updated.playerRelationship.affinity - before.playerRelationship.affinity,
+          fear: updated.playerRelationship.fear - before.playerRelationship.fear,
+          respect: updated.playerRelationship.respect - before.playerRelationship.respect,
+        });
+      }
       setConversation(null);
       setTalkingTo(null);
       setReply('');
+      setSceneLocationKey(game?.player.locationKey ?? null);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -167,6 +227,11 @@ export function DebugClient() {
         setBootstrap(created);
         setGame(created.game);
         setTruth(null);
+        setAgent(null);
+        setSceneLocationKey(null);
+        setJourney(null);
+        setBondChange(null);
+        lastLocation.current = created.game.player.locationKey;
       } else {
         await refresh();
       }
@@ -182,6 +247,8 @@ export function DebugClient() {
   const stageProgress = Math.round(game.world.globalTension / 100);
   const currentLocation = bootstrap.map.locations.find(({ key }) => key === game.player.locationKey)?.name
     ?? game.player.locationKey;
+  const journeyFrom = journey ? bootstrap.map.locations.find(({ key }) => key === journey.from)?.name ?? journey.from : null;
+  const journeyTo = journey ? bootstrap.map.locations.find(({ key }) => key === journey.to)?.name ?? journey.to : null;
   const tickSeconds = Math.max(0.1, 5 * 10_000 / game.world.timeScale);
   const adjacentLocations = bootstrap.map.routes
     .filter((route) => route.from === game.player.locationKey)
@@ -192,6 +259,23 @@ export function DebugClient() {
     : null;
   return <main className="app-shell">
     <PhaserGame key={bootstrap.session.worldId} bootstrap={bootstrap} game={game} />
+    {sceneLocationKey === game.player.locationKey && <LocationScene
+      key={`${sceneLocationKey}-${game.world.worldId}`}
+      bootstrap={bootstrap}
+      game={game}
+      locationKey={sceneLocationKey}
+      selectedAgent={agent}
+      bondChange={bondChange}
+      busy={sending}
+      onBack={() => { setSceneLocationKey(null); setAgent(null); }}
+      onInspect={inspectAgent}
+      onTalk={(agentKey) => void beginConversation(agentKey)}
+    />}
+    {journey && <section className="journey-cinematic" aria-live="polite">
+      <div className="journey-backdrop" style={{ backgroundPosition: atlasPosition(journey.to) }} aria-hidden="true" />
+      <div className="journey-copy"><span className="eyebrow">On the road · one world tick</span><p>{journeyFrom}</p><ArrowRight size={22} aria-hidden="true" /><h2>{journeyTo}</h2></div>
+      <div className="journey-rule" aria-hidden="true"><i /></div>
+    </section>}
 
     <header className="hud">
       <div className="brand"><strong>Hollowmere</strong><span>Town instrument · {game.player.name}</span></div>
@@ -235,12 +319,12 @@ export function DebugClient() {
       </div>
       <div className="shortcuts"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move locally</span><span><kbd>E</kbd> approach</span></div>
     </footer>
-    <nav className="travel-nav" aria-label={`Roads from ${currentLocation}`}>
-      <span><b>{currentLocation}</b><small>one road per tick</small></span>
+    {!sceneLocationKey && <nav className="travel-nav" aria-label={`Roads from ${currentLocation}`}>
+      <button className="current-location-button" onClick={() => setSceneLocationKey(game.player.locationKey)}><b>{currentLocation}</b><small>enter location scene</small></button>
       {adjacentLocations.map((location) => <button key={location.key}
         disabled={Boolean(game.player.pendingMove || conversation) || game.world.status !== 'active'}
         onClick={() => void queueMove(location.key)}>{location.name}<small>1 tick</small></button>)}
-    </nav>
+    </nav>}
     {game.player.pendingMove && <div className="pending">Travelling to {pendingDestination?.name ?? game.player.pendingMove.locationKey} · arrives when tick {game.world.currentTick + 1} commits</div>}
     {error && <div className="toast" role="alert">{error}<button onClick={() => setError(null)}>dismiss</button></div>}
 
@@ -272,15 +356,37 @@ export function DebugClient() {
       {!agent ? <p className="empty">Choose an NPC on the map.</p> : <><p>{agent.summary}</p><p className="tags">{agent.traits.join(' · ')}</p><p className="approach-note">{agent.agent.name} is {agent.agent.currentAction ?? 'going about their routine'}. They have not engaged you yet.</p>{agent.agent.locationKey === game.player.locationKey && ['alive', 'injured'].includes(agent.agent.status) && <button className="speak-button" disabled={sending || Boolean(game.player.pendingMove)} onClick={() => void beginConversation(agent.agent.agentKey)}>Speak to {agent.agent.name}</button>}<dl className="detail-list"><div><dt>faction</dt><dd>{agent.agent.factionKey}</dd></div><div><dt>location</dt><dd>{agent.agent.locationKey}</dd></div><div><dt>status</dt><dd>{agent.agent.status}</dd></div><div><dt>action</dt><dd>{agent.agent.currentAction ?? 'routine'}</dd></div></dl><h3>Personality</h3>{Object.entries(agent.personality).map(([name, value]) => <div className="metric-row" key={name}><b>{name}</b><span>{Math.round(value / 100)}%</span></div>)}<h3>Relationship with you</h3>{agent.playerRelationship ? <><div className="metric-row"><b>trust · affinity</b><span>{Math.round(agent.playerRelationship.trust / 100)} · {Math.round(agent.playerRelationship.affinity / 100)}</span></div><div className="metric-row"><b>fear · respect</b><span>{Math.round(agent.playerRelationship.fear / 100)} · {Math.round(agent.playerRelationship.respect / 100)}</span></div>{agent.playerRelationship.impression && <p className="notice">{agent.playerRelationship.impression}</p>}</> : <p className="empty">No impression yet.</p>}<h3>Recent dialogue</h3>{agent.recentDialogue.length ? agent.recentDialogue.map((item, index) => <div className="metric-row" key={`${item.tick}-${index}`}><b>t{item.tick}</b><span>{item.text}</span></div>) : <p className="empty">Nothing recorded.</p>}<h3>Strongest beliefs</h3>{agent.beliefs.map((belief) => <div className="metric-row" key={belief.claimKey}><b>{belief.claimKey}</b><span>{Math.round(belief.confidence / 100)}% · t{belief.updatedTick}</span></div>)}<h3>Relationships</h3>{agent.relationships.map((relationship) => <div className="metric-row" key={relationship.agentKey}><b>{relationship.agentKey}</b><span>sentiment {Math.round(relationship.sentiment / 100)} · trust {Math.round(relationship.trust / 100)}</span></div>)}</>}
     </Panel>}
 
-    {talkingTo && conversation && <section className="dialogue" aria-label={`Conversation with ${talkingAgent?.name ?? talkingTo}`}>
-      <header><div><span className="eyebrow">Conversation · {conversation.turnCount} turns</span><h2>{talkingAgent?.name ?? talkingTo}</h2></div><button disabled={sending} onClick={() => void leaveConversation()} aria-label="End conversation">×</button></header>
-      <p className="muted">{talkingAgent?.factionKey} · {talkingAgent?.locationKey}</p>
-      {conversation.participants.some((item) => item.role === 'observer') && <p className="audience">Overheard by {conversation.participants.filter((item) => item.role === 'observer').map((item) => item.name).join(', ')}</p>}
-      <div className="conversation-log">
-        {conversation.turns.map((turn) => <div className="conversation-exchange" key={turn.turnId}><p><b>You</b>{turn.playerText}</p><p><b>{conversation.agentName}</b>{turn.reply}</p><small>{turn.speechAct}{turn.fallback ? ' · fallback' : ''}</small></div>)}
+    {talkingTo && conversation && <section className="dialogue-stage" role="dialog" aria-modal="true" aria-label={`Conversation with ${talkingAgent?.name ?? talkingTo}`}>
+      <div className="dialogue-backdrop" style={{ backgroundPosition: atlasPosition(talkingAgent?.locationKey ?? game.player.locationKey) }} aria-hidden="true" />
+      {talkingAgent && <figure className={`dialogue-portrait faction-${talkingAgent.factionKey}`}>
+        <img src={portraitPath(talkingAgent)} alt={`Portrait of ${talkingAgent.name}`} />
+        <figcaption><span>{talkingAgent.factionKey === 'unaligned' ? 'Independent' : talkingAgent.factionKey}</span><strong>{talkingAgent.name}</strong></figcaption>
+      </figure>}
+      <div className="dialogue-panel">
+        <header>
+          <div><span className="eyebrow">Private conversation · {conversation.turnCount} {conversation.turnCount === 1 ? 'turn' : 'turns'}</span><h2>{talkingAgent?.name ?? talkingTo}</h2></div>
+          <button disabled={sending} onClick={() => void leaveConversation()} aria-label="End conversation">End conversation</button>
+        </header>
+        <div className="dialogue-bond">
+          <span>Bond <b>{talkingDetail?.playerRelationship ? `${talkingBond.toFixed(1)} / 5` : 'unformed'}</b></span>
+          <div aria-hidden="true">{[1, 2, 3, 4, 5].map((heart) => <i className={talkingBond >= heart ? 'filled' : ''} key={heart}>♥</i>)}</div>
+          <em>Outcome settles when you part.</em>
+        </div>
+        {conversation.participants.some((item) => item.role === 'observer') && <p className="audience">Not entirely private · overheard by {conversation.participants.filter((item) => item.role === 'observer').map((item) => item.name).join(', ')}</p>}
+        <div className="conversation-log">
+          {conversation.turns.map((turn) => <div className="conversation-exchange" key={turn.turnId}><p><b>You</b>{turn.playerText}</p><p><b>{conversation.agentName}</b>{turn.reply}</p><small>{turn.speechAct}{turn.fallback ? ' · fallback' : ''}</small></div>)}
+        </div>
+        <div className={`reply ${sending ? 'reply-listening' : ''}`}>{reply || (sending ? `${conversation.agentName} considers your words…` : conversation.turns.length ? 'Their answer hangs between you.' : 'They wait to learn why you approached.')}</div>
+        <div className="conversation-approaches" role="group" aria-label="Conversation approaches">
+          <span>Approach</span>
+          {[
+            ['Ask what they saw', 'What have you seen here that others might have missed?'],
+            ['Offer help', 'You seem burdened. Is there something I can help you set right?'],
+            ['Challenge a rumor', 'I have heard stories moving through town. Which one do you believe is dangerous?'],
+          ].map(([label, prompt]) => <button type="button" key={label} disabled={sending} onClick={() => setUtterance(prompt)}>{label}</button>)}
+        </div>
+        <form onSubmit={sendDialogue}><textarea value={utterance} onChange={(event) => setUtterance(event.target.value)} maxLength={2000} autoFocus placeholder="Choose your words…" /><button disabled={sending || !utterance.trim()}>{sending ? 'Listening…' : 'Speak'}</button></form>
       </div>
-      <div className="reply">{reply || (sending ? 'Listening…' : conversation.turns.length ? 'Continue, or end the conversation.' : 'Ask about a source, dispute a claim, reconcile the Houses, or summon them to a hearing.')}</div>
-      <form onSubmit={sendDialogue}><textarea value={utterance} onChange={(event) => setUtterance(event.target.value)} maxLength={2000} autoFocus placeholder="Speak to them…" /><button disabled={sending || !utterance.trim()}>{sending ? 'Speaking…' : 'Send'}</button></form>
     </section>}
 
     {truthWarning && !truth && <div className="modal-backdrop"><section className="modal"><span className="eyebrow">Spoiler boundary</span><h2>Reveal Engine Truth?</h2><p>This exposes the culprit, live scheme, and whether each clue is genuine or a misdirection. It only reads your current private world.</p><div className="modal-actions"><button onClick={() => setTruthWarning(false)}>Cancel</button><button className="danger" onClick={() => void loadTruth().then((value) => { setTruth(value); setTruthWarning(false); }).catch((cause) => setError(String(cause)))}>Reveal</button></div></section></div>}

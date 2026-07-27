@@ -64,6 +64,7 @@ export class TownScene extends Phaser.Scene {
   private nearestAgent: string | null = null;
   private overlayCaptured = false;
   private domInputCaptured = false;
+  private cleaned = false;
   private unlisten: (() => void)[] = [];
 
   constructor() {
@@ -114,6 +115,7 @@ export class TownScene extends Phaser.Scene {
     document.addEventListener('focusin', this.onDomFocus);
     document.addEventListener('focusout', this.onDomFocus);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanup, this);
+    this.events.once(Phaser.Scenes.Events.DESTROY, this.cleanup, this);
     EventBus.emit('scene-ready', undefined);
   }
 
@@ -135,7 +137,10 @@ export class TownScene extends Phaser.Scene {
   }
 
   private cleanup(): void {
+    if (this.cleaned) return;
+    this.cleaned = true;
     for (const dispose of this.unlisten) dispose();
+    this.unlisten = [];
     window.removeEventListener('hollowmere-input-focus', this.onInputFocus);
     document.removeEventListener('focusin', this.onDomFocus);
     document.removeEventListener('focusout', this.onDomFocus);
@@ -223,7 +228,13 @@ export class TownScene extends Phaser.Scene {
         .setStrokeStyle(2, factionColor, 0.58)
         .setDepth(1)
         .setInteractive()
-        .on('pointerdown', () => this.requestMove(location.key));
+        .on('pointerdown', () => {
+          if (this.state?.player.locationKey === location.key) {
+            EventBus.emit('enter-location', { locationKey: location.key });
+          } else {
+            this.requestMove(location.key);
+          }
+        });
       marker.setData('locationKey', location.key);
       halo.setData('locationKey', location.key);
       const iconX = point.x - LOCATION_RADIUS * 0.72;
@@ -269,7 +280,7 @@ export class TownScene extends Phaser.Scene {
   }
 
   private applyState(game: GameSnapshot): void {
-    if (!this.mapData || !this.player) return;
+    if (!this.mapData || !this.player?.active || !this.player.body) return;
     const previousWorld = this.state?.world.worldId;
     this.state = game;
     const playerLocation = this.locations.get(game.player.locationKey);
@@ -416,7 +427,9 @@ export class TownScene extends Phaser.Scene {
       const current = locationKey === this.state.player.locationKey;
       const adjacent = areAdjacent(this.mapData, this.state.player.locationKey, locationKey);
       const available = adjacent && !this.state.player.pendingMove && this.state.world.status === 'active';
-      objects.travelLabel.setText(available ? 'TRAVEL · 1 TICK' : '').setVisible(available);
+      objects.travelLabel
+        .setText(current ? 'ENTER SCENE' : available ? 'TRAVEL · 1 TICK' : '')
+        .setVisible(current || available);
       objects.marker.setStrokeStyle(
         current ? 4 : available ? 3 : 2,
         current ? 0xffdb78 : available ? 0xd6b65d : 0x59616b,
