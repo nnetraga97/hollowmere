@@ -253,26 +253,28 @@ export async function applyDialogue(
 
   const { senderMemoryVector, listenerMemoryVector, ...recordedDecision } = decision;
 
-  await client.query(
-    `INSERT INTO cognition_records
-       (world_id, tick, agent_id, task, input_hash, decision, model_id, prompt_version,
-        tokens_in, tokens_out, latency_ms, observation_vector, reflection_vector)
-     VALUES ($1, $2, $3, 'dialogue', $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-    [
-      input.worldId,
-      input.tick,
-      decision.fromAgentId,
-      decision.inputHash,
-      JSON.stringify(recordedDecision),
-      decision.modelId,
-      SPEECH_PROMPT_VERSION,
-      decision.tokensIn,
-      decision.tokensOut,
-      decision.latencyMs,
-      senderMemoryVector ? `[${senderMemoryVector.join(',')}]` : null,
-      listenerMemoryVector ? `[${listenerMemoryVector.join(',')}]` : null,
-    ],
-  );
+  if (decision.modelId !== 'replay') {
+    await client.query(
+      `INSERT INTO cognition_records
+         (world_id, tick, agent_id, task, input_hash, decision, model_id, prompt_version,
+          tokens_in, tokens_out, latency_ms, observation_vector, reflection_vector)
+       VALUES ($1, $2, $3, 'dialogue', $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [
+        input.worldId,
+        input.tick,
+        decision.fromAgentId,
+        decision.inputHash,
+        JSON.stringify(recordedDecision),
+        decision.modelId,
+        SPEECH_PROMPT_VERSION,
+        decision.tokensIn,
+        decision.tokensOut,
+        decision.latencyMs,
+        senderMemoryVector ? `[${senderMemoryVector.join(',')}]` : null,
+        listenerMemoryVector ? `[${listenerMemoryVector.join(',')}]` : null,
+      ],
+    );
+  }
   let firstEventId: string | null = null;
   for (const [index, turn] of decision.turns.entries()) {
     const senderTurn = turn.speaker === 'sender';

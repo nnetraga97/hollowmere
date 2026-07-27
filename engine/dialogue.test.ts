@@ -175,6 +175,16 @@ describe('NPC dialogue', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
       seed: 1_308,
       sessionId: `npc-dialogue-history-${Date.now()}`,
     });
+    // This test drives dialogue selection directly instead of advancing the
+    // simulation. Keep its fixture out of any concurrently running scheduler,
+    // which would otherwise move the chosen pair or spread the selected rumor
+    // between the two assertions below.
+    await query(
+      `UPDATE worlds
+          SET status = 'paused', lease_owner = NULL, lease_expires_at = NULL
+        WHERE world_id = $1`,
+      [world.worldId],
+    );
     const agents = await query<{
       culprit_id: string; culprit_location_id: string; listener_id: string; remote_location_id: string;
     }>(

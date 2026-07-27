@@ -70,7 +70,7 @@ export interface TickReport {
 export interface RunTickOptions {
   worldId: string;
   inference: InferenceClient;
-  /** Skip reworded retellings, e.g. when running a large headless batch. */
+  /** @deprecated Distortion is disabled until it becomes persisted world configuration. */
   allowDistortion?: boolean;
   /** Re-run a recorded world from cognition_records, with no model calls. */
   replay?: boolean;
@@ -243,11 +243,10 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
       rng: tickRng(seed, tick, 'gossip'),
       seq,
       inference: options.inference,
-      // Never on replay. Rewording a retelling is a model call, and unlike
-      // cognition it is recorded nowhere — so a replayed tick with distortion on
-      // would reach a live model for text it cannot reproduce anyway. Replay's
-      // whole promise is that it needs no provider.
-      allowDistortion: options.replay ? false : options.allowDistortion,
+      // Tick-level distortion is disabled until it is a persisted world
+      // setting. A per-call flag is not replayable configuration. The
+      // deterministic distortion rule remains directly testable in gossip.
+      allowDistortion: false,
     });
 
     const accusations = await runAccusations(client, {

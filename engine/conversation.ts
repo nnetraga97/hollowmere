@@ -5,7 +5,7 @@ import { COGNITION } from './config.ts';
 import { query, withClient, withSerializable, type Client } from './db.ts';
 import { stableId } from './ids.ts';
 import {
-  createStubClient, isBillableInferenceMode, type InferenceClient,
+  createStubClient, isBillableInferenceMode, type EmbeddingResponse, type InferenceClient,
 } from './inference/index.ts';
 import {
   applyStructuredConversationTurn, SPEECH_ACTS, type SpeechAct,
@@ -554,13 +554,27 @@ export async function closeConversation(input: ConversationRef & {
   const transcript = await getConversation(input, input.conversationId);
   const summary = await groundedConversationSummary(input.worldId, transcript);
   const impression = relationshipImpression(transcript.turns);
-  const embeddings = await input.inference.embed([summary]);
+  let embeddings: EmbeddingResponse;
+  let embeddingBillable = false;
+  try {
+    embeddings = await input.inference.embed([summary]);
+    embeddingBillable = isBillableInferenceMode(input.inference.mode);
+  } catch {
+    // Closing has already been durably claimed. A provider outage must not
+    // strand the session in `closing` and hold the world forever; the grounded
+    // extractive summary can safely use the deterministic same-dimension vector.
+    embeddings = await createStubClient({ dimensions: input.inference.dimensions }).embed([summary]);
+  }
+  // Accounting is a separate failure domain. A DB error here must propagate;
+  // it must never replace an already-produced provider vector with a stub one.
   await recordEmbeddingUsage(
-    input.worldId, input.conversationId, embeddings,
-    isBillableInferenceMode(input.inference.mode),
+    input.worldId, input.conversationId, embeddings, embeddingBillable,
   );
   const timeCost = timeCostFor(transcript.turns.length);
-  await finalizeConversation(input, transcript, summary, impression, embeddings.vectors[0]!, timeCost, 'closed');
+  await finalizeConversation(
+    input, transcript, summary, impression, embeddings.vectors[0]!, embeddings.modelId,
+    timeCost, 'closed',
+  );
   return getConversation(input, input.conversationId);
 }
 
@@ -592,7 +606,7 @@ export async function sweepExpiredConversations(): Promise<number> {
     const vectors = await createStubClient().embed([summary]);
     await finalizeConversation(
       { worldId: row.world_id, sessionId: row.session_id, conversationId: row.conversation_id },
-      view, summary, relationshipImpression(view.turns), vectors.vectors[0]!,
+      view, summary, relationshipImpression(view.turns), vectors.vectors[0]!, vectors.modelId,
       timeCostFor(view.turns.length), 'timed_out',
     );
   }
@@ -605,6 +619,7 @@ async function finalizeConversation(
   summary: string,
   impression: string,
   vector: readonly number[],
+  embeddingModelId: string,
   timeCost: number,
   status: 'closed' | 'timed_out',
 ): Promise<void> {
@@ -685,9 +700,10 @@ async function finalizeConversation(
     await client.query(
       `UPDATE world_conversation_sessions
           SET status = $3, closed_tick = $4, time_cost_ticks = $5, summary = $6,
-              relationship_impression = $7, closed_at = now()
+              relationship_impression = $7, summary_embedding_model_id = $8, closed_at = now()
         WHERE world_id = $1 AND conversation_id = $2`,
-      [input.worldId, input.conversationId, status, row.current_tick, timeCost, summary, impression],
+      [input.worldId, input.conversationId, status, row.current_tick, timeCost, summary,
+        impression, embeddingModelId],
     );
     await client.query(
       `UPDATE worlds SET time_debt_ticks = time_debt_ticks + $2, last_activity_at = now()

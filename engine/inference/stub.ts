@@ -147,13 +147,6 @@ const DIALOGUE_OPENERS = [
   'There are two stories in this town and neither one fits.',
 ];
 
-const REFLECTIONS = [
-  'The talk keeps circling back to the same night.',
-  'Nobody who was there will say what they saw.',
-  'The two houses are telling the same story about each other.',
-  'This will not settle on its own.',
-];
-
 const SPEECH_ACTS = [
   'accuse', 'defend', 'corroborate', 'dispute', 'reconcile',
   'threaten', 'inform', 'inquire', 'summon', 'smalltalk',
@@ -208,10 +201,18 @@ function respond(request: CompletionRequest): string {
   switch (request.task) {
     case 'plan': {
       const target = pickFromChoices(request, 'locations', rng);
+      const acts = request.choices?.acts ?? [];
+      const claims = request.choices?.claims ?? [];
+      const hasRecalledEvidence = request.user.includes('Recalled memory evidence:');
+      const act = hasRecalledEvidence && claims.length > 0 && acts.length > 0
+        ? rng.pick(acts)
+        : 'none';
       return JSON.stringify({
         intention: rng.pick(INTENTIONS),
         targetLocationKey: target,
         action: rng.pick(ACTIONS),
+        act,
+        claimKey: act === 'accuse' ? rng.pick(claims) : null,
       });
     }
 
@@ -258,8 +259,13 @@ function respond(request: CompletionRequest): string {
         ],
       });
 
-    case 'reflect':
-      return rng.pick(REFLECTIONS);
+    case 'reflect': {
+      const refs = [...(request.choices?.memories ?? [])];
+      if (refs.length < 2) return JSON.stringify({ memoryRefs: [] });
+      const first = rng.pick(refs);
+      const second = rng.pick(refs.filter((ref) => ref !== first));
+      return JSON.stringify({ memoryRefs: [first, second] });
+    }
 
     case 'distort': {
       // The telephone effect: the stub degrades wording without inventing

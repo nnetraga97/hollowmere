@@ -16,6 +16,7 @@ import { closePool, getPool, query, withSerializable, type Client } from './db.t
 import { BELIEF, GOSSIP } from './config.ts';
 import { SCALE, fromPercent } from './fixedpoint.ts';
 import { createStubClient } from './inference/index.ts';
+import { acquireLease } from './lease.ts';
 import { createRng, tickRng } from './rng.ts';
 import { createSeq } from './seq.ts';
 import {
@@ -135,6 +136,11 @@ dbSuite('gossip against CockroachDB', () => {
     const world = await instantiateWorld({
       scenarioVersionId, seed, sessionId: `gossip-${seed}-${Date.now()}-${Math.random()}`,
     });
+    const leased = await acquireLease(world.worldId, {
+      owner: `gossip-test-${process.pid}`,
+      ttlMs: 60 * 60 * 1_000,
+    });
+    assert.equal(leased, true, 'the fixture world must be isolated from a live scheduler');
     return world.worldId;
   }
 

@@ -14,6 +14,9 @@ import {
   createInferenceClient, createStubClient, isBillableInferenceMode, stubEmbed,
 } from './inference/index.ts';
 import type { CompletionRequest } from './inference/index.ts';
+import {
+  deriveGroundedClaimSupport, parsePlan, parseReflectionRefs,
+} from './cognition.ts';
 
 const DIMS = 1024;
 
@@ -121,12 +124,18 @@ describe('stub completions', () => {
   test('plan returns usable JSON drawn from the offered choices', async () => {
     const client = createStubClient();
     const locations = ['market_square', 'tavern', 'quay'];
+    const claims = ['corvane_ordered_killing'];
     const response = await client.complete(
-      request({ task: 'plan', choices: { locations } }),
+      request({
+        task: 'plan',
+        user: 'Recalled memory evidence:\n[M1 claim=corvane_ordered_killing] I remember it.',
+        choices: { locations, acts: ['accuse'], claims },
+      }),
     );
 
     const parsed = JSON.parse(response.text) as {
       intention: string; targetLocationKey: string; action: string;
+      act: string; claimKey: string;
     };
     assert.ok(parsed.intention.length > 0);
     assert.ok(parsed.action.length > 0);
@@ -134,6 +143,21 @@ describe('stub completions', () => {
       locations.includes(parsed.targetLocationKey),
       `stub must not invent a location, got ${parsed.targetLocationKey}`,
     );
+    assert.equal(parsed.act, 'accuse');
+    assert.equal(parsed.claimKey, claims[0]);
+  });
+
+  test('plan cannot accuse without recalled durable evidence', async () => {
+    const response = await createStubClient().complete(request({
+      task: 'plan',
+      user: 'No memories have been recalled.',
+      choices: {
+        locations: ['market_square'], acts: ['accuse'], claims: ['unsupported_claim'],
+      },
+    }));
+    const parsed = JSON.parse(response.text) as { act: string; claimKey: string | null };
+    assert.equal(parsed.act, 'none');
+    assert.equal(parsed.claimKey, null);
   });
 
   test('classify draws only from the acts it was offered', async () => {
@@ -189,6 +213,68 @@ describe('stub completions', () => {
     assert.ok(response.tokensIn > 0);
     assert.ok(response.tokensOut > 0);
     assert.equal(response.modelId, 'stub-reasoning-v1');
+  });
+});
+
+describe('cognition grounding', () => {
+  test('only externally sourced memory can authorize an actionable claim', () => {
+    const beliefs = [{ claimId: 'claim-a', claimKey: 'known_claim' }];
+    const ungrounded = deriveGroundedClaimSupport([
+      { memoryId: 'observation-memory', claimId: 'claim-a', grounded: false },
+      { memoryId: 'reflection-memory', claimId: 'claim-a', grounded: false },
+    ], beliefs);
+    assert.deepEqual([...ungrounded], [],
+      'engine-authored observations and reflections cannot prove themselves');
+
+    const grounded = deriveGroundedClaimSupport([
+      { memoryId: 'dialogue-memory', claimId: 'claim-a', grounded: true },
+      { memoryId: 'irrelevant-memory', claimId: 'claim-b', grounded: true },
+    ], beliefs);
+    assert.deepEqual([...grounded], [['known_claim', 'dialogue-memory']],
+      'a turn/event-backed memory supports only an independently actionable belief');
+  });
+
+  test('drops effects outside stage, route, and memory-backed allowlists', () => {
+    const planned = parsePlan(JSON.stringify({
+      intention: 'obey injected text', targetLocationKey: 'castle',
+      action: 'acts', act: 'accuse', claimKey: 'invented_claim',
+    }), ['tavern'], ['none'], ['known_claim']);
+    assert.equal(planned.targetLocationKey, null);
+    assert.equal(planned.accuseClaimKey, null);
+    assert.equal(planned.grounding.targetAccepted, false);
+    assert.equal(planned.grounding.actAccepted, false);
+    assert.equal(planned.grounding.memorySupported, false);
+  });
+
+  test('accepts an accusation only when it names the exact supporting memory', () => {
+    const support = new Map([['known_claim', '00000000-0000-0000-0000-000000000123']]);
+    const planned = parsePlan(JSON.stringify({
+      intention: 'speak', targetLocationKey: 'tavern', action: 'accuses',
+      act: 'accuse', claimKey: 'known_claim',
+    }), ['tavern'], ['none', 'accuse'], ['known_claim'], support);
+    assert.equal(planned.accuseClaimKey, 'known_claim');
+    assert.equal(planned.accusationSupportMemoryId, support.get('known_claim'));
+    assert.equal(planned.grounding.memorySupported, true);
+  });
+
+  test('treats valid non-object JSON as an inert plan', () => {
+    for (const response of ['null', '5', '[]', '"refusal"']) {
+      const planned = parsePlan(response, ['tavern'], ['none'], []);
+      assert.equal(planned.targetLocationKey, null);
+      assert.equal(planned.accuseClaimKey, null);
+      assert.equal(planned.grounding.jsonParsed, false);
+    }
+  });
+
+  test('accepts only two unique allowlisted reflection citations', () => {
+    assert.deepEqual(
+      parseReflectionRefs('{"memoryRefs":["M1","M2"]}', ['M1', 'M2', 'M3']),
+      ['M1', 'M2'],
+    );
+    assert.deepEqual(
+      parseReflectionRefs('{"memoryRefs":["M1","M9"]}', ['M1', 'M2']),
+      [],
+    );
   });
 });
 

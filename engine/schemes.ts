@@ -191,30 +191,32 @@ export async function applyStrategy(
 ): Promise<void> {
   const decision = input.decision;
   if (!decision) return;
-  await client.query(
-    `INSERT INTO cognition_records
-       (world_id, tick, agent_id, task, input_hash, decision, model_id, prompt_version,
-        tokens_in, tokens_out, latency_ms)
-     VALUES ($1, $2, $3, 'strategy', $4, $5, $6, $7, $8, $9, $10)`,
-    [
-      input.worldId,
-      input.tick,
-      decision.agentId,
-      decision.inputHash,
-      JSON.stringify({
-        tactic: decision.tactic,
-        targetAgentId: decision.targetAgentId,
-        claimId: decision.claimId,
-        posture: decision.posture,
-        ladderIndex: decision.ladderIndex,
-      }),
-      decision.modelId,
-      STRATEGY_PROMPT_VERSION,
-      decision.tokensIn,
-      decision.tokensOut,
-      decision.latencyMs,
-    ],
-  );
+  if (decision.modelId !== 'replay') {
+    await client.query(
+      `INSERT INTO cognition_records
+         (world_id, tick, agent_id, task, input_hash, decision, model_id, prompt_version,
+          tokens_in, tokens_out, latency_ms)
+       VALUES ($1, $2, $3, 'strategy', $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        input.worldId,
+        input.tick,
+        decision.agentId,
+        decision.inputHash,
+        JSON.stringify({
+          tactic: decision.tactic,
+          targetAgentId: decision.targetAgentId,
+          claimId: decision.claimId,
+          posture: decision.posture,
+          ladderIndex: decision.ladderIndex,
+        }),
+        decision.modelId,
+        STRATEGY_PROMPT_VERSION,
+        decision.tokensIn,
+        decision.tokensOut,
+        decision.latencyMs,
+      ],
+    );
+  }
   if (decision.modelId !== 'deterministic-fallback' && decision.modelId !== 'replay') {
     const sourceKey = String(input.tick);
     await client.query(

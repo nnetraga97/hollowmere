@@ -89,8 +89,10 @@ describe('the scheduler against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL n
       `UPDATE worlds SET last_activity_at = now() - ($2 || ' milliseconds')::INTERVAL
         WHERE world_id = $1`, [worldId, IDLE_PAUSE_MS + 60_000]);
 
-    const swept = await sweepWorlds();
-    assert.ok(swept.paused >= 1);
+    // Another scheduler may win this idempotent update while this suite shares
+    // the integration database. The contract is the durable state, not which
+    // worker reports the transition in its local sweep count.
+    await sweepWorlds();
 
     const paused = await query<{ status: string }>(
       `SELECT status FROM worlds WHERE world_id = $1`, [worldId]);
@@ -107,11 +109,15 @@ describe('the scheduler against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL n
   test('a world that has used its runtime allowance is ended, not merely paused', async () => {
     const worldId = await freshWorld(403);
 
+    // Keep an unscoped integration worker from advancing this fixture between
+    // setup and the lifecycle sweep. Exhaustion intentionally applies to both
+    // active and paused worlds.
+    await query(`UPDATE worlds SET status = 'paused' WHERE world_id = $1`, [worldId]);
+
     const total = await addActiveRuntime(worldId, MAX_ACTIVE_RUNTIME_MS);
     assert.ok(total >= MAX_ACTIVE_RUNTIME_MS);
 
-    const swept = await sweepWorlds();
-    assert.ok(swept.exhausted >= 1);
+    await sweepWorlds();
 
     const world = await query<{ status: string; ending: string }>(
       `SELECT status, ending FROM worlds WHERE world_id = $1`, [worldId]);

@@ -572,6 +572,7 @@ CREATE TABLE IF NOT EXISTS world_conversation_sessions (
   time_cost_ticks   INT8 NOT NULL DEFAULT 0 CHECK (time_cost_ticks BETWEEN 0 AND 3),
   close_idempotency_key STRING NULL,
   summary           STRING NULL,
+  summary_embedding_model_id STRING NULL,
   relationship_impression STRING NULL,
   opened_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   deadline_at       TIMESTAMPTZ NOT NULL,
@@ -582,6 +583,9 @@ CREATE TABLE IF NOT EXISTS world_conversation_sessions (
   FOREIGN KEY (world_id, target_agent_id) REFERENCES world_agents (world_id, agent_id),
   FOREIGN KEY (world_id, location_id) REFERENCES world_locations (world_id, location_id)
 );
+
+ALTER TABLE world_conversation_sessions
+  ADD COLUMN IF NOT EXISTS summary_embedding_model_id STRING NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS one_held_conversation_per_world_idx
   ON world_conversation_sessions (world_id)
@@ -730,6 +734,11 @@ CREATE TABLE IF NOT EXISTS memory_source_edges (
     (CASE WHEN source_event_id IS NULL THEN 0 ELSE 1 END) +
     (CASE WHEN source_turn_id IS NULL THEN 0 ELSE 1 END) = 1)
 );
+
+-- Retrieval proves grounding with an EXISTS lookup for each recalled memory.
+-- Keep that proof on the indexed path as the append-only provenance graph grows.
+CREATE INDEX IF NOT EXISTS memory_source_edges_memory_idx
+  ON memory_source_edges (world_id, memory_id, source_kind);
 
 CREATE TABLE IF NOT EXISTS player_agent_relationship_updates (
   world_id      UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,

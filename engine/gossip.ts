@@ -156,20 +156,13 @@ export async function runGossip(
 
         if (!ctx.rng.chance(probability)) continue;
 
-        // Reword occasionally. The wording that reaches this listener is what
-        // gets stored for them, so distortion accumulates down the chain.
+        // Reword occasionally. This is deterministic rule logic because gossip
+        // runs inside the retryable tick transaction. A provider call here could
+        // be repeated, re-billed, or return different durable text on retry.
         let text = holder.distorted_text || rumor.claim_text;
         let distorted = false;
         if ((ctx.allowDistortion ?? true) && ctx.rng.chance(GOSSIP.distortionChance)) {
-          const response = await ctx.inference.complete({
-            task: 'distort',
-            promptVersion: 'distort-v1',
-            system: 'Retell this rumour as a townsperson would, briefly and without adding facts.',
-            user: text,
-            maxTokens: 80,
-            seed: ctx.rng.nextU32(),
-          });
-          text = response.text.trim() || text;
+          text = deterministicDistortion(text, ctx.rng);
           distorted = true;
           distortions++;
         }
@@ -277,6 +270,20 @@ export async function runGossip(
     rumorsConsidered: rumors.length,
     distortions,
   };
+}
+
+const DISTORTION_HEDGES = [
+  'They say ', 'Word is ', 'I heard tell that ', 'Some are saying ',
+] as const;
+
+/** Extractive only: wording changes, facts and named entities cannot be added. */
+export function deterministicDistortion(text: string, rng: Rng): string {
+  const source = text.trim();
+  if (!source) return source;
+  const truncated = source.length > 180
+    ? `${source.slice(0, 177).trimEnd()}...`
+    : source;
+  return `${rng.pick(DISTORTION_HEDGES)}${truncated.charAt(0).toLowerCase()}${truncated.slice(1)}`;
 }
 
 export interface RumorOriginator {

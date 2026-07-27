@@ -71,89 +71,129 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
   const runners = new Map<string, Promise<void>>();
   let running = false;
 
+  async function runWithLease<T>(worldId: string, operation: () => Promise<T>): Promise<T> {
+    let renewing = false;
+    let leaseLost = false;
+    let consecutiveRenewalErrors = 0;
+    let inFlightRenewal: Promise<void> | null = null;
+    const heartbeatMs = Math.max(1_000, Math.trunc(leaseTtlMs / 3));
+    const heartbeat = setInterval(() => {
+      if (renewing || leaseLost) return;
+      renewing = true;
+      inFlightRenewal = renewLease(worldId, { owner: options.owner, ttlMs: leaseTtlMs })
+        .then((renewed) => {
+          if (!renewed) leaseLost = true;
+          else consecutiveRenewalErrors = 0;
+        })
+        .catch(() => {
+          consecutiveRenewalErrors++;
+          if (consecutiveRenewalErrors >= 3) leaseLost = true;
+        })
+        .finally(() => {
+          renewing = false;
+          inFlightRenewal = null;
+        });
+    }, heartbeatMs);
+    try {
+      const value = await operation();
+      if (inFlightRenewal) await inFlightRenewal;
+      if (leaseLost) throw new Error(`lease lost while advancing world ${worldId}`);
+      return value;
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+
   async function advance(worldId: string): Promise<void> {
     let lastSweep = 0;
 
-    for (;;) {
-      if (!running) break;
+    try {
+      for (;;) {
+        if (!running) break;
 
-      const started = Date.now();
-      let report: TickReport;
-      try {
-        report = await runTick({ worldId, inference: options.inference });
-      } catch (error) {
-        // One world's failure is one world's problem. Dropping the lease lets
-        // another worker try, which is the right response to a transient fault
-        // and harmless for a permanent one (the next worker fails too, and the
-        // world is eventually swept).
+        const started = Date.now();
+        const report = await runWithLease(
+          worldId,
+          () => runTick({ worldId, inference: options.inference }),
+        );
+
+        const elapsed = Date.now() - started;
+        await addActiveRuntime(worldId, elapsed);
+
         log({
-          level: 'error', event: 'tick_failed', worldId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        break;
-      }
-
-      const elapsed = Date.now() - started;
-      await addActiveRuntime(worldId, elapsed);
-
-      log({
         level: 'info', event: 'tick', worldId, tick: report.tick,
         committed: report.committed, skipped: report.skipped,
         stage: report.stage, tension: report.globalTension,
         transmissions: report.transmissions, accusations: report.accusations,
         thinkers: report.thinkers, retries: report.retries,
         durationMs: report.durationMs,
-      });
+        });
 
-      if (report.skipped === 'conversation_held') {
-        const swept = await sweepExpiredConversations();
-        if (swept > 0) log({ level: 'info', event: 'conversation_timeout', worldId, swept });
-      }
+        if (report.skipped === 'conversation_held') {
+          const swept = await sweepExpiredConversations();
+          if (swept > 0) log({ level: 'info', event: 'conversation_timeout', worldId, swept });
+        }
 
-      if (report.ending || report.skipped === 'not_active' || report.skipped === 'tick_ceiling') {
-        log({ level: 'info', event: 'world_finished', worldId, ending: report.ending });
-        break;
-      }
+        if (report.ending || report.skipped === 'not_active' || report.skipped === 'tick_ceiling') {
+          log({ level: 'info', event: 'world_finished', worldId, ending: report.ending });
+          break;
+        }
 
       // Losing the lease mid-run means someone else believes they own this
       // world. Stop immediately rather than racing them.
-      if (!(await renewLease(worldId, { owner: options.owner, ttlMs: leaseTtlMs }))) {
-        log({ level: 'warn', event: 'lease_lost', worldId });
-        break;
-      }
+        if (!(await renewLease(worldId, { owner: options.owner, ttlMs: leaseTtlMs }))) {
+          log({ level: 'warn', event: 'lease_lost', worldId });
+          break;
+        }
 
       // A conversation accrues durable time debt. Drain it immediately after
       // the next successful cadence tick; normal cadence never consumes debt.
-      if (report.committed) {
-        while (running && await readTimeDebt(worldId) > 0) {
-          const charged = await runTick({ worldId, inference: options.inference, debtTick: true });
+        if (report.committed) {
+          while (running && await readTimeDebt(worldId) > 0) {
+            const charged = await runWithLease(
+              worldId,
+              () => runTick({ worldId, inference: options.inference, debtTick: true }),
+            );
           log({
             level: 'info', event: 'conversation_tick', worldId, tick: charged.tick,
             committed: charged.committed, skipped: charged.skipped,
           });
-          if (!charged.committed || charged.ending) break;
-          if (!(await renewLease(worldId, { owner: options.owner, ttlMs: leaseTtlMs }))) break;
+            if (!charged.committed || charged.ending) break;
+            if (!(await renewLease(worldId, { owner: options.owner, ttlMs: leaseTtlMs }))) break;
+          }
         }
-      }
 
-      if (!options.only && Date.now() - lastSweep > 60_000) {
-        lastSweep = Date.now();
-        const swept = await sweepWorlds();
-        if (swept.paused + swept.expired + swept.exhausted > 0) {
-          log({ level: 'info', event: 'sweep', ...swept });
+        if (!options.only && Date.now() - lastSweep > 60_000) {
+          lastSweep = Date.now();
+          const swept = await sweepWorlds();
+          if (swept.paused + swept.expired + swept.exhausted > 0) {
+            log({ level: 'info', event: 'sweep', ...swept });
+          }
         }
-      }
 
       // time_scale is a fixed-point multiplier: 20000 runs the town at double
       // speed. It exists for headless capture and video editing, so it is read
       // every tick rather than cached — an operator can change it live.
-      const scale = await readTimeScale(worldId);
-      const target = Math.max(0, Math.trunc((tickIntervalMs * SCALE) / scale) - elapsed);
-      await sleep(target);
+        const scale = await readTimeScale(worldId);
+        const target = Math.max(0, Math.trunc((tickIntervalMs * SCALE) / scale) - elapsed);
+        await sleep(target);
+      }
+    } catch (error) {
+      log({
+        level: 'error', event: 'runner_failed', worldId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      try {
+        await releaseLease(worldId, options.owner);
+      } catch (error) {
+        log({
+          level: 'error', event: 'lease_release_failed', worldId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      runners.delete(worldId);
     }
-
-    await releaseLease(worldId, options.owner);
-    runners.delete(worldId);
   }
 
   async function poll(): Promise<void> {

@@ -25,7 +25,7 @@ export const GOSSIP = {
    */
   maxTransmissionsPerTick: 60,
 
-  /** Chance a retelling is reworded. Each distortion costs one model call. */
+  /** Chance a retelling is extractively reworded by deterministic rules. */
   distortionChance: fromPercent(15) as Fixed,
 
   /**
@@ -166,7 +166,7 @@ export const COGNITION = {
   /**
    * Inference calls a single world may make before cognition degrades to the
    * deterministic path. A 30-minute world at two thinks per 30 s needs ~120;
-   * the headroom covers conversation and distortion.
+   * the headroom covers conversation and reflection.
    */
   callBudget: 900,
   /**

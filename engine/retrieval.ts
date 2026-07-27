@@ -39,10 +39,24 @@ export interface RetrievedMemory {
   lastAccessedTick: number;
   subjectAgentId: string | null;
   claimId: string | null;
+  /** True when a durable source edge proves this memory came from an event/turn. */
+  grounded: boolean;
   /** Component scores, retained so retrieval decisions can be explained. */
   recency: Fixed;
   relevance: Fixed;
   score: Fixed;
+}
+
+/**
+ * The immutable part of a memory needed to replay a recorded decision.
+ * Replay must use the exact rows named by the recording; silently dropping a
+ * missing memory would re-apply an effect without the evidence that caused it.
+ */
+export interface RecordedMemory {
+  memoryId: string;
+  content: string;
+  claimId: string | null;
+  grounded: boolean;
 }
 
 export interface RetrieveOptions {
@@ -88,6 +102,7 @@ interface CandidateRow {
   created_tick: number;
   subject_agent_id: string | null;
   claim_id: string | null;
+  grounded: boolean;
   last_accessed_tick: number | null;
   distance: number;
 }
@@ -147,6 +162,9 @@ export async function retrieveMemories(
     -- "tick" column that carries the (tick, seq) total order.
     SELECT m.memory_id, m.kind, m.content, m.importance, m.tick AS created_tick,
            m.subject_agent_id, m.claim_id,
+           EXISTS (SELECT 1 FROM memory_source_edges edge
+                    WHERE edge.world_id = m.world_id AND edge.memory_id = m.memory_id
+                      AND edge.source_kind IN ('event', 'turn')) AS grounded,
            m.embedding <=> $3 AS distance,
            (SELECT max(a.accessed_tick)
               FROM memory_accesses a
@@ -188,6 +206,7 @@ export async function retrieveMemories(
       lastAccessedTick,
       subjectAgentId: row.subject_agent_id,
       claimId: row.claim_id,
+      grounded: row.grounded,
       recency,
       relevance,
       score,
@@ -237,6 +256,45 @@ export async function recordAccesses(
          ON memory.world_id = $1 AND memory.memory_id = requested.memory_id`,
     params,
   );
+}
+
+/** Load a recording's memories in recorded order and fail closed on drift. */
+export async function loadRecordedMemories(
+  client: Client,
+  worldId: string,
+  agentId: string,
+  memoryIds: readonly string[],
+): Promise<RecordedMemory[]> {
+  if (memoryIds.length === 0) return [];
+
+  const result = await client.query<{
+    memory_id: string; content: string; claim_id: string | null; grounded: boolean;
+  }>(
+    `SELECT memory.memory_id, memory.content, memory.claim_id,
+            EXISTS (SELECT 1 FROM memory_source_edges edge
+                     WHERE edge.world_id = memory.world_id
+                       AND edge.memory_id = memory.memory_id
+                       AND edge.source_kind IN ('event', 'turn')) AS grounded
+       FROM world_memories memory
+      WHERE memory.world_id = $1 AND memory.agent_id = $2
+        AND memory.memory_id = ANY($3::UUID[])`,
+    [worldId, agentId, memoryIds],
+  );
+  const byId = new Map(result.rows.map((row) => [row.memory_id, row]));
+  const missing = memoryIds.filter((id) => !byId.has(id));
+  if (missing.length > 0) {
+    throw new Error(
+      `replay: ${missing.length} recalled memor${missing.length === 1 ? 'y is' : 'ies are'} ` +
+        `missing; refusing to apply a decision without its recorded evidence`,
+    );
+  }
+  return memoryIds.map((id) => {
+    const row = byId.get(id)!;
+    return {
+      memoryId: row.memory_id, content: row.content, claimId: row.claim_id,
+      grounded: row.grounded,
+    };
+  });
 }
 
 /** Retrieve and mark accessed, the combination cognition actually wants. */

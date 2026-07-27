@@ -88,10 +88,17 @@ describe('the tick against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL not se
     await closePool();
   });
 
-  const freshWorld = async (seed: number): Promise<string> => {
+  const freshWorld = async (seed: number, isolated = true): Promise<string> => {
     const world = await instantiateWorld({
       scenarioVersionId, seed, sessionId: `tick-${seed}-${Date.now()}-${Math.trunc(seed * 7)}`,
     });
+    if (isolated) {
+      const leased = await acquireLease(world.worldId, {
+        owner: `runtick-test-${process.pid}`,
+        ttlMs: 60 * 60 * 1_000,
+      });
+      assert.equal(leased, true, 'the fixture world must be isolated from a live scheduler');
+    }
     return world.worldId;
   };
 
@@ -311,7 +318,9 @@ describe('the tick against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL not se
   });
 
   test('a lease is exclusive, renewable, and releasable', async () => {
-    const worldId = await freshWorld(206);
+    // This case exercises lease acquisition itself, so it deliberately opts out
+    // of the fixture lease used to keep a development scheduler away.
+    const worldId = await freshWorld(206, false);
 
     assert.equal(await acquireLease(worldId, { owner: 'worker-a', ttlMs: 60_000 }), true);
     assert.equal(

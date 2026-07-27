@@ -219,6 +219,44 @@ describe('replay', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
   });
 
+  test('budget-degraded recordings replay without inventing model work', async () => {
+    const TICKS = 8;
+    const world = await instantiateWorld({
+      scenarioVersionId, seed: 411, sessionId: `replay-degraded-${Date.now()}`,
+    });
+    const worldId = world.worldId;
+    await query(
+      `UPDATE world_budget SET inference_calls = 100000 WHERE world_id = $1`, [worldId]);
+
+    for (let tick = 1; tick <= TICKS; tick++) {
+      await runTick({ worldId, inference: createStubClient(), allowDistortion: false });
+    }
+    const live = await snapshot(worldId);
+    const records = await query<{ degraded: boolean; model_id: string }>(
+      `SELECT (decision->>'degraded')::BOOL AS degraded, model_id
+         FROM cognition_records
+        WHERE world_id = $1 AND task = 'plan'
+        ORDER BY tick, record_id`, [worldId]);
+    assert.ok(records.length > 0, 'the exhausted world still records rule decisions');
+    assert.ok(records.every((row) => row.degraded && row.model_id === 'deterministic-fallback'));
+
+    await rewindWorld(worldId);
+    const { client, calls } = strictReplayClient();
+    for (let tick = 1; tick <= TICKS; tick++) {
+      await runTick({ worldId, replay: true, inference: client as never });
+    }
+
+    assert.equal(calls(), 0, 'degraded replay must consume neither RNG-dependent AI nor embeddings');
+    const replayed = await snapshot(worldId);
+    assert.equal(replayed.tick, live.tick);
+    assert.equal(replayed.stage, live.stage);
+    assert.equal(replayed.tension, live.tension);
+    assert.equal(replayed.memories, live.memories);
+    assert.equal(replayed.records, live.records, 'replay does not duplicate its source records');
+
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
+  });
+
   test('replay refuses a recording whose inputs no longer match', async () => {
     const { worldId, tick } = await recordedWorld(402);
 

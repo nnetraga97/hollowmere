@@ -147,6 +147,33 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 
+  test('an embedding outage closes with a metered, explicitly labeled deterministic vector', async () => {
+    const ref = await freshWorld(712);
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const stub = createStubClient();
+    const unavailable = {
+      ...stub,
+      mode: 'azure' as const,
+      embeddingModelId: 'unavailable-live-model',
+      async embed() { throw new Error('provider unavailable'); },
+    };
+    const closed = await closeConversation({
+      ...ref, conversationId: started.conversationId,
+      idempotencyKey: 'close', inference: unavailable,
+    });
+    assert.equal(closed.status, 'closed');
+    const rows = await query<{ summary_embedding_model_id: string; inference_calls: number }>(
+      `SELECT session.summary_embedding_model_id, budget.inference_calls
+         FROM world_conversation_sessions session
+         JOIN world_budget budget ON budget.world_id = session.world_id
+        WHERE session.world_id = $1 AND session.conversation_id = $2`,
+      [ref.worldId, started.conversationId],
+    );
+    assert.equal(rows[0]!.summary_embedding_model_id, 'stub-embedding-v1');
+    assert.equal(rows[0]!.inference_calls, 1, 'fallback work remains inside the world cap');
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
   test('rate limiting blocks new paid turns but permits an idempotent retry', async () => {
     const ref = await freshWorld(708);
     const stub = createStubClient();
