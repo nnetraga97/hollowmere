@@ -6,6 +6,7 @@ export interface GameEvents {
   'select-agent': { agentKey: string };
   'talk-agent': { agentKey: string };
   'request-move': { locationKey: string };
+  'enter-location': { locationKey: string };
   'scene-ready': undefined;
 }
 
