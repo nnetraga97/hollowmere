@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+node_modules
+web/.next
+coverage
+*.log
+*.tsbuildinfo
+*.pkg
+*.dmg
+hollowmere-*-scene.jpg

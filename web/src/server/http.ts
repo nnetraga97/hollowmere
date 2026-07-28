@@ -5,7 +5,16 @@ import { readSession } from './session';
 
 export function requireSameOrigin(request: NextRequest): void {
   const origin = request.headers.get('origin');
-  if (origin && origin !== request.nextUrl.origin) throw new HttpError(403, 'cross-origin request refused');
+  const configured = process.env.PUBLIC_ORIGIN;
+  let expected = request.nextUrl.origin;
+  if (configured) {
+    try {
+      expected = new URL(configured).origin;
+    } catch {
+      throw new Error('PUBLIC_ORIGIN must be an absolute URL');
+    }
+  }
+  if (origin && origin !== expected) throw new HttpError(403, 'cross-origin request refused');
 }
 
 export async function requireSession() {

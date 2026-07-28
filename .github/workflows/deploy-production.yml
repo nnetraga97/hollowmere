@@ -1,0 +1,245 @@
+name: Validate and deploy production
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-production.yml'
+      - '.dockerignore'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'engine/**'
+      - 'scenario/**'
+      - 'scheduler/**'
+      - 'web/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-production.yml'
+      - '.dockerignore'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'engine/**'
+      - 'scenario/**'
+      - 'scheduler/**'
+      - 'web/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ACR_NAME: hollowmerennt
+  ACR_SERVER: hollowmerennt.azurecr.io
+  AZURE_RESOURCE_GROUP: hollowmere-prod-rg
+  WEB_APP: hollowmere-web
+  SCHEDULER_APP: hollowmere-scheduler
+  PRODUCTION_URL: https://hollowmere-web.victorioussand-d8121435.eastus.azurecontainerapps.io
+
+jobs:
+  validate:
+    name: Validate application
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck engine and scheduler
+        run: npm run typecheck
+
+      - name: Typecheck web application
+        run: npm run web:typecheck
+
+      - name: Run web unit tests
+        run: npm --workspace @hollowmere/web test
+
+  deploy:
+    name: Build and deploy production
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: ${{ env.PRODUCTION_URL }}
+    concurrency:
+      group: hollowmere-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Sign in to Azure with OIDC
+        uses: Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ secrets.HOLLOWMEREWEB_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.HOLLOWMEREWEB_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.HOLLOWMEREWEB_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign in to Azure Container Registry
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build and push web image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: web
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ACR_SERVER }}/hollowmere-web:${{ github.sha }}
+          cache-from: type=gha,scope=hollowmere-web
+          cache-to: type=gha,mode=max,scope=hollowmere-web
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build and push scheduler image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: scheduler
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ACR_SERVER }}/hollowmere-scheduler:${{ github.sha }}
+          cache-from: type=gha,scope=hollowmere-scheduler
+          cache-to: type=gha,mode=max,scope=hollowmere-scheduler
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Install Container Apps CLI extension
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Deploy scheduler
+        run: |
+          az containerapp update \
+            --name "$SCHEDULER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$ACR_SERVER/hollowmere-scheduler:$GITHUB_SHA" \
+            --only-show-errors \
+            --output none
+
+      - name: Wait for scheduler revision
+        run: |
+          wait_for_revision() {
+            local app="$1"
+            local latest ready state
+
+            for attempt in $(seq 1 30); do
+              read -r latest ready state < <(
+                az containerapp show \
+                  --name "$app" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --query '[properties.latestRevisionName, properties.latestReadyRevisionName, properties.runningStatus]' \
+                  --output tsv
+              )
+
+              if [[ -n "$latest" && "$latest" == "$ready" && "$state" == "Running" ]]; then
+                echo "$app is ready on revision $ready"
+                return 0
+              fi
+
+              echo "Waiting for $app ($attempt/30): latest=$latest ready=$ready state=$state"
+              sleep 10
+            done
+
+            az containerapp revision list \
+              --name "$app" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --output table
+            return 1
+          }
+
+          wait_for_revision "$SCHEDULER_APP"
+
+      - name: Deploy web application
+        run: |
+          az containerapp update \
+            --name "$WEB_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$ACR_SERVER/hollowmere-web:$GITHUB_SHA" \
+            --only-show-errors \
+            --output none
+
+      - name: Wait for web revision and smoke test
+        run: |
+          wait_for_revision() {
+            local app="$1"
+            local latest ready state
+
+            for attempt in $(seq 1 30); do
+              read -r latest ready state < <(
+                az containerapp show \
+                  --name "$app" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --query '[properties.latestRevisionName, properties.latestReadyRevisionName, properties.runningStatus]' \
+                  --output tsv
+              )
+
+              if [[ -n "$latest" && "$latest" == "$ready" && "$state" == "Running" ]]; then
+                echo "$app is ready on revision $ready"
+                return 0
+              fi
+
+              echo "Waiting for $app ($attempt/30): latest=$latest ready=$ready state=$state"
+              sleep 10
+            done
+
+            az containerapp revision list \
+              --name "$app" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --output table
+            return 1
+          }
+
+          wait_for_revision "$WEB_APP"
+
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent --show-error --max-time 15 "$PRODUCTION_URL/" > /dev/null; then
+              echo "Production smoke test passed: $PRODUCTION_URL"
+              exit 0
+            fi
+            echo "Waiting for public endpoint ($attempt/18)"
+            sleep 10
+          done
+
+          echo "Production endpoint did not become healthy: $PRODUCTION_URL" >&2
+          exit 1
+
+      - name: Publish deployment summary
+        if: success()
+        run: |
+          web_revision=$(az containerapp show --name "$WEB_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestReadyRevisionName --output tsv)
+          scheduler_revision=$(az containerapp show --name "$SCHEDULER_APP" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestReadyRevisionName --output tsv)
+          {
+            echo '## Production deployment'
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Web revision: \`$web_revision\`"
+            echo "- Scheduler revision: \`$scheduler_revision\`"
+            echo "- URL: $PRODUCTION_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

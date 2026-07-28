@@ -43,7 +43,7 @@ export function getPool(): pg.Pool {
     }
     const max = Number(process.env.DB_POOL_MAX ?? 10);
     pool = new pg.Pool({
-      connectionString,
+      ...connectionOptions(connectionString),
       max,
       application_name: 'hollowmere',
     });
@@ -51,6 +51,46 @@ export function getPool(): pg.Pool {
     pool.on('error', (error) => logError('database_pool_error', errorLogFields(error)));
   }
   return pool;
+}
+
+/**
+ * Build the pg connection options without weakening CockroachDB Cloud TLS.
+ *
+ * The Cloud console commonly emits a URL whose `sslrootcert` points at a file
+ * on the operator's laptop. That path does not exist in a container. Deployment
+ * therefore supplies the same certificate as base64 in a secret, while the URL
+ * continues to require `verify-full` hostname and certificate verification.
+ */
+function connectionOptions(connectionString: string): {
+  connectionString: string;
+  ssl?: { rejectUnauthorized: true; ca?: string };
+} {
+  let url: URL;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    return { connectionString };
+  }
+
+  if (url.searchParams.get('sslmode') !== 'verify-full') {
+    return { connectionString };
+  }
+
+  const encodedCa = process.env.DATABASE_CA_CERT_BASE64;
+  const ca = encodedCa ? Buffer.from(encodedCa, 'base64').toString('utf8') : undefined;
+
+  // Avoid allowing pg-connection-string to replace this explicit secure TLS
+  // object with options parsed from the URL. In particular, sslrootcert often
+  // names a local file that is intentionally absent from the production image.
+  url.searchParams.delete('sslmode');
+  url.searchParams.delete('sslrootcert');
+  url.searchParams.delete('sslcert');
+  url.searchParams.delete('sslkey');
+
+  return {
+    connectionString: url.toString(),
+    ssl: { rejectUnauthorized: true, ...(ca ? { ca } : {}) },
+  };
 }
 
 export async function closePool(): Promise<void> {
