@@ -4,8 +4,11 @@
 
 Built for the [CockroachDB AI hackathon](https://cockroachdb-ai.devpost.com/).
 
+[![Validate and deploy production](https://github.com/nnetraga97/hollowmere/actions/workflows/deploy-production.yml/badge.svg)](https://github.com/nnetraga97/hollowmere/actions/workflows/deploy-production.yml)
+[Play the production build](https://hollowmere-web.victorioussand-d8121435.eastus.azurecontainerapps.io/)
+
 A prince is found dead at the chapel steps. Two royal houses, each anchored in a
-rival trade guild, begin accusing one another. Forty AI townspeople hear things,
+rival trade guild, begin accusing one another. Thirty AI townspeople hear things,
 believe them to varying degrees, repeat them in their own words, and take sides.
 Left alone, the town destroys itself. You are an outsider who can talk to anyone.
 
@@ -22,21 +25,29 @@ The town is the visualization. The substrate is the point.
 
 ## Status
 
-**Phase 1 (engine) and the Phaser debug client are complete.**
+**The engine, playable web client, and cloud deployment are live.**
 
-Preflight gate · fixed-point + RNG conventions · schema + DB layer · scenario
-loader · inference (stub + Bedrock) · retrieval · gossip + beliefs · tension,
-stages, peace and triggers · `runTick` + scheduler · `converse` · headless
-harness + REPL · read-only debug dashboard.
+The current build includes the preflight gate; fixed-point and seeded-RNG
+conventions; a 53-table CockroachDB schema; immutable scenario publishing;
+stub, replay, Bedrock, and Azure inference modes; hybrid memory retrieval;
+gossip, belief, tension, escalation, peace, and trigger systems; the scheduler;
+durable player/NPC conversation; branching romance routes; a headless harness;
+an interactive REPL; and structured operational logging.
 
-Phase 2 has a production-shaped Next.js + Phaser debug client: a playable town
-map, session-isolated APIs, durable multi-turn walk-up dialogue, safe simulation
-controls, evidence/hearing gameplay, and the dashboard's diagnostic views.
-Conversation holds simulation time, remembers who heard it, changes the NPC's
-long-term impression of the player, and charges 1–3 ticks when it ends.
+The Next.js + Phaser client provides a playable town map, session-isolated APIs,
+durable multi-turn walk-up dialogue, location scenes, simulation controls,
+evidence and hearing gameplay, relationship and romance interactions, and
+diagnostic views. Conversation holds simulation time, remembers who heard it,
+changes the NPC's long-term impression of the player, and charges 1–3 ticks
+when it ends.
 
-Next: finish the instigator-engine merge, then CockroachDB Cloud, Managed MCP,
-and ECS/Fargate (Phase 3).
+Production runs the public web process and private scheduler as separate Azure
+Container Apps against CockroachDB Cloud, with Azure-hosted inference. GitHub
+Actions validates, builds, deploys, waits for both revisions, and smoke-tests
+the public endpoint.
+
+Next: implement the Instigator design and add CockroachDB Managed MCP as a
+read-only investigation surface.
 
 ### The town, left alone
 
@@ -57,16 +68,17 @@ The same words after first blood do not: the streak never even starts.
 
 ## Quick start
 
-No AWS account is needed. The engine runs entirely on a deterministic stub.
+No cloud account is needed for local development. The engine defaults to a
+deterministic stub.
 
 ```bash
-npm install
+npm ci
 npm run db:up          # 3-node CockroachDB cluster in Docker
-npm run preflight      # verifies vector indexing, isolation, time travel
 cp .env.example .env
+npm run preflight      # verifies vector indexing, isolation, time travel
 npm run db:migrate -- --fresh
 npm run seed -- --seed 42
-npm run check          # typecheck + engine tests
+npm run check          # engine + web typechecks, tests, and production web build
 ```
 
 Then watch a town destroy itself:
@@ -80,14 +92,18 @@ npm run web                             # playable Phaser instrument on :3000
 
 `npm run preflight` is a gate, not a formality: it verifies that vector indexing,
 serializable isolation, and `AS OF SYSTEM TIME` behave as the engine assumes.
-Re-run it against CockroachDB Cloud before deploying — Cloud defaults differ.
+Run it against every new CockroachDB Cloud cluster before deploying because
+Cloud defaults can differ from the local cluster.
 
 ## Architecture
 
 ```
 Browser ── Next.js ─┐
                     ├── engine (shared) ── CockroachDB
-Scheduler ──────────┘                  └── Bedrock (Claude Haiku + Titan V2)
+Scheduler ──────────┘                  └── inference provider
+                                            ├── deterministic stub / replay
+                                            ├── Azure OpenAI (production)
+                                            └── Amazon Bedrock
 ```
 
 Two processes, one database. Player writes and scheduler writes genuinely
@@ -96,19 +112,57 @@ the application working normally, not a staged one.
 
 | Directory | Contents |
 |---|---|
-| `db/` | `schema.sql` — 42 tables, composite world-scoped keys |
+| `db/` | `schema.sql` — 53 tables, composite world-scoped keys, and read-only role SQL |
 | `scenario/` | Versioned immutable content + validating loader |
 | `engine/` | Rules, retrieval, gossip, beliefs, tension, triggers, cognition, `runTick`, `converse`, read models |
 | `scheduler/` | Lease-guarded non-overlapping loop + service entrypoint |
 | `harness/` | `sim.ts` headless runner, `repl.ts` interactive shell |
 | `web/` | Next.js + Phaser playable debug client, session APIs, and React instruments |
-| `scripts/` | Preflight, migrate, seed, Bedrock check |
+| `scripts/` | Preflight, migrate, seed, provider checks, and local launchers |
+| `infra/` | Local 3-node CockroachDB cluster |
+| `.github/workflows/` | Pull-request validation and production deployment |
+| `docs/` | Design history, preflight findings, provider setup, and observability |
 
 Server processes emit structured JSON logs for inference, database retries,
 scheduler activity, API mutations, and failures. See
 [`docs/observability.md`](docs/observability.md) for event names and log levels.
-| `infra/` | Local 3-node cluster |
-| `docs/` | Plan and status, preflight findings, AWS setup |
+
+## Production deployment
+
+| Component | Production service |
+|---|---|
+| Web application | Public Azure Container App |
+| Scheduler | Private, continuously running Azure Container App |
+| Database | CockroachDB Cloud with `verify-full` TLS |
+| Inference | Azure-hosted reasoning and embedding deployments |
+| Container images | Azure Container Registry |
+| Runtime secrets | Azure Key Vault references through managed identity |
+| Continuous delivery | GitHub Actions authenticated to Azure with OIDC |
+
+[`deploy-production.yml`](.github/workflows/deploy-production.yml) runs validation
+for pull requests and relevant pushes. A push to `main` builds the explicit
+`web` and `scheduler` Docker targets for `linux/amd64`, tags both images with the
+Git commit, and pushes them to ACR. It deploys the scheduler first, waits until
+its newest revision is ready, then deploys the web app and performs a public
+HTTP smoke test. Production deployments are serialized so two releases cannot
+race each other.
+
+The deployment identity has only `Container Apps Contributor` and `AcrPush`.
+ACR's admin account is disabled; GitHub stores only the Azure client, tenant,
+and subscription identifiers needed for OIDC. Application credentials remain
+in Key Vault and are not copied into GitHub.
+
+Database migration is intentionally separate from image deployment. Apply and
+verify an idempotent migration with a DDL-capable database identity before
+deploying code that requires a new schema; the application containers use a
+restricted runtime database role.
+
+To start the same production workflow manually:
+
+```bash
+gh workflow run deploy-production.yml --ref main
+gh run watch
+```
 
 ## Design constraints
 
