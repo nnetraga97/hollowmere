@@ -154,7 +154,7 @@ jobs:
                 az containerapp show \
                   --name "$app" \
                   --resource-group "$AZURE_RESOURCE_GROUP" \
-                  --query '[properties.latestRevisionName, properties.latestReadyRevisionName, properties.runningStatus]' \
+                  --query '{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,state:properties.runningStatus}' \
                   --output tsv
               )
 
@@ -196,7 +196,7 @@ jobs:
                 az containerapp show \
                   --name "$app" \
                   --resource-group "$AZURE_RESOURCE_GROUP" \
-                  --query '[properties.latestRevisionName, properties.latestReadyRevisionName, properties.runningStatus]' \
+                  --query '{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,state:properties.runningStatus}' \
                   --output tsv
               )
 
