@@ -28,7 +28,7 @@ The town is the visualization. The substrate is the point.
 **The engine, playable web client, and cloud deployment are live.**
 
 The current build includes the preflight gate; fixed-point and seeded-RNG
-conventions; a 53-table CockroachDB schema; immutable scenario publishing;
+conventions; a 54-table CockroachDB schema; immutable scenario publishing;
 stub, replay, Bedrock, and Azure inference modes; hybrid memory retrieval;
 gossip, belief, tension, escalation, peace, and trigger systems; the scheduler;
 durable player/NPC conversation; branching romance routes; a headless harness;
@@ -112,7 +112,7 @@ the application working normally, not a staged one.
 
 | Directory | Contents |
 |---|---|
-| `db/` | `schema.sql` — 53 tables, composite world-scoped keys, and read-only role SQL |
+| `db/` | `schema.sql` — 54 tables, composite world-scoped keys, and read-only role SQL |
 | `scenario/` | Versioned immutable content + validating loader |
 | `engine/` | Rules, retrieval, gossip, beliefs, tension, triggers, cognition, `runTick`, `converse`, read models |
 | `scheduler/` | Lease-guarded non-overlapping loop + service entrypoint |

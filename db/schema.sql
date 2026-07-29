@@ -220,7 +220,8 @@ CREATE TABLE IF NOT EXISTS worlds (
   status              STRING NOT NULL DEFAULT 'active'
                         CHECK (status IN ('active', 'paused', 'ended', 'expired')),
   ending              STRING NULL
-                        CHECK (ending IS NULL OR ending IN ('war', 'peace', 'exposed', 'expired')),
+                        CHECK (ending IS NULL OR ending IN
+                          ('war', 'peace', 'exposed', 'expired', 'player_ended')),
   -- Fixed point: 10000 is realtime. Raised for headless tests and video capture.
   time_scale          INT8 NOT NULL DEFAULT 10000 CHECK (time_scale > 0),
   active_runtime_ms   INT8 NOT NULL DEFAULT 0,
@@ -249,10 +250,24 @@ ALTER TABLE worlds
 ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_time_debt_ticks;
 ALTER TABLE worlds ADD CONSTRAINT check_time_debt_ticks CHECK (time_debt_ticks >= 0);
 
--- Existing databases predate the exposed ending.
+-- A completed world may lead to exactly one successor. Keeping this link in
+-- the database makes "start another world" naturally idempotent: retries and
+-- stale browser tabs recover the same successor instead of spawning more live
+-- simulations.
+CREATE TABLE IF NOT EXISTS world_successors (
+  previous_world_id  UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  successor_world_id UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (previous_world_id),
+  UNIQUE (successor_world_id),
+  CONSTRAINT different_successor_world CHECK (previous_world_id != successor_world_id)
+);
+
+-- Existing databases predate the exposed and player-ended endings.
 ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_ending_ending;
 ALTER TABLE worlds ADD CONSTRAINT check_ending_ending
-  CHECK (ending IS NULL OR ending IN ('war', 'peace', 'exposed', 'expired'));
+  CHECK (ending IS NULL OR ending IN
+    ('war', 'peace', 'exposed', 'expired', 'player_ended'));
 
 -- ---------------------------------------------------------------------------
 -- Per-world instantiation of scenario content.

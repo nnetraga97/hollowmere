@@ -2,7 +2,8 @@ import { randomInt } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
-  instantiateWorld, logInfo, pauseSessionWorld, query, queueTimeScale, resumeSessionWorld,
+  endSessionWorld, instantiateWorldOnClient, logInfo, pauseSessionWorld, queueTimeScale,
+  resumeSessionWorld, withSerializable,
 } from '@/server/engine';
 import { jsonBody, requireSameOrigin, requireSession, routeError } from '@/server/http';
 import { writeSession } from '@/server/session';
@@ -13,7 +14,8 @@ type ControlBody =
   | { action: 'pause' }
   | { action: 'resume' }
   | { action: 'timeScale'; value: number; idempotencyKey: string }
-  | { action: 'restart'; seed?: number };
+  | { action: 'end' }
+  | { action: 'start'; seed?: number };
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,40 +41,67 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json(result, { status: 202 });
     }
-    if (body.action === 'restart') {
-      const versions = await query<{
-        scenario_version_id: string; seed: number; player_name: string;
-        profile: { background?: string; sympathyFactionKey?: string | null };
-      }>(
-        `SELECT w.scenario_version_id, w.seed, p.name AS player_name, p.profile
-           FROM worlds w
-           JOIN world_players p ON p.world_id = w.world_id AND p.session_id = $2
-          WHERE w.world_id = $1`,
-        [ref.worldId, ref.sessionId],
-      );
-      if (!versions[0]) throw new Error('world no longer exists');
-      await pauseSessionWorld(ref);
+    if (body.action === 'end') {
+      const changed = await endSessionWorld(ref);
+      logInfo('world_end_requested', { worldId: ref.worldId, changed, ending: 'player_ended' });
+      return NextResponse.json({ changed, worldId: ref.worldId });
+    }
+    if (body.action === 'start') {
       const seed = Number.isSafeInteger(body.seed)
         ? Math.trunc(body.seed as number)
         : randomInt(1, 2_147_483_647);
-      const created = await instantiateWorld({
-        scenarioVersionId: versions[0].scenario_version_id,
-        seed,
-        sessionId: ref.sessionId,
-        playerName: versions[0].player_name,
-        playerProfile: {
-          background: versions[0].profile?.background ?? '',
-          sympathyFactionKey: versions[0].profile?.sympathyFactionKey ?? null,
-        },
-      });
-      const next = { sessionId: ref.sessionId, worldId: created.worldId };
+      const { value: started } = await withSerializable(async (client) => {
+        const rows = await client.query<{
+          status: string; scenario_version_id: string; player_name: string;
+          profile: { background?: string; sympathyFactionKey?: string | null };
+          successor_world_id: string | null; successor_seed: number | null;
+        }>(
+          `SELECT w.status, w.scenario_version_id, p.name AS player_name, p.profile,
+                  successor.successor_world_id, next.seed AS successor_seed
+             FROM worlds w
+             JOIN world_players p ON p.world_id = w.world_id AND p.session_id = $2
+             LEFT JOIN world_successors successor ON successor.previous_world_id = w.world_id
+             LEFT JOIN worlds next ON next.world_id = successor.successor_world_id
+            WHERE w.world_id = $1
+            FOR UPDATE OF w`,
+          [ref.worldId, ref.sessionId],
+        );
+        const current = rows.rows[0];
+        if (!current) throw new Error('session does not own this world');
+        if (current.status !== 'ended') throw new Error('end the current world before starting another');
+        if (current.successor_world_id) {
+          return {
+            worldId: current.successor_world_id,
+            seed: current.successor_seed ?? seed,
+            created: false,
+          };
+        }
+
+        const created = await instantiateWorldOnClient(client, {
+          scenarioVersionId: current.scenario_version_id,
+          seed,
+          sessionId: ref.sessionId,
+          playerName: current.player_name,
+          playerProfile: {
+            background: current.profile?.background ?? '',
+            sympathyFactionKey: current.profile?.sympathyFactionKey ?? null,
+          },
+        });
+        await client.query(
+          `INSERT INTO world_successors (previous_world_id, successor_world_id) VALUES ($1, $2)`,
+          [ref.worldId, created.worldId],
+        );
+        return { worldId: created.worldId, seed, created: true };
+      }, { label: 'start-successor-world' });
+      const next = { sessionId: ref.sessionId, worldId: started.worldId };
       await writeSession(next);
-      logInfo('world_restarted', {
+      logInfo('world_started', {
         previousWorldId: ref.worldId,
-        worldId: created.worldId,
-        seed,
+        worldId: started.worldId,
+        seed: started.seed,
+        created: started.created,
       });
-      return NextResponse.json({ worldId: created.worldId, seed }, { status: 201 });
+      return NextResponse.json(started, { status: started.created ? 201 : 200 });
     }
     throw new Error('unknown control action');
   } catch (error) {

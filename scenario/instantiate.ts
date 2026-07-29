@@ -41,53 +41,65 @@ export interface InstantiateResult {
 export async function instantiateWorld(
   options: InstantiateOptions,
 ): Promise<InstantiateResult> {
-  const { value } = await withSerializable<InstantiateResult>(async (client) => {
-    const scenario = await loadScenarioRows(client, options.scenarioVersionId);
-
-    const world = await client.query<{ world_id: string }>(
-      `INSERT INTO worlds (scenario_version_id, seed) VALUES ($1, $2) RETURNING world_id`,
-      [options.scenarioVersionId, options.seed],
-    );
-    const worldId = world.rows[0]!.world_id;
-
-    const factionIds = await insertFactions(client, worldId, scenario.factions);
-    const locationIds = await insertLocations(
-      client, worldId, scenario.districts, scenario.locations, factionIds,
-    );
-    await insertRoutes(client, worldId, scenario.routes, locationIds);
-    const agentIds = await insertAgents(client, worldId, scenario.agents, factionIds, locationIds);
-    await linkFactionLeaders(client, worldId, scenario.factions, agentIds);
-    await insertRelationships(client, worldId, scenario.agents, agentIds);
-    const claimIds = await insertClaims(client, worldId, scenario.claims, agentIds);
-
-    const culprit = selectCulprit(options.seed, options.scenarioVersionId, scenario.culprits);
-    if (culprit) {
-      await insertCulpritState(client, {
-        worldId,
-        culprit,
-        agentIds,
-        claimIds,
-        goals: scenario.goals,
-      });
-    } else {
-      await insertGoals(client, worldId, scenario.goals, agentIds, null);
-    }
-
-    await insertInitialState(client, worldId, scenario.factions, factionIds);
-    const playerId = await insertPlayer(
-      client, worldId, options.sessionId,
-      locationIds.get(options.playerLocationKey ?? scenario.opening.location)!,
-      scenario.factions, factionIds, options.playerName, options.playerProfile,
-    );
-    await insertPlayerAgentRelationships(client, worldId, playerId);
-    await insertReflectionState(client, worldId);
-
-    await applyOpening(client, worldId, scenario.opening, locationIds, claimIds);
-
-    return { worldId, playerId, agentCount: scenario.agents.length };
-  }, { label: 'instantiateWorld' });
+  const { value } = await withSerializable<InstantiateResult>(
+    (client) => instantiateWorldOnClient(client, options),
+    { label: 'instantiateWorld' },
+  );
 
   return value;
+}
+
+/**
+ * Transaction-scoped variant used when world creation is one step in a larger
+ * lifecycle transition. The caller owns the serializable transaction.
+ */
+export async function instantiateWorldOnClient(
+  client: Client,
+  options: InstantiateOptions,
+): Promise<InstantiateResult> {
+  const scenario = await loadScenarioRows(client, options.scenarioVersionId);
+
+  const world = await client.query<{ world_id: string }>(
+    `INSERT INTO worlds (scenario_version_id, seed) VALUES ($1, $2) RETURNING world_id`,
+    [options.scenarioVersionId, options.seed],
+  );
+  const worldId = world.rows[0]!.world_id;
+
+  const factionIds = await insertFactions(client, worldId, scenario.factions);
+  const locationIds = await insertLocations(
+    client, worldId, scenario.districts, scenario.locations, factionIds,
+  );
+  await insertRoutes(client, worldId, scenario.routes, locationIds);
+  const agentIds = await insertAgents(client, worldId, scenario.agents, factionIds, locationIds);
+  await linkFactionLeaders(client, worldId, scenario.factions, agentIds);
+  await insertRelationships(client, worldId, scenario.agents, agentIds);
+  const claimIds = await insertClaims(client, worldId, scenario.claims, agentIds);
+
+  const culprit = selectCulprit(options.seed, options.scenarioVersionId, scenario.culprits);
+  if (culprit) {
+    await insertCulpritState(client, {
+      worldId,
+      culprit,
+      agentIds,
+      claimIds,
+      goals: scenario.goals,
+    });
+  } else {
+    await insertGoals(client, worldId, scenario.goals, agentIds, null);
+  }
+
+  await insertInitialState(client, worldId, scenario.factions, factionIds);
+  const playerId = await insertPlayer(
+    client, worldId, options.sessionId,
+    locationIds.get(options.playerLocationKey ?? scenario.opening.location)!,
+    scenario.factions, factionIds, options.playerName, options.playerProfile,
+  );
+  await insertPlayerAgentRelationships(client, worldId, playerId);
+  await insertReflectionState(client, worldId);
+
+  await applyOpening(client, worldId, scenario.opening, locationIds, claimIds);
+
+  return { worldId, playerId, agentCount: scenario.agents.length };
 }
 
 async function insertPlayerAgentRelationships(

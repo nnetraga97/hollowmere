@@ -249,7 +249,7 @@ The town is the visualization; the substrate is the product.
 | Goal | Competitive complete submission by Aug 18 |
 | Isolation | **One private world per player.** `world_id` on every mutable row |
 | Identity | Anonymous, signed session cookie. No accounts |
-| World lifecycle | Pause after 10 min inactivity · expire after 24 h · **30 min active-runtime cap** · explicit "Restart town" |
+| World lifecycle | Player-controlled start/end · one successor per ended world · pause after 10 min inactivity · expire after 24 h · **30 min active-runtime cap** |
 | **Game loop length** | **A full arc may take the entire 30 minutes.** Pacing is not constrained by video length — the demo video is shot and edited afterward |
 | Determinism | Stub runs **exactly reproducible** from `{scenarioVersion, seed, playerCommands}` |
 | Product history | Reconstructed **by simulation tick** from append-only history |
@@ -549,7 +549,8 @@ Phaser 3 over the same engine API. CC0 assets (Kenney.nl / LPC) — **not** Star
 **Implemented on `codex/phase-2-phaser`:** Next.js 16 + Phaser 3.90 workspace,
 signed session-scoped worlds, route-validated movement, colocated SSE dialogue,
 the playable Hollowmere map, agent inspection, graph/chronicle/claim/tension
-instruments, safe pause/speed/restart controls, and opt-in Engine Truth.
+instruments, safe pause/speed/end controls, player-started successor worlds, and
+opt-in Engine Truth.
 
 **Conversation integration:** walk-up dialogue is now a durable multi-turn
 session. The world clock is held while the window is open; each validated turn

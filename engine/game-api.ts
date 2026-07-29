@@ -529,6 +529,46 @@ export async function resumeSessionWorld(ref: SessionRef): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * Permanently end the world owned by this signed player session.
+ *
+ * This is intentionally different from pause: an ended world is immutable to
+ * the scheduler and may be inspected later, but it can never be resumed.
+ */
+export async function endSessionWorld(ref: SessionRef): Promise<boolean> {
+  const { value } = await withSerializable(async (client) => {
+    await sessionOnClient(client, ref);
+    const worlds = await client.query<{ status: string; current_tick: number }>(
+      `SELECT status, current_tick FROM worlds WHERE world_id = $1 FOR UPDATE`,
+      [ref.worldId],
+    );
+    const world = worlds.rows[0];
+    if (!world) throw new SessionAccessError();
+    if (world.status === 'ended') return false;
+    if (!['active', 'paused'].includes(world.status)) {
+      throw new Error('world cannot be ended from its current state');
+    }
+
+    // A player may leave during a conversation. Release the scheduler hold so
+    // the completed world cannot retain live conversational work.
+    await client.query(
+      `UPDATE world_conversation_sessions
+          SET status = 'abandoned', closed_tick = $2, closed_at = now()
+        WHERE world_id = $1 AND status IN ('open', 'closing')`,
+      [ref.worldId, world.current_tick],
+    );
+    await client.query(
+      `UPDATE worlds
+          SET status = 'ended', ending = 'player_ended',
+              lease_owner = NULL, lease_expires_at = NULL, last_activity_at = now()
+        WHERE world_id = $1`,
+      [ref.worldId],
+    );
+    return true;
+  }, { label: 'end-session-world' });
+  return value;
+}
+
 async function readEvidence(ref: SessionRef, includeTruth: boolean): Promise<EvidenceView[]> {
   const session = await assertSession(ref);
   const rows = await optionalQuery<{

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, FileSearch, Heart, Map, Network, Pause, Play, RotateCcw, Scale, UserRound } from 'lucide-react';
+import { ArrowRight, BookOpen, FileSearch, Heart, Map, Network, Pause, Play, Scale, Square, UserRound } from 'lucide-react';
 
 import { EventBus } from '@/game/EventBus';
 import { atlasPosition, portraitPath, relationshipLevel } from '@/game/locationScenes';
@@ -36,7 +36,9 @@ export function DebugClient() {
   const [sending, setSending] = useState(false);
   const [truth, setTruth] = useState<DebugTruth | null>(null);
   const [truthWarning, setTruthWarning] = useState(false);
+  const [endWorldWarning, setEndWorldWarning] = useState(false);
   const [entering, setEntering] = useState(false);
+  const [controlling, setControlling] = useState(false);
   const [sceneLocationKey, setSceneLocationKey] = useState<string | null>(null);
   const [journey, setJourney] = useState<{ from: string; to: string } | null>(null);
   const [bondChange, setBondChange] = useState<{
@@ -240,23 +242,37 @@ export function DebugClient() {
   }
 
   async function applyControl(body: Record<string, unknown>) {
+    if (controlling) return;
+    setControlling(true);
     try {
       await control(body);
-      if (body.action === 'restart') {
+      if (body.action === 'start') {
         const created = await startSession();
         setBootstrap(created);
         setGame(created.game);
+        setConversation(created.game.conversation);
+        setTalkingTo(created.game.conversation?.agentKey ?? null);
         setTruth(null);
         setAgent(null);
         setSceneLocationKey(null);
         setJourney(null);
         setBondChange(null);
+        setEndWorldWarning(false);
         lastLocation.current = created.game.player.locationKey;
       } else {
         await refresh();
+        if (body.action === 'end') {
+          setConversation(null);
+          setTalkingTo(null);
+          setSceneLocationKey(null);
+          setJourney(null);
+          setEndWorldWarning(false);
+        }
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setControlling(false);
     }
   }
 
@@ -313,15 +329,15 @@ export function DebugClient() {
       <div className="controls">
         <select aria-label="Simulation speed" value={game.world.timeScale} onChange={(event) => void applyControl({
           action: 'timeScale', value: Number(event.target.value), idempotencyKey: crypto.randomUUID(),
-        })} disabled={game.world.status !== 'active'}>
+        })} disabled={controlling || game.world.status !== 'active'}>
           <option value={5000}>0.5×</option><option value={10000}>1×</option><option value={20000}>2×</option>
           <option value={40000}>4×</option><option value={80000}>8×</option>
         </select>
-        <button className="icon-button" aria-label={game.world.status === 'paused' ? 'Resume simulation' : 'Pause simulation'} onClick={() => void applyControl({ action: game.world.status === 'paused' ? 'resume' : 'pause' })}>
+        <button className="icon-button" disabled={controlling} aria-label={game.world.status === 'paused' ? 'Resume simulation' : 'Pause simulation'} onClick={() => void applyControl({ action: game.world.status === 'paused' ? 'resume' : 'pause' })}>
           {game.world.status === 'paused' ? <Play size={15} aria-hidden="true" /> : <Pause size={15} aria-hidden="true" />}
           <span>{game.world.status === 'paused' ? 'Resume' : 'Pause'}</span>
         </button>
-        <button className="new-run-button" onClick={() => void applyControl({ action: 'restart' })}><RotateCcw size={14} aria-hidden="true" /><span>New run</span></button>
+        <button className="end-world-button" disabled={controlling} onClick={() => setEndWorldWarning(true)}><Square size={13} aria-hidden="true" /><span>End world</span></button>
       </div>
     </header>
 
@@ -412,13 +428,14 @@ export function DebugClient() {
     </section>}
 
     {truthWarning && !truth && <div className="modal-backdrop"><section className="modal"><span className="eyebrow">Spoiler boundary</span><h2>Reveal Engine Truth?</h2><p>This exposes the culprit, live scheme, and whether each clue is genuine or a misdirection. It only reads your current private world.</p><div className="modal-actions"><button onClick={() => setTruthWarning(false)}>Cancel</button><button className="danger" onClick={() => void loadTruth().then((value) => { setTruth(value); setTruthWarning(false); }).catch((cause) => setError(String(cause)))}>Reveal</button></div></section></div>}
+    {endWorldWarning && <div className="modal-backdrop"><section className="modal"><span className="eyebrow">End this world</span><h2>Leave Hollowmere behind?</h2><p>This permanently stops the simulation. Its chronicle stays stored under your signed player session, but this world cannot be resumed.</p><div className="modal-actions"><button disabled={controlling} onClick={() => setEndWorldWarning(false)}>Keep playing</button><button className="danger" disabled={controlling} onClick={() => void applyControl({ action: 'end' })}>{controlling ? 'Ending…' : 'End world'}</button></div></section></div>}
     {truth && <section className="truth-drawer"><header><div><span className="eyebrow">Engine Truth</span><h2>{truth.culprit?.agentKey ?? 'No instigator data'}</h2></div><button onClick={() => setTruth(null)}>×</button></header>{truth.available ? <><p>Motive: {truth.culprit?.motiveKey ?? '—'} · exposed t{truth.culprit?.exposedTick ?? '—'}</p><p>Posture: {truth.scheme?.posture ?? '—'} · tactic: {truth.scheme?.currentTactic ?? '—'} · next strategy t{truth.scheme?.nextStrategyTick ?? '—'}</p>{truth.evidence.map((item) => <div className="metric-row" key={item.evidenceId}><b>{item.kind} · {item.accusedKey ?? 'unknown'}</b><span>{item.genuine ? 'genuine' : 'misdirection'}</span></div>)}</> : <p>The instigator implementation is not present in this worktree yet.</p>}</section>}
 
-    {game.world.ending && <div className="ending"><span className="eyebrow">World ended</span><h1>{game.world.ending}</h1><p>The ledger remains open for inspection.</p>
-      {game.romances.filter((arc) => arc.stage > 0).map((arc) => <article className="ending-romance" key={arc.agentKey}>
+    {game.world.ending && <div className="ending"><span className="eyebrow">World ended · tick {game.world.currentTick}</span><h1>{game.world.ending === 'player_ended' ? 'Your story ends here' : game.world.ending}</h1><p>{game.world.ending === 'player_ended' ? 'The town is no longer advancing. Its record remains stored.' : 'The ledger remains open for inspection.'}</p>
+      {game.world.ending !== 'player_ended' && game.romances.filter((arc) => arc.stage > 0).map((arc) => <article className="ending-romance" key={arc.agentKey}>
         <span><Heart size={15} fill="currentColor" aria-hidden="true" /> {arc.routeTitle} · {arc.status}</span>
         <p>{arc.epilogue}</p>
       </article>)}
-      <button onClick={() => void applyControl({ action: 'restart' })}>Start another town</button></div>}
+      <button disabled={controlling} onClick={() => void applyControl({ action: 'start' })}>{controlling ? 'Starting…' : 'Start another world'}</button></div>}
   </main>;
 }

@@ -120,10 +120,10 @@ export function LandingScreen({ onEnter, busy, error }: {
       {error && <p className="entry-error" role="alert">{error}</p>}
 
       <button className="enter-town-button" disabled={busy || !name.trim()}>
-        <span>{busy ? 'Opening the ledger…' : 'Enter Hollowmere'}</span><ArrowRight size={18} aria-hidden="true" />
+        <span>{busy ? 'Starting your world…' : 'Start your world'}</span><ArrowRight size={18} aria-hidden="true" />
       </button>
       {saved && <button className="restore-profile-button" type="button" onClick={restoreSaved} disabled={busy}><Feather size={14} aria-hidden="true" /> Restore saved player record</button>}
-      <p className="entry-privacy">No account is required. Your signed session owns one isolated town.</p>
+      <p className="entry-privacy">Your signed player session owns one world at a time. Another begins only when you choose it.</p>
     </form>
   </main>;
 }
