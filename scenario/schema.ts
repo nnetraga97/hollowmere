@@ -9,7 +9,7 @@
  * the process does.
  */
 
-import { SCALE } from '../engine/fixedpoint.ts';
+import { SCALE } from '../engine/core/fixedpoint.ts';
 
 export const SCENARIO_SCHEMA_VERSION = 1;
 

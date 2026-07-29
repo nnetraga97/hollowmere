@@ -9,9 +9,9 @@
 
 import { hostname } from 'node:os';
 
-import { closePool } from '../engine/db.ts';
+import { closePool } from '../engine/database/db.ts';
 import { createInferenceClient } from '../engine/inference/index.ts';
-import { errorLogFields, logError, logInfo } from '../engine/log.ts';
+import { errorLogFields, logError, logInfo } from '../engine/core/log.ts';
 import { createScheduler } from './loop.ts';
 
 process.env.SERVICE_NAME ??= 'hollowmere-scheduler';

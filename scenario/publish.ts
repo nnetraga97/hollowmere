@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-import { withSerializable, type Client } from '../engine/db.ts';
+import { withSerializable, type Client } from '../engine/database/db.ts';
 import {
   SCENARIO_SCHEMA_VERSION,
   resolveRoutine,

@@ -18,16 +18,16 @@
  *    up again rather than taking the process with it.
  */
 
-import { runTick, type TickReport } from '../engine/runtick.ts';
+import { runTick, type TickReport } from '../engine/simulation/runtick.ts';
 import {
   acquireLease, findSchedulableWorlds, releaseLease, renewLease,
-} from '../engine/lease.ts';
-import { addActiveRuntime, sweepWorlds } from '../engine/lifecycle.ts';
-import { SCALE } from '../engine/fixedpoint.ts';
-import { query } from '../engine/db.ts';
+} from '../engine/database/lease.ts';
+import { addActiveRuntime, sweepWorlds } from '../engine/database/lifecycle.ts';
+import { SCALE } from '../engine/core/fixedpoint.ts';
+import { query } from '../engine/database/db.ts';
 import type { InferenceClient } from '../engine/inference/index.ts';
-import { sweepExpiredConversations } from '../engine/conversation.ts';
-import { errorLogFields, logEntry } from '../engine/log.ts';
+import { sweepExpiredConversations } from '../engine/player/conversation.ts';
+import { errorLogFields, logEntry } from '../engine/core/log.ts';
 
 export interface SchedulerOptions {
   inference: InferenceClient;

@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 
-import { logInfo } from '../engine/log.ts';
+import { logInfo } from '../engine/core/log.ts';
 
 const command = process.argv[2] ?? 'dev';
 if (!['dev', 'build', 'start'].includes(command)) {

@@ -9,9 +9,9 @@
 
 import { createHash } from 'node:crypto';
 
-import { withSerializable, type Client } from '../engine/db.ts';
-import { pickRumorOriginator, seedRumor } from '../engine/gossip.ts';
-import { createSeq } from '../engine/seq.ts';
+import { withSerializable, type Client } from '../engine/database/db.ts';
+import { pickRumorOriginator, seedRumor } from '../engine/social/gossip.ts';
+import { createSeq } from '../engine/core/seq.ts';
 import type { OpeningEventDef } from './schema.ts';
 
 /** Starting sentiment and trust, by relationship of the two agents' factions. */

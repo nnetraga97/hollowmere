@@ -9,7 +9,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { closePool, query } from '../engine/db.ts';
+import { closePool, query } from '../engine/database/db.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
 

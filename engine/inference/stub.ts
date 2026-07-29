@@ -13,7 +13,7 @@
  * under cosine distance. Retrieval relevance is therefore testable offline.
  */
 
-import { createRng, deriveSeed } from '../rng.ts';
+import { createRng, deriveSeed } from '../core/rng.ts';
 import {
   InferenceError,
   type CompletionRequest,

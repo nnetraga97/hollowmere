@@ -10,7 +10,7 @@
 import { createBedrockClient, type BedrockOptions } from './bedrock.ts';
 import { createAzureOpenAIClient, type AzureOpenAIOptions } from './azure.ts';
 import { createStubClient, type StubOptions } from './stub.ts';
-import { errorLogFields, logDebug, logError, logInfo } from '../log.ts';
+import { errorLogFields, logDebug, logError, logInfo } from '../core/log.ts';
 import type {
   CompletionRequest, InferenceClient, InferenceMode, StreamUsage,
 } from './types.ts';

@@ -18,14 +18,14 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 
-import { closePool, query } from '../engine/db.ts';
-import { getMisinformationIndex } from '../engine/beliefs.ts';
-import { readBudget } from '../engine/budget.ts';
-import { withClient } from '../engine/db.ts';
+import { closePool, query } from '../engine/database/db.ts';
+import { getMisinformationIndex } from '../engine/social/beliefs.ts';
+import { readBudget } from '../engine/agents/budget.ts';
+import { withClient } from '../engine/database/db.ts';
 import { createInferenceClient } from '../engine/inference/index.ts';
-import { runTick, type TickReport } from '../engine/runtick.ts';
-import { fpToDisplay } from '../engine/fixedpoint.ts';
-import { converse, type SpeechAct } from '../engine/converse.ts';
+import { runTick, type TickReport } from '../engine/simulation/runtick.ts';
+import { fpToDisplay } from '../engine/core/fixedpoint.ts';
+import { converse, type SpeechAct } from '../engine/player/converse.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 

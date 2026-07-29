@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import pg from 'pg';
 
-import { closePool } from '../engine/db.ts';
+import { closePool } from '../engine/database/db.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);

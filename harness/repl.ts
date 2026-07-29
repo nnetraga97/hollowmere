@@ -26,15 +26,15 @@ import { stdin, stdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { closePool } from '../engine/db.ts';
+import { closePool } from '../engine/database/db.ts';
 import {
   getBeliefHistory, getChronicle, getClaims, getCognition, getFactions,
   getSocialGraph, getWorldSummary, listAgents,
-} from '../engine/api.ts';
-import { fpToDisplay } from '../engine/fixedpoint.ts';
+} from '../engine/player/api.ts';
+import { fpToDisplay } from '../engine/core/fixedpoint.ts';
 import { createInferenceClient } from '../engine/inference/index.ts';
-import { runTick } from '../engine/runtick.ts';
-import { converse } from '../engine/converse.ts';
+import { runTick } from '../engine/simulation/runtick.ts';
+import { converse } from '../engine/player/converse.ts';
 import { instantiateWorld } from '../scenario/instantiate.ts';
 import { loadScenarioFile, publishScenario } from '../scenario/publish.ts';
 
