@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   closeConversation, ConversationRateLimitError, startConversation,
-  parseTurn, parseTurnWithDiagnostics, sweepExpiredConversations, takeConversationTurn,
+  findUnsupportedCapitalizedToken, parseTurn, parseTurnWithDiagnostics,
+  sweepExpiredConversations, takeConversationTurn,
 } from './conversation.ts';
+import { COGNITION } from './config.ts';
 import { closePool, query } from './db.ts';
 import { createStubClient } from './inference/index.ts';
 import { runTick } from './runtick.ts';
@@ -66,6 +68,54 @@ describe('player conversation output parsing', () => {
     })).rejection, {
       code: 'unknown_claim_key', detail: 'received "invented_claim"',
     });
+  });
+
+  test('allows sentence-opening prose while rejecting unknown mid-sentence proper nouns', () => {
+    const accepted = [
+      'Oh, sweetie, thank you for asking.',
+      'Seen? Oh—folk pass faster than the tide.',
+      'They said the mill was empty that night.',
+      'You said you would help me.',
+      'She told me the same thing.',
+      'That said, I would rather not talk about it.',
+      'Nothing said here leaves this room.',
+      'He leaned close and whispered, "Oh, I know."',
+      'There was a light burning at the mill that night.',
+      'There is nothing more to say.',
+      'There were three of them on the steps.',
+      'Everything was quiet until the bell rang.',
+      'Something was wrong that night.',
+      'Everybody knows the old story.',
+      'Word is she left before dawn.',
+      'Others said the same thing.',
+      // Unknown sentence-leading names are accepted deliberately: capitalization
+      // cannot distinguish them from ordinary prose without an NER model, and
+      // free-form reply text cannot authorize a claim or world effect.
+      'Bram saw the lantern go out past the mill.',
+      'Marla knows more than she lets on.',
+      'Marla mentioned it to me yesterday.',
+      'He leaned close and whispered, "Garrick is the one you want."',
+      'Mr. Halloway keeps the ledger.',
+      'The tide turns... Garrick will be there.',
+    ];
+    for (const reply of accepted) {
+      assert.equal(findUnsupportedCapitalizedToken(reply), null, reply);
+    }
+    assert.equal(
+      findUnsupportedCapitalizedToken('I have not met Marla.', new Set(['marla'])),
+      null,
+      'an unknown name supplied by the player may be repeated without becoming an engine fact',
+    );
+
+    const rejected = [
+      'I heard it from Marla while she polished the lantern glass.',
+      'Yesterday, Marla mentioned it to me.',
+      'Ask Bram about the lantern.',
+      "The millers' Garrick keeps the key.",
+    ];
+    for (const reply of rejected) {
+      assert.match(findUnsupportedCapitalizedToken(reply) ?? '', /unsupported capitalized token/, reply);
+    }
   });
 });
 
@@ -365,18 +415,157 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 
-  test('unsupported named people fall back and cannot enter durable memory', async () => {
+  test('a fresh NPC skips empty memory retrieval before answering', async () => {
+    const ref = await freshWorld(713);
+    const stub = createStubClient();
+    let embeddingCalls = 0;
+    let completionCalls = 0;
+    const observing = {
+      ...stub,
+      async embed(texts: readonly string[]) {
+        embeddingCalls++;
+        return stub.embed(texts);
+      },
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        completionCalls++;
+        return stub.complete(request);
+      },
+    };
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const result = await takeConversationTurn({
+      ...ref, conversationId: started.conversationId,
+      text: 'Good evening.', idempotencyKey: 'turn', inference: observing,
+    });
+    assert.equal(result.turn.fallback, false);
+    assert.equal(embeddingCalls, 0, 'an empty memory set needs no query embedding');
+    assert.equal(completionCalls, 1);
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
+  test('the final inference slot is usable only when memory retrieval is unnecessary', async () => {
+    const stub = createStubClient();
+    const fresh = await freshWorld(715);
+    await query(`UPDATE world_budget SET inference_calls = $2 WHERE world_id = $1`,
+      [fresh.worldId, COGNITION.callBudget - 1]);
+    let freshEmbeddings = 0;
+    let freshCompletions = 0;
+    const freshInference = {
+      ...stub,
+      async embed(texts: readonly string[]) {
+        freshEmbeddings++;
+        return stub.embed(texts);
+      },
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        freshCompletions++;
+        return stub.complete(request);
+      },
+    };
+    const freshConversation = await startConversation({ ...fresh, idempotencyKey: 'start' });
+    const admitted = await takeConversationTurn({
+      ...fresh, conversationId: freshConversation.conversationId,
+      text: 'Can you answer one question?', idempotencyKey: 'turn', inference: freshInference,
+    });
+    assert.equal(admitted.turn.fallback, false);
+    assert.equal(freshEmbeddings, 0);
+    assert.equal(freshCompletions, 1);
+
+    const remembered = await freshWorld(716);
+    const agent = await query<{ agent_id: string }>(
+      `SELECT agent_id FROM world_agents WHERE world_id = $1 AND agent_key = $2`,
+      [remembered.worldId, remembered.agentKey],
+    );
+    const vector = (await stub.embed(['A prior grounded observation.'])).vectors[0]!;
+    await query(
+      `INSERT INTO world_memories
+         (world_id, agent_id, tick, seq, kind, content, embedding, importance)
+       VALUES ($1, $2, 0, 9900000, 'observation', $3, $4, 5000)`,
+      [remembered.worldId, agent[0]!.agent_id, 'A prior grounded observation.',
+        `[${vector.join(',')}]`],
+    );
+    await query(`UPDATE world_budget SET inference_calls = $2 WHERE world_id = $1`,
+      [remembered.worldId, COGNITION.callBudget - 1]);
+    let rememberedEmbeddings = 0;
+    let rememberedCompletions = 0;
+    const rememberedInference = {
+      ...stub,
+      async embed(texts: readonly string[]) {
+        rememberedEmbeddings++;
+        return stub.embed(texts);
+      },
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        rememberedCompletions++;
+        return stub.complete(request);
+      },
+    };
+    const rememberedConversation = await startConversation({
+      ...remembered, idempotencyKey: 'start',
+    });
+    const refused = await takeConversationTurn({
+      ...remembered, conversationId: rememberedConversation.conversationId,
+      text: 'Can you remember me?', idempotencyKey: 'turn', inference: rememberedInference,
+    });
+    assert.equal(refused.turn.fallback, true);
+    assert.equal(rememberedEmbeddings, 0, 'retrieval must not spend the final slot by itself');
+    assert.equal(rememberedCompletions, 0);
+
+    await query(`DELETE FROM worlds WHERE world_id = ANY($1::UUID[])`,
+      [[fresh.worldId, remembered.worldId]]);
+  });
+
+  test('ordinary capitalized sentence openers do not discard grounded replies', async () => {
+    const ref = await freshWorld(714);
+    const stub = createStubClient();
+    const replies = [
+      'Oh, sweetie, thank you for asking. Folks have been worried.',
+      'Seen? Oh—folk pass faster than the tide.',
+    ];
+    let replyIndex = 0;
+    const scripted = {
+      ...stub,
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        const base = await stub.complete(request);
+        if (request.task !== 'conversation_turn') return base;
+        return { ...base, text: JSON.stringify({
+          reply: replies[replyIndex++]!, speechAct: 'smalltalk', disclosure: null,
+          hearingResponse: null, referencedClaimKeys: [],
+        }) };
+      },
+    };
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const first = await takeConversationTurn({
+      ...ref, conversationId: started.conversationId,
+      text: 'How are you?', idempotencyKey: 'turn-1', inference: scripted,
+    });
+    const second = await takeConversationTurn({
+      ...ref, conversationId: started.conversationId,
+      text: 'Did you see anyone?', idempotencyKey: 'turn-2', inference: scripted,
+    });
+    assert.equal(first.turn.fallback, false);
+    assert.equal(first.turn.reply, replies[0]);
+    assert.equal(second.turn.fallback, false);
+    assert.equal(second.turn.reply, replies[1]);
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
+  test('unsupported named people do not enter the authoritative transcript', async () => {
     const ref = await freshWorld(711);
     const stub = createStubClient();
     const tasks: string[] = [];
+    const turnPrompts: string[] = [];
+    const inventedReplies = [
+      'I heard it from Marla while she polished the lantern glass.',
+      'Yesterday, Marla told me the same story.',
+    ];
+    let replyIndex = 0;
     const scripted = {
       ...stub,
       async complete(request: Parameters<typeof stub.complete>[0]) {
         tasks.push(request.task);
         const base = await stub.complete(request);
         if (request.task !== 'conversation_turn') return base;
+        turnPrompts.push(request.user);
         return { ...base, text: JSON.stringify({
-          reply: 'I heard it from Marla while she polished the lantern glass.',
+          reply: inventedReplies[replyIndex++]!,
           speechAct: 'inquire', disclosure: 'deflect', hearingResponse: null,
           referencedClaimKeys: [],
         }) };
@@ -389,18 +578,63 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     });
     assert.equal(result.turn.fallback, true);
     assert.doesNotMatch(result.turn.reply, /Marla/);
+    const leadingName = await takeConversationTurn({
+      worldId: ref.worldId, sessionId: ref.sessionId, conversationId: started.conversationId,
+      text: 'What did she say?', idempotencyKey: 'turn-2', inference: scripted,
+    });
+    assert.equal(leadingName.turn.fallback, true);
+    assert.doesNotMatch(leadingName.turn.reply, /Marla/);
+    assert.doesNotMatch(turnPrompts[1]!, /Marla/,
+      'a rejected provider reply must not be fed into the next turn');
 
     await closeConversation({
       worldId: ref.worldId, sessionId: ref.sessionId, conversationId: started.conversationId,
       idempotencyKey: 'close', inference: scripted,
     });
-    assert.deepEqual(tasks, ['conversation_turn'], 'closing must not ask a model to rewrite durable memory');
+    assert.deepEqual(tasks, ['conversation_turn', 'conversation_turn'],
+      'closing must not ask a model to rewrite durable memory');
     const memories = await query<{ content: string }>(
       `SELECT content FROM world_memories WHERE world_id = $1 AND kind = 'dialogue'`,
       [ref.worldId],
     );
     assert.ok(memories.length > 0);
-    assert.ok(memories.every((memory) => !memory.content.includes('Marla')));
+    assert.ok(memories.some((memory) => memory.content.includes('Who told you?')),
+      'durable dialogue memory is built from player speech, not rejected provider text');
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
+  test('player-introduced names are echoable without bypassing cast grounding', async () => {
+    const ref = await freshWorld(717);
+    assert.notEqual(ref.agentKey, 'jenna_ryle');
+    const stub = createStubClient();
+    const scripted = {
+      ...stub,
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        const base = await stub.complete(request);
+        if (request.task !== 'conversation_turn') return base;
+        const prompt = JSON.parse(request.user) as { latestPlayerUtterance: string };
+        const name = prompt.latestPlayerUtterance.includes('Jenna Ryle') ? 'Jenna Ryle' : 'Marla';
+        return { ...base, text: JSON.stringify({
+          reply: `I have not met ${name}.`, speechAct: 'inform', disclosure: null,
+          hearingResponse: null, referencedClaimKeys: [],
+        }) };
+      },
+    };
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const unknown = await takeConversationTurn({
+      ...ref, conversationId: started.conversationId,
+      text: 'Have you met Marla?', idempotencyKey: 'turn-1', inference: scripted,
+    });
+    assert.equal(unknown.turn.fallback, false);
+    assert.match(unknown.turn.reply, /Marla/);
+
+    const castMember = await takeConversationTurn({
+      ...ref, conversationId: started.conversationId,
+      text: 'Have you met Jenna Ryle?', idempotencyKey: 'turn-2', inference: scripted,
+    });
+    assert.equal(castMember.turn.fallback, true,
+      'player text must not bypass the stricter known-cast allowlist');
+    assert.doesNotMatch(castMember.turn.reply, /Jenna Ryle/);
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { estimateCostMicros, readBudget, recordUsage } from './budget.ts';
+import { estimateCostMicros, recordUsage } from './budget.ts';
 import { COGNITION } from './config.ts';
 import { query, withClient, withSerializable, type Client } from './db.ts';
 import { stableId } from './ids.ts';
@@ -306,6 +306,7 @@ async function completeReservedTurn(
       romance_stage: number | null; romance_status: RomanceStatus | null;
       player_name: string; player_profile: { background?: string };
       current_tick: number; day: number; phase: string; escalation_stage: string;
+      inference_calls: number; has_memories: boolean;
     }>(
       `SELECT a.agent_id, a.agent_key, p.player_id, a.name AS agent_name, a.status AS agent_status, a.current_action,
               a.persona, a.kindness, a.engagement, a.honesty,
@@ -314,7 +315,12 @@ async function completeReservedTurn(
               r.trust, r.affinity, r.fear, r.respect, r.impression,
               romance.stage AS romance_stage, romance.status AS romance_status,
               p.name AS player_name, p.profile AS player_profile,
-              w.current_tick, state.day, state.phase, state.escalation_stage
+              w.current_tick, state.day, state.phase, state.escalation_stage,
+              budget.inference_calls,
+              EXISTS (
+                SELECT 1 FROM world_memories memory
+                 WHERE memory.world_id = s.world_id AND memory.agent_id = s.target_agent_id
+              ) AS has_memories
          FROM world_conversation_sessions s
          JOIN world_players p ON p.world_id = s.world_id AND p.player_id = s.player_id
          JOIN world_agents a ON a.world_id = s.world_id AND a.agent_id = s.target_agent_id
@@ -322,6 +328,7 @@ async function completeReservedTurn(
          JOIN world_locations l ON l.world_id = a.world_id AND l.location_id = a.location_id
          JOIN worlds w ON w.world_id = s.world_id
          JOIN world_state state ON state.world_id = s.world_id
+         JOIN world_budget budget ON budget.world_id = s.world_id
          JOIN player_agent_relationships r ON r.world_id = s.world_id
               AND r.player_id = s.player_id AND r.agent_id = s.target_agent_id
          LEFT JOIN player_romance_arcs romance ON romance.world_id = s.world_id
@@ -330,10 +337,16 @@ async function completeReservedTurn(
           AND s.status = 'open'`, [input.worldId, input.conversationId, input.sessionId],
     );
     if (!sessions.rows[0]) throw new Error('conversation is no longer open');
-    const transcript = await client.query<{ ordinal: number; player_text: string; reply: string | null }>(
-      `SELECT ordinal, player_text, reply FROM world_conversation_turns
-        WHERE world_id = $1 AND conversation_id = $2 AND turn_id != $3
-        ORDER BY ordinal`, [input.worldId, input.conversationId, turnId],
+    const turns = await client.query<{
+      turn_id: string; ordinal: number; status: string; player_text: string; reply: string | null;
+      structured_outcome: { suggested?: ParsedTurn }; model_id: string | null;
+      tokens_in: number; tokens_out: number; latency_ms: number; budget_tier: string;
+    }>(
+      `SELECT turn_id, ordinal, status, player_text, reply, structured_outcome, model_id,
+              tokens_in, tokens_out, latency_ms, budget_tier
+         FROM world_conversation_turns
+        WHERE world_id = $1 AND conversation_id = $2
+        ORDER BY ordinal`, [input.worldId, input.conversationId],
     );
     const beliefs = await client.query<{
       claim_key: string; text: string; confidence: number; subject_name: string;
@@ -360,19 +373,15 @@ async function completeReservedTurn(
         LIMIT 10`,
       [input.worldId, input.conversationId, sessions.rows[0].current_tick],
     );
-    const audience = await client.query<{ name: string }>(
-      `SELECT agent.name
-         FROM world_conversation_participants participant
-         JOIN world_agents agent
-           ON agent.world_id = participant.world_id AND agent.agent_id = participant.agent_id
-        WHERE participant.world_id = $1 AND participant.conversation_id = $2
-          AND participant.role = 'observer'
+    const agents = await client.query<{ name: string; observer: boolean }>(
+      `SELECT agent.name, participant.agent_id IS NOT NULL AS observer
+         FROM world_agents agent
+         LEFT JOIN world_conversation_participants participant
+           ON participant.world_id = agent.world_id AND participant.agent_id = agent.agent_id
+          AND participant.conversation_id = $2 AND participant.role = 'observer'
+        WHERE agent.world_id = $1
         ORDER BY agent.agent_key`,
       [input.worldId, input.conversationId],
-    );
-    const agents = await client.query<{ name: string }>(
-      `SELECT name FROM world_agents WHERE world_id = $1 ORDER BY agent_key`,
-      [input.worldId],
     );
     const commitments = await client.query<{
       location_name: string; due_tick: number; response: string;
@@ -391,30 +400,29 @@ async function completeReservedTurn(
         ORDER BY commitment.due_tick, hearing.hearing_id`,
       [input.worldId, sessions.rows[0].agent_id],
     );
-    const reserved = await client.query<{
-      structured_outcome: { suggested?: ParsedTurn }; model_id: string | null;
-      tokens_in: number; tokens_out: number; latency_ms: number; budget_tier: string;
-    }>(
-      `SELECT structured_outcome, model_id, tokens_in, tokens_out, latency_ms, budget_tier
-         FROM world_conversation_turns WHERE world_id = $1 AND turn_id = $2 AND status = 'reserved'`,
-      [input.worldId, turnId],
-    );
-    if (!reserved.rows[0]) throw new Error('conversation turn is no longer pending');
+    const reserved = turns.rows.find((turn) => turn.turn_id === turnId && turn.status === 'reserved');
+    if (!reserved) throw new Error('conversation turn is no longer pending');
+    const session = sessions.rows[0];
     return {
-      agent: sessions.rows[0], transcript: transcript.rows,
+      agent: session,
+      transcript: turns.rows.filter((turn) => turn.turn_id !== turnId).map((turn) => ({
+        ordinal: turn.ordinal, player_text: turn.player_text, reply: turn.reply,
+      })),
       romanceContext: romancePromptContext(
-        sessions.rows[0].agent_key,
-        sessions.rows[0].romance_stage,
-        sessions.rows[0].romance_status,
+        session.agent_key,
+        session.romance_stage,
+        session.romance_status,
       ),
       memories: [] as string[], beliefs: beliefs.rows,
-      audience: audience.rows.map((row) => row.name), commitments: commitments.rows,
+      audience: agents.rows.filter((row) => row.observer).map((row) => row.name),
+      commitments: commitments.rows,
       allAgentNames: agents.rows.map((row) => row.name),
-      reserved: reserved.rows[0],
+      reserved,
+      inferenceCalls: session.inference_calls,
+      hasMemories: session.has_memories,
     };
   });
-  const budget = await withClient((client) => readBudget(client, input.worldId));
-  const budgetTier = budgetTierFor(budget.inferenceCalls);
+  const budgetTier = budgetTierFor(context.inferenceCalls);
   const allowedClaimKeys = new Set(context.beliefs.map((belief) => belief.claim_key));
   let parsed = normalizeParsedTurn(
     context.reserved.structured_outcome.suggested,
@@ -428,24 +436,27 @@ async function completeReservedTurn(
   };
   let rejection: TurnRejection | null = null;
   let rawProviderResponse: string | null = null;
-  // Retrieval and completion are one semantic operation and cost two provider
-  // calls. Do neither unless both fit: spending the final call on a query vector
-  // and then falling back would buy the player no reply.
-  if (!parsed && budget.inferenceCalls + 2 <= COGNITION.callBudget) {
-    const embedded = await input.inference.embed([
-      playerMemoryQuery(context.agent, input.text),
-    ]);
-    await recordEmbeddingUsage(
-      input.worldId, `${turnId}:recall`, embedded,
-      isBillableInferenceMode(input.inference.mode),
-    );
-    context.memories = await withClient((client) => loadPlayerConversationMemories(client, {
-      worldId: input.worldId,
-      agentId: context.agent.agent_id,
-      playerId: context.agent.player_id,
-      tick: context.agent.current_tick,
-      queryVector: embedded.vectors[0]!,
-    }));
+  const requiredCalls = context.hasMemories ? 2 : 1;
+  // A fresh NPC has nothing to retrieve, so avoid a provider call and vector
+  // query that can only return an empty set. Once memories exist, retrieval and
+  // completion remain one semantic operation and run only when both calls fit.
+  if (!parsed && context.inferenceCalls + requiredCalls <= COGNITION.callBudget) {
+    if (context.hasMemories) {
+      const embedded = await input.inference.embed([
+        playerMemoryQuery(context.agent, input.text),
+      ]);
+      await recordEmbeddingUsage(
+        input.worldId, `${turnId}:recall`, embedded,
+        isBillableInferenceMode(input.inference.mode),
+      );
+      context.memories = await withClient((client) => loadPlayerConversationMemories(client, {
+        worldId: input.worldId,
+        agentId: context.agent.agent_id,
+        playerId: context.agent.player_id,
+        tick: context.agent.current_tick,
+        queryVector: embedded.vectors[0]!,
+      }));
+    }
     const response = await input.inference.complete({
       task: 'conversation_turn', promptVersion: CONVERSATION_TURN_PROMPT_VERSION,
       system: TURN_SYSTEM,
@@ -480,7 +491,7 @@ async function completeReservedTurn(
   if (!parsed) {
     rejection ??= {
       code: 'inference_budget_exhausted',
-      detail: `world inference usage ${budget.inferenceCalls} cannot fit two more calls`,
+      detail: `world inference usage ${context.inferenceCalls} cannot fit ${requiredCalls} more call${requiredCalls === 1 ? '' : 's'}`,
     };
     logConversationResponseRejected({
       worldId: input.worldId,
@@ -1086,7 +1097,7 @@ function fallbackTurn(text: string): ParsedTurn {
     : lower.includes('kill') || lower.includes('or else') ? 'threaten'
     : 'smalltalk';
   return {
-    reply: 'I need a moment before I answer that.', speechAct,
+    reply: "I can't answer that without guessing.", speechAct,
     disclosure: null, hearingResponse: null, referencedClaimKeys: [],
   };
 }
@@ -1155,12 +1166,6 @@ function normalizeParsedTurn(
   return parseTurn(JSON.stringify(value), allowedClaimKeys);
 }
 
-const NATURAL_SENTENCE_OPENERS = new Set([
-  'a', 'an', 'and', 'ask', 'but', 'by', 'come', 'do', 'for', 'how', 'i', 'if',
-  'it', 'let', 'maybe', 'my', 'no', 'nothing', 'our', 'perhaps', 'still', 'tell',
-  'that', 'the', 'there', 'they', 'this', 'what', 'we', 'why', 'yes', 'yet', 'you', 'your',
-]);
-
 function findUnsupportedProperName(parsed: ParsedTurn, context: TurnPromptContext): string | null {
   const selected = context.beliefs.filter((belief) => parsed.referencedClaimKeys.includes(belief.claim_key));
   const allowedPhrases = [
@@ -1168,6 +1173,8 @@ function findUnsupportedProperName(parsed: ParsedTurn, context: TurnPromptContex
     context.agent.location_name, context.agent.faction_name,
     ...selected.flatMap((belief) => [belief.subject_name, belief.text]),
     ...context.commitments.map((commitment) => commitment.location_name),
+    context.latestPlayerUtterance,
+    ...context.transcript.map((turn) => turn.player_text),
   ];
   const allowedTokens = new Set(allowedPhrases.flatMap(capitalizedTokens).map((token) => token.toLowerCase()));
   const allAgentNames = context.allAgentNames ?? [];
@@ -1187,16 +1194,34 @@ function findUnsupportedProperName(parsed: ParsedTurn, context: TurnPromptContex
     }
   }
 
-  for (const match of parsed.reply.matchAll(/\b[A-Z][A-Za-z']*\b/g)) {
+  return findUnsupportedCapitalizedToken(parsed.reply, allowedTokens);
+}
+
+/**
+ * Catch unknown mid-sentence proper nouns without treating sentence-opening
+ * capitalization as evidence. Free-form reply text is non-authoritative; claims
+ * and effects remain allowlisted, while existing cast members receive the
+ * stricter position-independent check above.
+ */
+export function findUnsupportedCapitalizedToken(
+  reply: string,
+  allowedTokens: ReadonlySet<string> = new Set(),
+): string | null {
+  for (const match of reply.matchAll(/\b[A-Z][A-Za-z']*\b/g)) {
     const token = match[0];
     if (token === 'I' || allowedTokens.has(token.toLowerCase())) continue;
-    const prefix = parsed.reply.slice(0, match.index ?? 0);
-    const atSentenceStart = prefix.trim().length === 0 || /[.!?]\s*$/.test(prefix);
-    if (!atSentenceStart || !NATURAL_SENTENCE_OPENERS.has(token.toLowerCase())) {
+    const index = match.index ?? 0;
+    if (!isSentenceStart(reply, index)) {
       return `unsupported capitalized token ${JSON.stringify(token)}`;
     }
   }
   return null;
+}
+
+function isSentenceStart(text: string, index: number): boolean {
+  const prefix = text.slice(0, index).trimEnd();
+  return prefix.length === 0 || /[.!?]["'”’\])}]*$/.test(prefix) ||
+    /["“‘]$/.test(prefix) || /(?:^|[^A-Za-z])'$/.test(prefix);
 }
 
 function meaningfulNameTokens(name: string): string[] {
