@@ -10,7 +10,7 @@ import type {
   RomanceChoiceResult, SocialGraph,
 } from '@/lib/contracts';
 import {
-  chooseRomance, closeConversation, control, loadAgent, loadChronicle, loadGame, loadGraph, loadTruth, movePlayer,
+  chooseRomance, closeConversation, control, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, movePlayer,
   startConversation, startSession, streamConversationTurn, type PlayerEntry,
 } from '@/lib/clientApi';
 import { PhaserGame } from './PhaserGame';
@@ -46,26 +46,81 @@ export function DebugClient() {
   } | null>(null);
   const moveInFlight = useRef(false);
   const lastLocation = useRef<string | null>(null);
+  const gameRef = useRef<GameSnapshot | null>(null);
+  const refreshController = useRef<AbortController | null>(null);
+  const syncController = useRef<AbortController | null>(null);
+  const refreshGeneration = useRef(0);
+  const stateGeneration = useRef(0);
+  const hydratedTick = useRef<number | null>(null);
+  const conversationGeneration = useRef(0);
+  const agentRequestGeneration = useRef(0);
 
   const refresh = useCallback(async () => {
+    refreshController.current?.abort();
+    const controller = new AbortController();
+    refreshController.current = controller;
+    const generation = ++refreshGeneration.current;
+    const mutationGeneration = stateGeneration.current;
+    const interactionGeneration = conversationGeneration.current;
     try {
-      const next = await loadGame();
+      const next = await loadGame(controller.signal);
+      if (generation !== refreshGeneration.current || mutationGeneration !== stateGeneration.current) return;
+      gameRef.current = next;
+      hydratedTick.current = next.world.currentTick;
       setGame(next);
-      setConversation(next.conversation);
-      setTalkingTo(next.conversation?.agentKey ?? null);
+      if (interactionGeneration === conversationGeneration.current) {
+        setConversation(next.conversation);
+        setTalkingTo(next.conversation?.agentKey ?? null);
+      }
       setError(null);
       if (!next.player.pendingMove) moveInFlight.current = false;
     } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') return;
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (refreshController.current === controller) refreshController.current = null;
     }
   }, []);
+
+  const sync = useCallback(async () => {
+    if (syncController.current) return;
+    const controller = new AbortController();
+    syncController.current = controller;
+    const mutationGeneration = stateGeneration.current;
+    try {
+      const next = await loadGameSync(controller.signal);
+      if (mutationGeneration !== stateGeneration.current) return;
+      const current = gameRef.current;
+      if (!current || current.world.worldId !== next.world.worldId) return;
+      const needsHydration = hydratedTick.current !== next.world.currentTick;
+      const patched: GameSnapshot = {
+        ...current,
+        world: { ...current.world, ...next.world },
+        player: { ...current.player, ...next.player },
+      };
+      gameRef.current = patched;
+      setGame(patched);
+      if (!next.player.pendingMove) moveInFlight.current = false;
+      if (needsHydration) await refresh();
+    } catch (cause) {
+      if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      if (syncController.current === controller) syncController.current = null;
+    }
+  }, [refresh]);
 
   async function enterTown(entry: PlayerEntry) {
     setEntering(true);
     setError(null);
     try {
       const created = await startSession(entry);
+      stateGeneration.current++;
       setBootstrap(created);
+      gameRef.current = created.game;
+      hydratedTick.current = created.game.world.currentTick;
+      conversationGeneration.current++;
       setGame(created.game);
       setConversation(created.game.conversation);
       setTalkingTo(created.game.conversation?.agentKey ?? null);
@@ -82,13 +137,48 @@ export function DebugClient() {
 
   useEffect(() => {
     if (!bootstrap) return;
-    const timer = window.setInterval(() => void refresh(), 1_000);
-    return () => window.clearInterval(timer);
-  }, [bootstrap, refresh]);
+    let timer: number | null = null;
+    let stopped = false;
+    let chain = 0;
+    const startPolling = () => {
+      const token = ++chain;
+      const poll = async () => {
+        if (stopped || token !== chain) return;
+        if (document.visibilityState === 'visible') await sync();
+        if (stopped || token !== chain) return;
+        timer = window.setTimeout(() => void poll(), 1_000);
+      };
+      timer = window.setTimeout(() => void poll(), 1_000);
+    };
+    const onVisibility = () => {
+      chain++;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      if (document.visibilityState !== 'visible') {
+        syncController.current?.abort();
+        return;
+      }
+      startPolling();
+    };
+    startPolling();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stopped = true;
+      chain++;
+      if (timer !== null) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      syncController.current?.abort();
+      refreshController.current?.abort();
+    };
+  }, [bootstrap, sync]);
 
   const inspectAgent = useCallback((agentKey: string, openPanel = false) => {
     if (openPanel) setPanel('agent');
-    void loadAgent(agentKey).then(setAgent).catch((cause) => setError(String(cause)));
+    const generation = ++agentRequestGeneration.current;
+    setAgent(null);
+    void loadAgent(agentKey).then((next) => {
+      if (generation === agentRequestGeneration.current) setAgent(next);
+    }).catch((cause) => setError(String(cause)));
   }, []);
 
   const queueMove = useCallback(async (locationKey: string) => {
@@ -99,18 +189,30 @@ export function DebugClient() {
       return;
     }
     moveInFlight.current = true;
+    stateGeneration.current++;
     setSceneLocationKey(null);
     setPanel(null);
     setJourney({ from: game.player.locationKey, to: locationKey });
     try {
-      await movePlayer(locationKey, crypto.randomUUID());
-      await refresh();
+      const result = await movePlayer(locationKey, crypto.randomUUID());
+      const current = gameRef.current;
+      if (current) {
+        const moved: GameSnapshot = {
+          ...current,
+          player: { ...current.player, locationKey: result.locationKey, pendingMove: null },
+        };
+        gameRef.current = moved;
+        setGame(moved);
+      }
+      moveInFlight.current = false;
+      setJourney(null);
+      setSceneLocationKey(result.locationKey);
     } catch (cause) {
       moveInFlight.current = false;
       setJourney(null);
       setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [bootstrap, game, refresh]);
+  }, [bootstrap, game]);
 
   useEffect(() => {
     const offSelect = EventBus.on('select-agent', ({ agentKey }) => {
@@ -157,6 +259,8 @@ export function DebugClient() {
 
   async function beginConversation(agentKey: string) {
     if (sending || game?.player.pendingMove) return;
+    stateGeneration.current++;
+    conversationGeneration.current++;
     setSending(true);
     try {
       const value = await startConversation(agentKey);
@@ -177,15 +281,21 @@ export function DebugClient() {
     event.preventDefault();
     if (!talkingTo || !conversation || !utterance.trim() || sending) return;
     const text = utterance.trim();
+    stateGeneration.current++;
+    conversationGeneration.current++;
     setUtterance('');
     setReply('');
     setSending(true);
     try {
-      await streamConversationTurn({ conversationId: conversation!.conversationId, text, idempotencyKey: crypto.randomUUID() },
+      const result = await streamConversationTurn({ conversationId: conversation!.conversationId, text, idempotencyKey: crypto.randomUUID() },
         (token) => setReply((current) => current + token));
-      await refresh();
-      const updated = await loadAgent(talkingTo);
-      setAgent(updated);
+      setConversation(result.conversation);
+      const agentGeneration = ++agentRequestGeneration.current;
+      void Promise.all([refresh(), loadAgent(talkingTo)])
+        .then(([, updated]) => {
+          if (agentGeneration === agentRequestGeneration.current) setAgent(updated);
+        })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -195,26 +305,29 @@ export function DebugClient() {
 
   async function leaveConversation() {
     if (!conversation || sending) return;
+    stateGeneration.current++;
+    conversationGeneration.current++;
     setSending(true);
     try {
       const before = talkingDetail ?? await loadAgent(conversation.agentKey);
       await closeConversation(conversation.conversationId);
-      const updated = await loadAgent(conversation.agentKey);
-      setAgent(updated);
-      if (before.playerRelationship && updated.playerRelationship) {
-        setBondChange({
-          agentKey: conversation.agentKey,
-          trust: updated.playerRelationship.trust - before.playerRelationship.trust,
-          affinity: updated.playerRelationship.affinity - before.playerRelationship.affinity,
-          fear: updated.playerRelationship.fear - before.playerRelationship.fear,
-          respect: updated.playerRelationship.respect - before.playerRelationship.respect,
-        });
-      }
       setConversation(null);
       setTalkingTo(null);
       setReply('');
       setSceneLocationKey(game?.player.locationKey ?? null);
-      await refresh();
+      const agentGeneration = ++agentRequestGeneration.current;
+      void Promise.all([refresh(), loadAgent(conversation.agentKey)]).then(([, updated]) => {
+        if (agentGeneration === agentRequestGeneration.current) setAgent(updated);
+        if (before.playerRelationship && updated.playerRelationship) {
+          setBondChange({
+            agentKey: conversation.agentKey,
+            trust: updated.playerRelationship.trust - before.playerRelationship.trust,
+            affinity: updated.playerRelationship.affinity - before.playerRelationship.affinity,
+            fear: updated.playerRelationship.fear - before.playerRelationship.fear,
+            respect: updated.playerRelationship.respect - before.playerRelationship.respect,
+          });
+        }
+      }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -226,11 +339,16 @@ export function DebugClient() {
     agentKey: string; sceneKey: string; choiceKey: string; locationKey: string;
   }): Promise<RomanceChoiceResult> {
     if (sending) throw new Error('another action is still resolving');
+    stateGeneration.current++;
     setSending(true);
     try {
       const result = await chooseRomance(input);
-      await refresh();
-      setAgent(await loadAgent(input.agentKey));
+      const agentGeneration = ++agentRequestGeneration.current;
+      void Promise.all([refresh(), loadAgent(input.agentKey)])
+        .then(([, updated]) => {
+          if (agentGeneration === agentRequestGeneration.current) setAgent(updated);
+        })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
       return result;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -243,12 +361,16 @@ export function DebugClient() {
 
   async function applyControl(body: Record<string, unknown>) {
     if (controlling) return;
+    stateGeneration.current++;
     setControlling(true);
     try {
       await control(body);
       if (body.action === 'start') {
         const created = await startSession();
         setBootstrap(created);
+        gameRef.current = created.game;
+        hydratedTick.current = created.game.world.currentTick;
+        conversationGeneration.current++;
         setGame(created.game);
         setConversation(created.game.conversation);
         setTalkingTo(created.game.conversation?.agentKey ?? null);
@@ -260,7 +382,23 @@ export function DebugClient() {
         setEndWorldWarning(false);
         lastLocation.current = created.game.player.locationKey;
       } else {
-        await refresh();
+        const current = gameRef.current;
+        if (current) {
+          const world = { ...current.world };
+          if (body.action === 'pause') world.status = 'paused';
+          if (body.action === 'resume') world.status = 'active';
+          if (body.action === 'end') {
+            conversationGeneration.current++;
+            world.status = 'ended';
+            world.ending = 'player_ended';
+          }
+          if (body.action === 'timeScale' && typeof body.value === 'number') {
+            world.timeScale = body.value;
+          }
+          const patched = { ...current, world };
+          gameRef.current = patched;
+          setGame(patched);
+        }
         if (body.action === 'end') {
           setConversation(null);
           setTalkingTo(null);
@@ -268,6 +406,7 @@ export function DebugClient() {
           setJourney(null);
           setEndWorldWarning(false);
         }
+        void refresh();
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -361,9 +500,9 @@ export function DebugClient() {
       <button className="current-location-button" onClick={() => setSceneLocationKey(game.player.locationKey)}><b>{currentLocation}</b><small>enter location scene</small></button>
       {adjacentLocations.map((location) => <button key={location.key}
         disabled={Boolean(game.player.pendingMove || conversation) || game.world.status !== 'active'}
-        onClick={() => void queueMove(location.key)}>{location.name}<small>1 tick</small></button>)}
+        onClick={() => void queueMove(location.key)}>{location.name}<small>travel</small></button>)}
     </nav>}
-    {game.player.pendingMove && <div className="pending">Travelling to {pendingDestination?.name ?? game.player.pendingMove.locationKey} · arrives when tick {game.world.currentTick + 1} commits</div>}
+    {game.player.pendingMove && <div className="pending">Finishing earlier travel to {pendingDestination?.name ?? game.player.pendingMove.locationKey}</div>}
     {error && <div className="toast" role="alert">{error}<button onClick={() => setError(null)}>dismiss</button></div>}
 
     {panel === 'chronicle' && <Panel title="Chronicle" onClose={() => setPanel(null)}>{chronicle.map((entry) => <article className={`chronicle kind-${entry.kind}`} key={`${entry.tick}-${entry.seq}`}><time>t{entry.tick}</time><div><b>{entry.kind}</b><p>{entry.description}</p><small>{entry.actorKey ?? 'world'} · {entry.locationKey ?? 'town-wide'}</small></div></article>)}</Panel>}

@@ -428,7 +428,7 @@ export class TownScene extends Phaser.Scene {
       const adjacent = areAdjacent(this.mapData, this.state.player.locationKey, locationKey);
       const available = adjacent && !this.state.player.pendingMove && this.state.world.status === 'active';
       objects.travelLabel
-        .setText(current ? 'ENTER SCENE' : available ? 'TRAVEL · 1 TICK' : '')
+        .setText(current ? 'ENTER SCENE' : available ? 'TRAVEL' : '')
         .setVisible(current || available);
       objects.marker.setStrokeStyle(
         current ? 4 : available ? 3 : 2,

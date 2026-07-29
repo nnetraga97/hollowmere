@@ -99,6 +99,20 @@ export interface GameSnapshot {
   capabilities: { instigator: boolean; hearings: boolean; evidence: boolean };
 }
 
+/** Lightweight projection for frequent browser synchronization. */
+export interface GameSync {
+  world: {
+    worldId: string;
+    status: string;
+    ending: string | null;
+    currentTick: number;
+  };
+  player: {
+    locationKey: string;
+    pendingMove: { commandId: string; locationKey: string } | null;
+  };
+}
+
 export interface AgentDetailView {
   agent: AgentView;
   summary: string;
@@ -230,7 +244,10 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
   const world = await getWorldSummary(ref.worldId);
   if (!world) throw new SessionAccessError();
 
-  const [agents, factions, claims, cognition, metrics, reputations, pending, evidence, hearings, romances] =
+  const [
+    agents, factions, claims, cognition, metrics, reputations, pending, evidence,
+    hearings, romances, conversation, capabilities,
+  ] =
     await Promise.all([
       listAgents(ref.worldId),
       getFactions(ref.worldId),
@@ -251,9 +268,11 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
           ORDER BY command_seq LIMIT 1`,
         [ref.worldId, session.playerId],
       ),
-      readEvidence(ref, false),
+      readEvidence(ref, false, session.playerId),
       readHearings(ref),
       getRomanceArcs(ref),
+      getHeldConversation(ref),
+      getCapabilities(),
     ]);
 
   return {
@@ -276,64 +295,142 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
     hearings,
     cognition,
     metrics,
-    conversation: await getHeldConversation(ref),
+    conversation,
     romances,
-    capabilities: {
-      instigator: await tableExists('world_culprit'),
-      hearings: await tableExists('world_hearings'),
-      evidence: await tableExists('world_player_evidence'),
+    capabilities,
+  };
+}
+
+export async function getGameSync(ref: SessionRef): Promise<GameSync> {
+  const rows = await query<{
+    world_id: string; status: string; ending: string | null; current_tick: number;
+    location_key: string; command_id: string | null; pending_location_key: string | null;
+  }>(
+    `SELECT w.world_id, w.status, w.ending, w.current_tick, l.location_key,
+            pending.command_id, pending.location_key AS pending_location_key
+       FROM world_players p
+       JOIN worlds w ON w.world_id = p.world_id
+       JOIN world_locations l
+         ON l.world_id = p.world_id AND l.location_id = p.location_id
+       LEFT JOIN LATERAL (
+         SELECT c.command_id, c.payload->>'locationKey' AS location_key
+           FROM world_commands c
+          WHERE c.world_id = p.world_id AND c.applied_tick IS NULL
+            AND c.kind = 'move_player'
+            AND c.payload->>'playerId' = p.player_id::STRING
+          ORDER BY c.command_seq
+          LIMIT 1
+       ) pending ON true
+      WHERE p.world_id = $1 AND p.session_id = $2`,
+    [ref.worldId, ref.sessionId],
+  );
+  const row = rows[0];
+  if (!row) throw new SessionAccessError();
+  return {
+    world: {
+      worldId: row.world_id,
+      status: row.status,
+      ending: row.ending,
+      currentTick: row.current_tick,
+    },
+    player: {
+      locationKey: row.location_key,
+      pendingMove: row.command_id && row.pending_location_key
+        ? { commandId: row.command_id, locationKey: row.pending_location_key }
+        : null,
     },
   };
 }
 
 export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise<AgentDetailView> {
   await assertSession(ref);
-  const agent = (await listAgents(ref.worldId)).find((item) => item.agentKey === agentKey);
-  if (!agent) throw new Error(`unknown agent ${agentKey}`);
-  const personas = await query<{ persona: { summary?: string; traits?: string[] } }>(
-    `SELECT persona FROM world_agents WHERE world_id = $1 AND agent_key = $2`,
-    [ref.worldId, agentKey],
-  );
-  const beliefs = await query<{ claim_key: string; confidence: number; updated_tick: number }>(
-    `SELECT c.claim_key, b.confidence, b.updated_tick FROM agent_beliefs b
-       JOIN world_agents a ON a.world_id = b.world_id AND a.agent_id = b.agent_id
-       JOIN world_claims c ON c.world_id = b.world_id AND c.claim_id = b.claim_id
-      WHERE b.world_id = $1 AND a.agent_key = $2
-      ORDER BY abs(b.confidence) DESC, c.claim_key LIMIT 12`,
-    [ref.worldId, agentKey],
-  );
-  const relationships = await query<{
-    agent_key: string; sentiment: number; trust: number;
-  }>(
-    `SELECT d.agent_key, r.sentiment, r.trust FROM world_relationships r
-       JOIN world_agents s ON s.world_id = r.world_id AND s.agent_id = r.src_agent_id
-       JOIN world_agents d ON d.world_id = r.world_id AND d.agent_id = r.dst_agent_id
-      WHERE r.world_id = $1 AND s.agent_key = $2
-      ORDER BY abs(r.sentiment) DESC, d.agent_key LIMIT 12`,
-    [ref.worldId, agentKey],
-  );
-  const recent = (await getCognition(ref.worldId, 100))
-    .filter((item) => item.agentKey === agentKey)
-    .slice(0, 10);
-  const recentDialogue = await query<{ tick: number; description: string }>(
-    `SELECT e.tick, e.description FROM world_events e
-       JOIN world_agents a ON a.world_id = e.world_id AND a.agent_id = e.actor_agent_id
-      WHERE e.world_id = $1 AND a.agent_key = $2 AND e.kind = 'dialogue'
-      ORDER BY e.tick DESC, e.seq DESC LIMIT 10`, [ref.worldId, agentKey],
-  );
-  const personality = await query<{
-    kindness: number; engagement: number; honesty: number; trust: number | null;
-    affinity: number | null; fear: number | null; respect: number | null; impression: string | null;
-  }>(
-    `SELECT a.kindness, a.engagement, a.honesty, r.trust, r.affinity, r.fear,
-            r.respect, r.impression
-       FROM world_agents a
-       LEFT JOIN world_players p ON p.world_id = a.world_id AND p.session_id = $3
-       LEFT JOIN player_agent_relationships r ON r.world_id = a.world_id
-            AND r.player_id = p.player_id AND r.agent_id = a.agent_id
-      WHERE a.world_id = $1 AND a.agent_key = $2`,
-    [ref.worldId, agentKey, ref.sessionId],
-  );
+  const [agents, personas, beliefs, relationships, recent, recentDialogue, personality] =
+    await Promise.all([
+      query<{
+        agent_key: string; name: string; faction_key: string; location_key: string;
+        status: string; current_action: string | null;
+        top_claim_key: string | null; top_confidence: number | null;
+      }>(
+        `SELECT a.agent_key, a.name, f.faction_key, l.location_key, a.status, a.current_action,
+                top.claim_key AS top_claim_key, top.confidence AS top_confidence
+           FROM world_agents a
+           JOIN world_factions f ON f.world_id = a.world_id AND f.faction_id = a.faction_id
+           JOIN world_locations l ON l.world_id = a.world_id AND l.location_id = a.location_id
+           LEFT JOIN LATERAL (
+             SELECT c.claim_key, b.confidence
+               FROM agent_beliefs b
+               JOIN world_claims c ON c.world_id = b.world_id AND c.claim_id = b.claim_id
+              WHERE b.world_id = a.world_id AND b.agent_id = a.agent_id AND NOT c.locked
+              ORDER BY b.confidence DESC, c.claim_key
+              LIMIT 1
+           ) top ON true
+          WHERE a.world_id = $1 AND a.agent_key = $2`,
+        [ref.worldId, agentKey],
+      ),
+      query<{ persona: { summary?: string; traits?: string[] } }>(
+        `SELECT persona FROM world_agents WHERE world_id = $1 AND agent_key = $2`,
+        [ref.worldId, agentKey],
+      ),
+      query<{ claim_key: string; confidence: number; updated_tick: number }>(
+        `SELECT c.claim_key, b.confidence, b.updated_tick FROM agent_beliefs b
+           JOIN world_agents a ON a.world_id = b.world_id AND a.agent_id = b.agent_id
+           JOIN world_claims c ON c.world_id = b.world_id AND c.claim_id = b.claim_id
+          WHERE b.world_id = $1 AND a.agent_key = $2
+          ORDER BY abs(b.confidence) DESC, c.claim_key LIMIT 12`,
+        [ref.worldId, agentKey],
+      ),
+      query<{ agent_key: string; sentiment: number; trust: number }>(
+        `SELECT d.agent_key, r.sentiment, r.trust FROM world_relationships r
+           JOIN world_agents s ON s.world_id = r.world_id AND s.agent_id = r.src_agent_id
+           JOIN world_agents d ON d.world_id = r.world_id AND d.agent_id = r.dst_agent_id
+          WHERE r.world_id = $1 AND s.agent_key = $2
+          ORDER BY abs(r.sentiment) DESC, d.agent_key LIMIT 12`,
+        [ref.worldId, agentKey],
+      ),
+      query<{
+        tick: number; agent_key: string; model_id: string; prompt_version: string;
+        decision: Record<string, unknown>; latency_ms: number;
+      }>(
+        `SELECT r.tick, a.agent_key, r.model_id, r.prompt_version, r.decision, r.latency_ms
+           FROM cognition_records r
+           JOIN world_agents a ON a.world_id = r.world_id AND a.agent_id = r.agent_id
+          WHERE r.world_id = $1 AND a.agent_key = $2
+          ORDER BY r.tick DESC
+          LIMIT 10`,
+        [ref.worldId, agentKey],
+      ),
+      query<{ tick: number; description: string }>(
+        `SELECT e.tick, e.description FROM world_events e
+           JOIN world_agents a ON a.world_id = e.world_id AND a.agent_id = e.actor_agent_id
+          WHERE e.world_id = $1 AND a.agent_key = $2 AND e.kind = 'dialogue'
+          ORDER BY e.tick DESC, e.seq DESC LIMIT 10`, [ref.worldId, agentKey],
+      ),
+      query<{
+        kindness: number; engagement: number; honesty: number; trust: number | null;
+        affinity: number | null; fear: number | null; respect: number | null; impression: string | null;
+      }>(
+        `SELECT a.kindness, a.engagement, a.honesty, r.trust, r.affinity, r.fear,
+                r.respect, r.impression
+           FROM world_agents a
+           LEFT JOIN world_players p ON p.world_id = a.world_id AND p.session_id = $3
+           LEFT JOIN player_agent_relationships r ON r.world_id = a.world_id
+                AND r.player_id = p.player_id AND r.agent_id = a.agent_id
+          WHERE a.world_id = $1 AND a.agent_key = $2`,
+        [ref.worldId, agentKey, ref.sessionId],
+      ),
+    ]);
+  const agentRow = agents[0];
+  if (!agentRow) throw new Error(`unknown agent ${agentKey}`);
+  const agent: AgentView = {
+    agentKey: agentRow.agent_key,
+    name: agentRow.name,
+    factionKey: agentRow.faction_key,
+    locationKey: agentRow.location_key,
+    status: agentRow.status,
+    currentAction: agentRow.current_action,
+    topClaimKey: agentRow.top_claim_key,
+    topConfidence: agentRow.top_confidence ?? 0,
+  };
   const personal = personality[0];
   return {
     agent,
@@ -345,7 +442,14 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
     relationships: relationships.map((row) => ({
       agentKey: row.agent_key, sentiment: row.sentiment, trust: row.trust,
     })),
-    cognition: recent,
+    cognition: recent.map((row) => ({
+      tick: row.tick,
+      agentKey: row.agent_key,
+      modelId: row.model_id,
+      promptVersion: row.prompt_version,
+      decision: row.decision,
+      latencyMs: row.latency_ms,
+    })),
     recentDialogue: recentDialogue.map((row) => ({ tick: row.tick, text: row.description })),
     personality: {
       kindness: personal?.kindness ?? 5000,
@@ -421,15 +525,80 @@ export async function queuePlayerMove(
   ref: SessionRef,
   locationKey: string,
   idempotencyKey: string,
-): Promise<{ commandId: string; replayed: boolean }> {
+): Promise<{ commandId: string; replayed: boolean; locationKey: string; appliedTick: number }> {
   const { value } = await withSerializable(async (client) => {
     const player = await sessionOnClient(client, ref);
-    const previous = await client.query<{ command_id: string }>(
-      `SELECT command_id FROM world_commands
-        WHERE world_id = $1 AND idempotency_key = $2`,
-      [ref.worldId, idempotencyKey],
+    const previous = await client.query<{
+      command_id: string; applied_tick: number | null; current_tick: number;
+      current_location_key: string; requested_location_id: string | null;
+      requested_location_key: string | null; world_status: string;
+      requested_location_adjacent: boolean; conversation_open: boolean;
+    }>(
+      `SELECT c.command_id, c.applied_tick, w.current_tick,
+              current_location.location_key AS current_location_key,
+              requested_location.location_id AS requested_location_id,
+              requested_location.location_key AS requested_location_key,
+              w.status AS world_status,
+              EXISTS (
+                SELECT 1 FROM world_routes route
+                 WHERE route.world_id = p.world_id
+                   AND route.from_location_id = p.location_id
+                   AND route.to_location_id = requested_location.location_id
+              ) AS requested_location_adjacent,
+              EXISTS (
+                SELECT 1 FROM world_conversation_sessions conversation
+                 WHERE conversation.world_id = p.world_id
+                   AND conversation.player_id = p.player_id
+                   AND conversation.status IN ('open', 'closing')
+              ) AS conversation_open
+         FROM world_commands c
+         JOIN worlds w ON w.world_id = c.world_id
+         JOIN world_players p ON p.world_id = c.world_id AND p.session_id = $3
+         JOIN world_locations current_location
+           ON current_location.world_id = p.world_id
+          AND current_location.location_id = p.location_id
+         LEFT JOIN world_locations requested_location
+           ON requested_location.world_id = c.world_id
+          AND requested_location.location_key = c.payload->>'locationKey'
+        WHERE c.world_id = $1 AND c.idempotency_key = $2 AND c.kind = 'move_player'
+          AND c.payload->>'playerId' = $4`,
+      [ref.worldId, idempotencyKey, ref.sessionId, player.playerId],
     );
-    if (previous.rows[0]) return { commandId: previous.rows[0].command_id, replayed: true };
+    const prior = previous.rows[0];
+    if (prior) {
+      if (prior.applied_tick === null) {
+        if (!prior.requested_location_id || !prior.requested_location_key) {
+          throw new Error('pending move has an invalid destination');
+        }
+        if (prior.world_status !== 'active') throw new Error('world is not active');
+        if (prior.conversation_open) throw new Error('end the conversation before travelling');
+        if (!prior.requested_location_adjacent) {
+          throw new Error('destination is not adjacent to the player');
+        }
+        await client.query(
+          `UPDATE world_players SET location_id = $3
+            WHERE world_id = $1 AND player_id = $2`,
+          [ref.worldId, player.playerId, prior.requested_location_id],
+        );
+        await client.query(
+          `UPDATE world_commands SET applied_tick = $3
+            WHERE world_id = $1 AND command_id = $2 AND applied_tick IS NULL`,
+          [ref.worldId, prior.command_id, prior.current_tick],
+        );
+        return {
+          commandId: prior.command_id,
+          replayed: true,
+          locationKey: prior.requested_location_key,
+          appliedTick: prior.current_tick,
+        };
+      }
+      return {
+        commandId: prior.command_id,
+        replayed: true,
+        locationKey: prior.current_location_key,
+        appliedTick: prior.applied_tick,
+      };
+    }
 
     const pending = await client.query(
       `SELECT 1 FROM world_commands
@@ -458,20 +627,30 @@ export async function queuePlayerMove(
     );
     if (!target.rows[0]) throw new Error('destination is not adjacent to the player');
 
-    const sequence = await client.query<{ command_seq: number }>(
+    const sequence = await client.query<{ command_seq: number; current_tick: number }>(
       `UPDATE worlds SET command_seq = command_seq + 1, last_activity_at = now()
-        WHERE world_id = $1 AND status = 'active' RETURNING command_seq`,
+        WHERE world_id = $1 AND status = 'active' RETURNING command_seq, current_tick`,
       [ref.worldId],
     );
     if (!sequence.rows[0]) throw new Error('world is not active');
+    await client.query(
+      `UPDATE world_players SET location_id = $3
+        WHERE world_id = $1 AND player_id = $2`,
+      [ref.worldId, player.playerId, target.rows[0].location_id],
+    );
     const inserted = await client.query<{ command_id: string }>(
       `INSERT INTO world_commands
-         (world_id, idempotency_key, command_seq, kind, payload)
-       VALUES ($1, $2, $3, 'move_player', $4) RETURNING command_id`,
+         (world_id, idempotency_key, command_seq, kind, payload, applied_tick)
+       VALUES ($1, $2, $3, 'move_player', $4, $5) RETURNING command_id`,
       [ref.worldId, idempotencyKey, sequence.rows[0].command_seq,
-        JSON.stringify({ playerId: player.playerId, locationKey })],
+        JSON.stringify({ playerId: player.playerId, locationKey }), sequence.rows[0].current_tick],
     );
-    return { commandId: inserted.rows[0]!.command_id, replayed: false };
+    return {
+      commandId: inserted.rows[0]!.command_id,
+      replayed: false,
+      locationKey,
+      appliedTick: sequence.rows[0].current_tick,
+    };
   }, { label: 'queue-player-move' });
   return value;
 }
@@ -486,21 +665,48 @@ export async function queueTimeScale(
   }
   const { value } = await withSerializable(async (client) => {
     await sessionOnClient(client, ref);
-    const previous = await client.query<{ command_id: string }>(
-      `SELECT command_id FROM world_commands WHERE world_id = $1 AND idempotency_key = $2`,
+    const previous = await client.query<{
+      command_id: string; applied_tick: number | null; requested_scale: number;
+      current_tick: number; world_status: string;
+    }>(
+      `SELECT c.command_id, c.applied_tick,
+              (c.payload->>'timeScale')::INT8 AS requested_scale, w.current_tick,
+              w.status AS world_status
+         FROM world_commands c
+         JOIN worlds w ON w.world_id = c.world_id
+        WHERE c.world_id = $1 AND c.idempotency_key = $2 AND c.kind = 'set_time_scale'`,
       [ref.worldId, idempotencyKey],
     );
-    if (previous.rows[0]) return { commandId: previous.rows[0].command_id, replayed: true };
-    const sequence = await client.query<{ command_seq: number }>(
-      `UPDATE worlds SET command_seq = command_seq + 1, last_activity_at = now()
-        WHERE world_id = $1 AND status = 'active' RETURNING command_seq`, [ref.worldId],
+    const prior = previous.rows[0];
+    if (prior) {
+      if (prior.applied_tick === null) {
+        if (prior.world_status !== 'active') throw new Error('world is not active');
+        await client.query(
+          `UPDATE worlds SET time_scale = $2, last_activity_at = now()
+            WHERE world_id = $1 AND status = 'active'`,
+          [ref.worldId, prior.requested_scale],
+        );
+        await client.query(
+          `UPDATE world_commands SET applied_tick = $3
+            WHERE world_id = $1 AND command_id = $2 AND applied_tick IS NULL`,
+          [ref.worldId, prior.command_id, prior.current_tick],
+        );
+      }
+      return { commandId: prior.command_id, replayed: true };
+    }
+    const sequence = await client.query<{ command_seq: number; current_tick: number }>(
+      `UPDATE worlds
+          SET command_seq = command_seq + 1, time_scale = $2, last_activity_at = now()
+        WHERE world_id = $1 AND status = 'active'
+        RETURNING command_seq, current_tick`, [ref.worldId, timeScale],
     );
     if (!sequence.rows[0]) throw new Error('world is not active');
     const inserted = await client.query<{ command_id: string }>(
       `INSERT INTO world_commands
-         (world_id, idempotency_key, command_seq, kind, payload)
-       VALUES ($1, $2, $3, 'set_time_scale', $4) RETURNING command_id`,
-      [ref.worldId, idempotencyKey, sequence.rows[0].command_seq, JSON.stringify({ timeScale })],
+         (world_id, idempotency_key, command_seq, kind, payload, applied_tick)
+       VALUES ($1, $2, $3, 'set_time_scale', $4, $5) RETURNING command_id`,
+      [ref.worldId, idempotencyKey, sequence.rows[0].command_seq,
+        JSON.stringify({ timeScale }), sequence.rows[0].current_tick],
     );
     return { commandId: inserted.rows[0]!.command_id, replayed: false };
   }, { label: 'queue-time-scale' });
@@ -569,8 +775,12 @@ export async function endSessionWorld(ref: SessionRef): Promise<boolean> {
   return value;
 }
 
-async function readEvidence(ref: SessionRef, includeTruth: boolean): Promise<EvidenceView[]> {
-  const session = await assertSession(ref);
+async function readEvidence(
+  ref: SessionRef,
+  includeTruth: boolean,
+  knownPlayerId?: string,
+): Promise<EvidenceView[]> {
+  const playerId = knownPlayerId ?? (await assertSession(ref)).playerId;
   const rows = await optionalQuery<{
     evidence_id: string; kind: EvidenceView['kind']; accused_key: string | null;
     claim_key: string | null; found_tick: number; genuine: boolean;
@@ -583,7 +793,7 @@ async function readEvidence(ref: SessionRef, includeTruth: boolean): Promise<Evi
        LEFT JOIN world_claims c
          ON c.world_id = e.world_id AND c.claim_id = e.claim_id
       WHERE e.world_id = $1 AND e.player_id = $2
-      ORDER BY e.found_tick, e.evidence_id`, [ref.worldId, session.playerId],
+      ORDER BY e.found_tick, e.evidence_id`, [ref.worldId, playerId],
   );
   return rows.map((row) => ({
     evidenceId: row.evidence_id,
@@ -650,6 +860,15 @@ async function sessionOnClient(client: Client, ref: SessionRef): Promise<{
 }
 
 const tableCache = new Map<string, boolean>();
+
+async function getCapabilities(): Promise<GameSnapshot['capabilities']> {
+  const [instigator, hearings, evidence] = await Promise.all([
+    tableExists('world_culprit'),
+    tableExists('world_hearings'),
+    tableExists('world_player_evidence'),
+  ]);
+  return { instigator, hearings, evidence };
+}
 
 async function tableExists(table: string): Promise<boolean> {
   const cached = tableCache.get(table);

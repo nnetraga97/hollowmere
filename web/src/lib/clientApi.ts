@@ -1,5 +1,6 @@
 import type {
-  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, RomanceChoiceResult,
+  AgentDetail, Bootstrap, ChronicleEntry, Conversation, ConversationTurn, DebugTruth, GameSnapshot, GameSync,
+  RomanceChoiceResult,
   SocialGraph, TensionPoint,
 } from './contracts';
 
@@ -24,12 +25,18 @@ export async function startSession(entry: PlayerEntry = {}): Promise<Bootstrap> 
   }));
 }
 
-export async function loadGame(): Promise<GameSnapshot> {
-  return decode(await fetch('/api/game', { cache: 'no-store' }));
+export async function loadGame(signal?: AbortSignal): Promise<GameSnapshot> {
+  return decode(await fetch('/api/game', { cache: 'no-store', signal }));
+}
+
+export async function loadGameSync(signal?: AbortSignal): Promise<GameSync> {
+  return decode(await fetch('/api/game/sync', { cache: 'no-store', signal }));
 }
 
 export async function movePlayer(locationKey: string, idempotencyKey: string) {
-  return decode<{ commandId: string; replayed: boolean }>(await fetch('/api/move', {
+  return decode<{
+    commandId: string; replayed: boolean; locationKey: string; appliedTick: number;
+  }>(await fetch('/api/move', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ locationKey, idempotencyKey }),
   }));
@@ -87,7 +94,7 @@ export async function closeConversation(conversationId: string): Promise<Convers
 export async function streamConversationTurn(
   input: { conversationId: string; text: string; idempotencyKey: string },
   onToken: (token: string) => void,
-): Promise<Record<string, unknown>> {
+): Promise<{ turn: ConversationTurn; conversation: Conversation }> {
   const response = await fetch('/api/converse', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ action: 'turn', ...input }),
@@ -96,7 +103,7 @@ export async function streamConversationTurn(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let final: Record<string, unknown> | null = null;
+  let final: { turn: ConversationTurn; conversation: Conversation } | null = null;
   for (;;) {
     const { value, done } = await reader.read();
     buffer += decoder.decode(value, { stream: !done });
@@ -107,9 +114,13 @@ export async function streamConversationTurn(
       const event = frame.match(/^event: (.+)$/m)?.[1];
       const raw = frame.match(/^data: (.+)$/m)?.[1];
       if (event && raw) {
-        const data = JSON.parse(raw) as { token?: string; error?: string } & Record<string, unknown>;
+        const data = JSON.parse(raw) as {
+          token?: string; error?: string; turn?: ConversationTurn; conversation?: Conversation;
+        };
         if (event === 'token' && data.token) onToken(data.token);
-        if (event === 'result') final = data;
+        if (event === 'result' && data.turn && data.conversation) {
+          final = { turn: data.turn, conversation: data.conversation };
+        }
         if (event === 'error') throw new Error(data.error ?? 'conversation failed');
       }
       boundary = buffer.indexOf('\n\n');

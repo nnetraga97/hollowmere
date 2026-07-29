@@ -93,6 +93,16 @@ export interface GameSnapshot {
   capabilities: { instigator: boolean; hearings: boolean; evidence: boolean };
 }
 
+export interface GameSync {
+  world: {
+    worldId: string; status: string; ending: string | null; currentTick: number;
+  };
+  player: {
+    locationKey: string;
+    pendingMove: { commandId: string; locationKey: string } | null;
+  };
+}
+
 export type RomanceStatus = 'open' | 'growing' | 'courting' | 'committed'
   | 'platonic' | 'complicated' | 'strained';
 
