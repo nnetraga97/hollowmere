@@ -43,7 +43,7 @@ const child = spawn(process.execPath, args, {
     AZURE_OPENAI_ENDPOINT: process.env.AZURE_OPENAI_ENDPOINT ?? ENDPOINT,
     AZURE_OPENAI_API_KEY: apiKey,
     AZURE_OPENAI_REASONING_DEPLOYMENT:
-      process.env.AZURE_OPENAI_REASONING_DEPLOYMENT ?? 'hollowmere-gpt-5-mini',
+      process.env.AZURE_OPENAI_REASONING_DEPLOYMENT ?? 'hollowmere-gpt-5-4-mini',
     AZURE_OPENAI_EMBEDDING_DEPLOYMENT:
       process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT ?? 'hollowmere-embedding-3-small',
     AZURE_OPENAI_EMBEDDING_DIM: process.env.AZURE_OPENAI_EMBEDDING_DIM ?? '1024',

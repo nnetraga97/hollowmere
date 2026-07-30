@@ -8,7 +8,8 @@ from deployment concerns.
 
 - Resource group: `hollowmere-test-rg` (`eastus`)
 - Azure OpenAI account: `hollowmere-ai-nnetraga97`
-- Reasoning deployment: `hollowmere-gpt-5-mini` (`gpt-5-mini`, Global Standard, 10K TPM)
+- Reasoning deployment: `hollowmere-gpt-5-4-mini` (`gpt-5.4-mini`, Data Zone Standard, 30K TPM)
+- Rollback deployment: `hollowmere-gpt-5-mini` (`gpt-5-mini`, Global Standard, 10K TPM)
 - Embedding deployment: `hollowmere-embedding-3-small` (`text-embedding-3-small`, Standard, 10K TPM)
 
 The deployments are consumption-based. No always-on compute was created.

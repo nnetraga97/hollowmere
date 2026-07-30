@@ -144,7 +144,7 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
         <div className={`inference-grid${bedrockEnabled ? '' : ' inference-grid-single'}`}>
           <button type="button" className="inference-card" aria-pressed={inferenceProfile === 'azure_terra'} onClick={() => setInferenceProfile('azure_terra')}>
             <Gauge size={22} strokeWidth={1.45} aria-hidden="true" />
-            <span><strong>Azure Foundry</strong><b>GPT-5 mini · Terra pending</b></span>
+            <span><strong>Azure Foundry</strong><b>GPT-5.4 mini · Terra pending</b></span>
             <small>Strong, efficient reasoning across conversations, rumours, and agent decisions.</small>
           </button>
           {bedrockEnabled && <button type="button" className="inference-card" aria-pressed={inferenceProfile === 'bedrock_sonnet'} onClick={() => setInferenceProfile('bedrock_sonnet')}>

@@ -61,7 +61,7 @@ the town changes, and attempts to prevent a false narrative from producing war.
    inference.
 6. Give judges a reliable, reproducible experience with no private setup.
 7. Run new public worlds on Azure Foundry while Bedrock access is pending. Use
-   the verified GPT-5 mini deployment until GPT-5.6 Terra quota is granted,
+   the verified GPT-5.4 mini deployment until GPT-5.6 Terra quota is granted,
    then switch the server-owned deployment value. Once enabled, let each
    private world choose Azure or Amazon Bedrock Claude Sonnet 5 without
    changing the database-owned simulation rules.

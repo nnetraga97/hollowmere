@@ -18,7 +18,7 @@ This specification fixes the following implementation choices:
 6. Use CockroachDB Cloud as the only transactional and vector datastore.
 7. Keep Azure Foundry as the only enabled public profile while the Bedrock
    support case is pending. GPT-5.6 Terra remains the target model, but the
-   Azure release uses the verified GPT-5 mini deployment until Terra quota is
+   Azure release uses the verified GPT-5.4 mini deployment until Terra quota is
    granted. `BEDROCK_ENABLED=true` later exposes Amazon Bedrock Claude Sonnet 5
    without a code change. Use Bedrock on the canonical submitted path only
    after its live access gate passes.

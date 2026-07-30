@@ -440,3 +440,19 @@ Verification:
   constrained structured choice, and streaming. The release engine suite then
   passed 251 tests with three intentional slow-test skips and no timeout under
   the corrected 240-second cap.
+
+## 2026-07-30 — Azure GPT-5.4 mini compatibility upgrade
+
+- Deployed `hollowmere-gpt-5-4-mini` (`gpt-5.4-mini` `2026-03-17`) beside the
+  retained GPT-5 mini rollback deployment at 30K TPM on Data Zone Standard.
+- Both deployments passed identical live embedding, completion, constrained
+  structured-choice, and streaming checks. GPT-5.4 mini completed the exact
+  completion check in 762ms versus 1,372ms and the structured-choice check in
+  576ms versus 1,286ms for GPT-5 mini in this single preflight run.
+- Updated the production scheduler first and then the web app. Both now route
+  the Azure profile to `hollowmere-gpt-5-4-mini`; Bedrock remains disabled and
+  no AWS resources were deployed.
+- The new scheduler revision started with a live CockroachDB connection and
+  completed production plan, strategy, and NPC-conversation inference through
+  `hollowmere-gpt-5-4-mini`. The new web revision received 100% traffic with
+  two replicas, and its liveness and database-readiness checks passed.

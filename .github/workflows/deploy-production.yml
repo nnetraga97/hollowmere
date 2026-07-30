@@ -35,10 +35,10 @@ permissions:
 env:
   ACR_NAME: hollowmerennt
   ACR_SERVER: hollowmerennt.azurecr.io
-  # GPT-5.6 Terra is the target for this profile, but the subscription currently
-  # has zero Terra quota. Keep the release operational on the verified mini
+  # GPT-5.6 Terra remains the target for this profile, but the subscription
+  # currently has zero Terra quota. GPT-5.4 mini is the verified compatibility
   # deployment; changing this one value completes the upgrade after quota lands.
-  AZURE_PROFILE_DEPLOYMENT: hollowmere-gpt-5-mini
+  AZURE_PROFILE_DEPLOYMENT: hollowmere-gpt-5-4-mini
   AZURE_RESOURCE_GROUP: hollowmere-prod-rg
   WEB_APP: hollowmere-web
   SCHEDULER_APP: hollowmere-scheduler

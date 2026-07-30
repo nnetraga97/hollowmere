@@ -12,7 +12,7 @@ import {
   type StreamUsage,
 } from './types.ts';
 
-const DEFAULT_REASONING_DEPLOYMENT = 'hollowmere-gpt-5-mini';
+const DEFAULT_REASONING_DEPLOYMENT = 'hollowmere-gpt-5-4-mini';
 const DEFAULT_EMBEDDING_DEPLOYMENT = 'hollowmere-embedding-3-small';
 
 export interface AzureOpenAIOptions {
