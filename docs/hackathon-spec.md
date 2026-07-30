@@ -16,10 +16,12 @@ This specification fixes the following implementation choices:
 5. Continue using GitHub Actions with OIDC for application delivery. Do not add
    CodePipeline or long-lived AWS access keys.
 6. Use CockroachDB Cloud as the only transactional and vector datastore.
-7. Keep Azure Foundry GPT-5.6 Terra as the only enabled public profile while the
-   Bedrock support case is pending. `BEDROCK_ENABLED=true` later exposes Amazon
-   Bedrock Claude Sonnet 5 without a code change. Use Bedrock on the canonical
-   submitted path only after its live access gate passes.
+7. Keep Azure Foundry as the only enabled public profile while the Bedrock
+   support case is pending. GPT-5.6 Terra remains the target model, but the
+   Azure release uses the verified GPT-5 mini deployment until Terra quota is
+   granted. `BEDROCK_ENABLED=true` later exposes Amazon Bedrock Claude Sonnet 5
+   without a code change. Use Bedrock on the canonical submitted path only
+   after its live access gate passes.
 8. Use CockroachDB Cloud Managed MCP as a read-only operator workflow called
    the Town Archivist. Do not embed Cloud MCP credentials in the public app.
 9. Preserve Azure as the always-enabled profile. Exact Azure deployment and
@@ -257,7 +259,7 @@ Store these runtime secrets:
 Set `INFERENCE_MODE=world` explicitly in both AWS task definitions. Keep
 `BEDROCK_ENABLED=false` until the support case and live preflight are complete;
 changing it to `true` makes the Bedrock card and server route available. Store
-the exact Azure Terra deployment, Bedrock Sonnet inference profile, embedding
+the exact Azure profile deployment, Bedrock Sonnet inference profile, embedding
 model IDs, region, dimensions, log level, scenario version, and rate limits as
 task-definition environment values. Provider credentials remain task-role or
 secret-store inputs and never come from the browser. Rotating an injected secret

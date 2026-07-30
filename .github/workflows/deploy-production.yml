@@ -35,6 +35,10 @@ permissions:
 env:
   ACR_NAME: hollowmerennt
   ACR_SERVER: hollowmerennt.azurecr.io
+  # GPT-5.6 Terra is the target for this profile, but the subscription currently
+  # has zero Terra quota. Keep the release operational on the verified mini
+  # deployment; changing this one value completes the upgrade after quota lands.
+  AZURE_PROFILE_DEPLOYMENT: hollowmere-gpt-5-mini
   AZURE_RESOURCE_GROUP: hollowmere-prod-rg
   WEB_APP: hollowmere-web
   SCHEDULER_APP: hollowmere-scheduler
@@ -176,6 +180,10 @@ jobs:
             --name "$SCHEDULER_APP" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image "$ACR_SERVER/hollowmere-scheduler:$GITHUB_SHA" \
+            --set-env-vars \
+              INFERENCE_MODE=world \
+              BEDROCK_ENABLED=false \
+              AZURE_OPENAI_TERRA_DEPLOYMENT="$AZURE_PROFILE_DEPLOYMENT" \
             --only-show-errors \
             --output none
 
@@ -219,6 +227,10 @@ jobs:
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image "$ACR_SERVER/hollowmere-web:$GITHUB_SHA" \
             --min-replicas 1 \
+            --set-env-vars \
+              INFERENCE_MODE=world \
+              BEDROCK_ENABLED=false \
+              AZURE_OPENAI_TERRA_DEPLOYMENT="$AZURE_PROFILE_DEPLOYMENT" \
             --only-show-errors \
             --output none
 
@@ -256,8 +268,10 @@ jobs:
           wait_for_revision "$WEB_APP"
 
           for attempt in $(seq 1 18); do
-            if curl --fail --silent --show-error --max-time 15 "$PRODUCTION_URL/" > /dev/null; then
-              echo "Production smoke test passed: $PRODUCTION_URL"
+            if curl --fail --silent --show-error --max-time 15 "$PRODUCTION_URL/api/health" > /dev/null \
+              && curl --fail --silent --show-error --max-time 15 "$PRODUCTION_URL/api/ready" > /dev/null \
+              && curl --fail --silent --show-error --max-time 15 "$PRODUCTION_URL/" > /dev/null; then
+              echo "Production health, readiness, and landing-page smoke passed: $PRODUCTION_URL"
               exit 0
             fi
             echo "Waiting for public endpoint ($attempt/18)"

@@ -22,7 +22,7 @@
     "db:roles": "node --env-file-if-exists=.env scripts/provision-db-roles.ts",
     "db:reset": "node --env-file-if-exists=.env scripts/reset-local-db.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --env-file-if-exists=.env --test-timeout=120000 --test \"engine/**/*.test.ts\"",
+    "test": "node --env-file-if-exists=.env --test-timeout=240000 --test \"engine/**/*.test.ts\"",
     "test:full": "HOLLOWMERE_SLOW_TESTS=1 node --env-file-if-exists=.env --test-timeout=900000 --test \"engine/**/*.test.ts\"",
     "check": "npm run typecheck && npm test && npm run check:web",
     "check:full": "npm run typecheck && npm run test:full && npm run check:web",

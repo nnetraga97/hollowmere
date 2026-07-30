@@ -418,7 +418,7 @@ export class HollowmereRuntimeStack extends Stack {
       ),
       azureTerraDeployment: stringParameter(
         "AzureTerraDeployment",
-        "Azure Foundry GPT-5.6 Terra deployment name.",
+        "Azure Foundry deployment assigned to the always-enabled Azure profile.",
       ),
       bedrockEmbeddingModelArn: stringParameter(
         "BedrockEmbeddingModelArn",

@@ -140,9 +140,10 @@ Verification:
 
 Implemented:
 
-- The entry screen uses Azure Foundry with GPT-5.6 Terra while Bedrock access is
-  pending. Amazon Bedrock with Claude Sonnet 5 appears only when the server is
-  launched with `BEDROCK_ENABLED=true`.
+- The entry screen uses the always-enabled Azure Foundry profile while Bedrock
+  access is pending. It reports GPT-5 mini as the current compatibility model
+  and Terra as pending; Amazon Bedrock with Claude Sonnet 5 appears only when
+  the server is launched with `BEDROCK_ENABLED=true`.
 - The browser sends only `azure_terra` or `bedrock_sonnet`; exact provider
   deployment/profile identifiers remain environment configuration.
 - `worlds.inference_profile` is immutable through the product API and protected
@@ -421,3 +422,21 @@ Verification:
   timeout limitation, not represented as a completely green canonical run.
 - No CDK bootstrap, AWS resource mutation, image push, workflow run, Git push,
   deployment, or destructive command occurred.
+
+## 2026-07-30 — Azure main-release inference gate
+
+- Azure listed GPT-5.6 Terra `2026-07-09`, but both Global Standard and Data
+  Zone Standard quota were zero. Creating `hollowmere-gpt-5-6-terra` failed
+  closed with `InsufficientQuota`; no unusable model deployment was created.
+- The main-release workflow therefore assigns the stable `azure_terra` profile
+  to the already deployed and live-checked `hollowmere-gpt-5-mini` compatibility
+  deployment. The workflow value is the single switch to Terra after quota and
+  a live preflight succeed.
+- Both Azure Container Apps are configured during rollout with
+  `INFERENCE_MODE=world`, `BEDROCK_ENABLED=false`, and the selected Azure
+  deployment. Production smoke now requires liveness, database readiness, and
+  the landing page.
+- Live GPT-5 mini checks passed for a 1024-dimensional embedding, completion,
+  constrained structured choice, and streaming. The release engine suite then
+  passed 251 tests with three intentional slow-test skips and no timeout under
+  the corrected 240-second cap.

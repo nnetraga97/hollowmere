@@ -33,8 +33,9 @@ preparing this gate.
   secret or cloud migrator credential was discovered or copied.
 - Bedrock access remains pending the AWS support case. The synthesized runtime
   deliberately sets `INFERENCE_MODE=world` and `BEDROCK_ENABLED=false`, making
-  Azure Terra the only selectable production profile until the live Bedrock
-  gate passes.
+  Azure Foundry the only selectable production profile until the live Bedrock
+  gate passes. The Azure deployment value remains server-owned so the current
+  GPT-5 mini compatibility model can move to Terra after quota approval.
 
 ## Decisions and inputs still required
 

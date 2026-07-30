@@ -163,10 +163,8 @@ export async function thinkDialogue(
   // The draw is unconditional even though ordering supplies the fallback pair.
   // That keeps the dialogue stream stable when replay skips inference.
   const draw = input.rng.nextU32();
-  const pairs = await loadPairs(client, input.worldId, input.tick);
-  if (pairs.length === 0) return null;
-  const instigator = pairs.find((pair) => pair.tactic !== null);
-  const pair = instigator ?? pairs[draw % pairs.length]!;
+  const pair = await loadPair(client, input.worldId, input.tick, draw);
+  if (!pair) return null;
   const context = await loadDialoguePromptContext(client, input.worldId, pair, input.tick);
   const memoryQueries = dialogueMemoryQueries(pair);
   const inputHash = createHash('sha256').update(JSON.stringify({
@@ -769,38 +767,72 @@ function publicDeliveryGoal(tactic: string | null): string {
   }
 }
 
-async function loadPairs(client: Client, worldId: string, tick: number): Promise<PairRow[]> {
+async function loadPair(
+  client: Client,
+  worldId: string,
+  tick: number,
+  draw: number,
+): Promise<PairRow | null> {
   const result = await client.query<PairRow>(
     `WITH instigator AS (
        SELECT s.agent_id AS from_agent_id, target.agent_id AS to_agent_id,
-              s.claim_id, s.current_tactic AS tactic
+              s.claim_id, rumor.rumor_id, s.current_tactic AS tactic,
+              culprit.agent_key AS from_agent_key, target.agent_key AS to_agent_key,
+              claim.claim_key
          FROM world_scheme_state s
          JOIN world_agents culprit
            ON culprit.world_id = s.world_id AND culprit.agent_id = s.agent_id AND culprit.status = 'alive'
          JOIN world_agents target
            ON target.world_id = s.world_id AND target.agent_id = s.target_agent_id
-          AND target.status = 'alive'
+          AND target.location_id = culprit.location_id AND target.status = 'alive'
+         JOIN world_claims claim
+           ON claim.world_id = s.world_id AND claim.claim_id = s.claim_id AND NOT claim.locked
+         JOIN world_rumors rumor
+           ON rumor.world_id = claim.world_id AND rumor.claim_id = claim.claim_id
         WHERE s.world_id = $1 AND s.executes_until >= $2 AND s.posture != 'lie_low'
      ), ambient AS (
        SELECT holder.agent_id AS from_agent_id, listener.agent_id AS to_agent_id,
-              r.claim_id, NULL::STRING AS tactic
-         FROM world_rumor_spread spread
-         JOIN world_rumors r
-           ON r.world_id = spread.world_id AND r.rumor_id = spread.rumor_id AND r.heat >= $3
+              hot_rumor.claim_id, selected_rumor.rumor_id, NULL::STRING AS tactic,
+              holder.agent_key AS from_agent_key, listener.agent_key AS to_agent_key,
+              claim.claim_key
+         FROM world_rumors hot_rumor
+         JOIN world_rumor_spread spread
+           ON spread.world_id = hot_rumor.world_id AND spread.rumor_id = hot_rumor.rumor_id
          JOIN world_agents holder
-           ON holder.world_id = spread.world_id AND holder.agent_id = spread.agent_id
+           ON holder.world_id = $1 AND holder.agent_id = spread.agent_id
           AND holder.status = 'alive'
          JOIN world_agents listener
-           ON listener.world_id = holder.world_id AND listener.location_id = holder.location_id
+           ON listener.world_id = $1 AND listener.location_id = holder.location_id
           AND listener.agent_id != holder.agent_id AND listener.status = 'alive'
+         JOIN world_claims claim
+           ON claim.world_id = hot_rumor.world_id AND claim.claim_id = hot_rumor.claim_id
+          AND NOT claim.locked
+         JOIN world_rumors selected_rumor
+           ON selected_rumor.world_id = claim.world_id AND selected_rumor.claim_id = claim.claim_id
          LEFT JOIN agent_beliefs b
-           ON b.world_id = listener.world_id AND b.agent_id = listener.agent_id AND b.claim_id = r.claim_id
-        WHERE spread.world_id = $1
+           ON b.world_id = listener.world_id AND b.agent_id = listener.agent_id
+          AND b.claim_id = hot_rumor.claim_id
+        WHERE hot_rumor.world_id = $1 AND hot_rumor.heat >= $3
           AND (b.updated_tick IS NULL OR b.updated_tick <= $2 - $4)
      ), candidates AS (
        SELECT * FROM instigator
        UNION ALL
        SELECT * FROM ambient
+     ), ranked AS (
+       SELECT candidates.*,
+              row_number() OVER (
+                ORDER BY (tactic IS NOT NULL) DESC, from_agent_key, to_agent_key, claim_key
+              ) - 1 AS candidate_index,
+              count(*) OVER () AS candidate_count,
+              count(*) FILTER (WHERE tactic IS NOT NULL) OVER () AS instigator_count
+         FROM candidates
+     ), chosen AS (
+       SELECT *
+         FROM ranked
+        WHERE candidate_index = CASE
+          WHEN instigator_count > 0 THEN 0
+          ELSE mod($5::INT8, candidate_count)
+        END
      )
      SELECT sender.agent_id AS from_agent_id, sender.agent_key AS from_agent_key,
             sender.name AS from_name, receiver.agent_id AS to_agent_id,
@@ -808,7 +840,7 @@ async function loadPairs(client: Client, worldId: string, tick: number): Promise
             sender.location_id, location.location_key, location.name AS location_name,
             state.day, state.phase, state.escalation_stage,
             r.rumor_id, c.claim_id, c.claim_key, c.text AS claim_text,
-            subject.name AS claim_subject_name, candidates.tactic,
+            subject.name AS claim_subject_name, chosen.tactic,
             sender.persona AS from_persona, sender.status AS from_status,
             sender.current_action AS from_current_action,
             sender.kindness AS from_kindness, sender.engagement AS from_engagement,
@@ -843,14 +875,15 @@ async function loadPairs(client: Client, worldId: string, tick: number): Promise
                  AND scheme_record.decision->>'claimId' = c.claim_id::STRING
                  AND scheme_record.tick < $2
             ) AS to_scheme_claim
-       FROM candidates
+       FROM chosen
        JOIN world_agents sender
-         ON sender.world_id = $1 AND sender.agent_id = candidates.from_agent_id
+         ON sender.world_id = $1 AND sender.agent_id = chosen.from_agent_id
        JOIN world_agents receiver
-         ON receiver.world_id = $1 AND receiver.agent_id = candidates.to_agent_id
+         ON receiver.world_id = $1 AND receiver.agent_id = chosen.to_agent_id
        JOIN world_claims c
-         ON c.world_id = $1 AND c.claim_id = candidates.claim_id AND NOT c.locked
-       JOIN world_rumors r ON r.world_id = c.world_id AND r.claim_id = c.claim_id
+         ON c.world_id = $1 AND c.claim_id = chosen.claim_id
+       JOIN world_rumors r
+         ON r.world_id = $1 AND r.rumor_id = chosen.rumor_id
        JOIN world_agents subject
          ON subject.world_id = c.world_id AND subject.agent_id = c.subject_agent_id
        JOIN world_locations location
@@ -872,11 +905,10 @@ async function loadPairs(client: Client, worldId: string, tick: number): Promise
        LEFT JOIN agent_beliefs receiver_belief
          ON receiver_belief.world_id = receiver.world_id AND receiver_belief.agent_id = receiver.agent_id
         AND receiver_belief.claim_id = c.claim_id
-      WHERE sender.location_id = receiver.location_id
-      ORDER BY (candidates.tactic IS NOT NULL) DESC, sender.agent_key, receiver.agent_key, c.claim_key`,
-    [worldId, tick, GOSSIP.minHeat, GOSSIP.retellCooldown],
+      LIMIT 1`,
+    [worldId, tick, GOSSIP.minHeat, GOSSIP.retellCooldown, draw],
   );
-  return result.rows;
+  return result.rows[0] ?? null;
 }
 
 async function loadRecordedDialogue(

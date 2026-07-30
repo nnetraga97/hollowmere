@@ -278,8 +278,9 @@ Evidence:
 
 Dependencies: H-002
 
-- [x] Present Azure Foundry with GPT-5.6 Terra as the active profile; expose the
-  Amazon Bedrock Claude Sonnet 5 choice only when `BEDROCK_ENABLED=true`.
+- [x] Present Azure Foundry as the active profile and display its actually
+  deployed model; expose Amazon Bedrock Claude Sonnet 5 only when
+  `BEDROCK_ENABLED=true`.
 - [x] Reject Bedrock world creation server-side while the environment switch is
   disabled, rather than relying only on a hidden UI card.
 - [x] Keep provider profile keys server-allowlisted; never accept a browser-
