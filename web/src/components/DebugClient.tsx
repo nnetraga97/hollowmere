@@ -10,7 +10,7 @@ import type {
   RomanceChoiceResult, SocialGraph,
 } from '@/lib/contracts';
 import {
-  chooseRomance, closeConversation, control, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, movePlayer,
+  ApiError, chooseRomance, closeConversation, control, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, movePlayer,
   startConversation, startSession, streamConversationTurn, type PlayerEntry,
 } from '@/lib/clientApi';
 import { PhaserGame } from './PhaserGame';
@@ -211,6 +211,10 @@ export function DebugClient({
     }
     moveInFlight.current = true;
     stateGeneration.current++;
+    agentRequestGeneration.current++;
+    agentRequestController.current?.abort();
+    setAgent(null);
+    setSelectedAgentKey(null);
     setSceneLocationKey(null);
     setPanel(null);
     setJourney({ from: game.player.locationKey, to: locationKey });
@@ -225,6 +229,7 @@ export function DebugClient({
         gameRef.current = moved;
         setGame(moved);
       }
+      await refresh();
       moveInFlight.current = false;
       setJourney(null);
       setSceneLocationKey(result.locationKey);
@@ -233,7 +238,7 @@ export function DebugClient({
       setJourney(null);
       setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [bootstrap, game]);
+  }, [bootstrap, game, refresh]);
 
   useEffect(() => {
     const offSelect = EventBus.on('select-agent', ({ agentKey }) => {
@@ -294,6 +299,13 @@ export function DebugClient({
       setPanel(null);
       inspectAgent(agentKey);
     } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        await refresh();
+        setAgent(null);
+        setSelectedAgentKey(null);
+        setError('They moved before you could speak. The location has been refreshed.');
+        return;
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setSending(false);

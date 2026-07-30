@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
-  closeConversation, ConversationRateLimitError,
+  closeConversation, ConversationRateLimitError, ConversationUnavailableError,
   DEFAULT_CONVERSATION_RATE_LIMIT_PER_MINUTE, getHeldConversation,
   logInfo, logWarn, startConversation, takeConversationTurn,
 } from '@/server/engine';
@@ -104,6 +104,10 @@ export async function POST(request: NextRequest): Promise<Response> {
       'x-accel-buffering': 'no',
     } });
   } catch (error) {
+    if (error instanceof ConversationUnavailableError) {
+      logWarn('conversation_unavailable', { reason: error.message });
+      return Response.json({ error: error.message }, { status: 409 });
+    }
     if (error instanceof ConversationRateLimitError) {
       logWarn('conversation_rate_limited', { limit: error.limit });
       return Response.json({ error: error.message }, {

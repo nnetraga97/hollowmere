@@ -7,6 +7,7 @@
  */
 
 import { query, withSerializable, type Client } from '../database/db.ts';
+import type { SelectableInferenceProfile } from '../inference/profiles.ts';
 import {
   getClaims, getCognition, getFactions, getTickMetrics, getWorldSummary,
   listAgents, type AgentView, type ClaimView, type CognitionView,
@@ -195,6 +196,29 @@ export async function setPlayerProfile(
     [ref.worldId, ref.sessionId, name, JSON.stringify(profile)],
   );
   if (!rows[0]) throw new SessionAccessError();
+}
+
+/**
+ * Adopt the player's selected live provider for worlds created before provider
+ * selection existed. Live-provider worlds remain immutable after creation.
+ */
+export async function upgradeLegacyWorldInferenceProfile(
+  ref: SessionRef,
+  profile: SelectableInferenceProfile,
+): Promise<boolean> {
+  const rows = await query<{ world_id: string }>(
+    `UPDATE worlds
+        SET inference_profile = $3
+      WHERE world_id = $1
+        AND inference_profile = 'stub'
+        AND EXISTS (
+          SELECT 1 FROM world_players
+           WHERE world_id = $1 AND session_id = $2
+        )
+      RETURNING world_id`,
+    [ref.worldId, ref.sessionId, profile],
+  );
+  return Boolean(rows[0]);
 }
 
 export class SessionAccessError extends Error {

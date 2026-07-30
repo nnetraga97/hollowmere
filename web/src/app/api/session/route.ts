@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   assertSession, errorLogFields, getGameSnapshot, getTownMap, instantiateWorld, logInfo,
   isInferenceProfileEnabled, isSelectableInferenceProfile, logWarn, query,
-  resumeSessionWorld, setPlayerProfile,
+  resumeSessionWorld, setPlayerProfile, upgradeLegacyWorldInferenceProfile,
 } from '@/server/engine';
 import type { SelectableInferenceProfile } from '@/server/engine';
 import { jsonBody, requireSameOrigin, routeError } from '@/server/http';
@@ -37,15 +37,26 @@ export async function POST(request: NextRequest) {
       sympathyFactionKey: typeof body.sympathyFactionKey === 'string'
         && FACTION_KEYS.has(body.sympathyFactionKey) ? body.sympathyFactionKey : null,
     };
+    const inferenceProfile = isSelectableInferenceProfile(body.inferenceProfile)
+      && isInferenceProfileEnabled(body.inferenceProfile)
+      ? body.inferenceProfile
+      : null;
+    if (body.inferenceProfile !== undefined && !inferenceProfile) {
+      return Response.json({ error: 'choose an available inference profile' }, { status: 400 });
+    }
     const existing = await readSession();
     if (existing) {
       try {
         const owned = await assertSession(existing);
         if (profileProvided) await setPlayerProfile(existing, playerName, playerProfile);
+        const inferenceProfileUpgraded = inferenceProfile
+          ? await upgradeLegacyWorldInferenceProfile(existing, inferenceProfile)
+          : false;
         if (owned.worldStatus === 'paused') await resumeSessionWorld(existing);
         logInfo('session_reused', {
           worldId: existing.worldId,
           profileUpdated: profileProvided,
+          inferenceProfileUpgraded,
           resumed: owned.worldStatus === 'paused',
         });
         return NextResponse.json({
@@ -62,8 +73,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (!isSelectableInferenceProfile(body.inferenceProfile)
-      || !isInferenceProfileEnabled(body.inferenceProfile)) {
+    if (!inferenceProfile) {
       return Response.json({ error: 'choose an available inference profile' }, { status: 400 });
     }
     const seed = Number.isSafeInteger(body.seed) ? Math.trunc(body.seed as number) : randomInt(1, 2_147_483_647);
@@ -79,7 +89,7 @@ export async function POST(request: NextRequest) {
       sessionId,
       playerName,
       playerProfile,
-      inferenceProfile: body.inferenceProfile,
+      inferenceProfile,
     });
     const ref = { sessionId, worldId: created.worldId };
     await writeSession(ref);
@@ -87,7 +97,7 @@ export async function POST(request: NextRequest) {
       worldId: ref.worldId,
       seed,
       scenarioVersion,
-      inferenceProfile: body.inferenceProfile,
+      inferenceProfile,
     });
     return NextResponse.json({
       session: { worldId: ref.worldId },

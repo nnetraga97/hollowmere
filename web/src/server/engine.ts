@@ -4,7 +4,7 @@ export * from '../../../engine/player/game-api.ts';
 export * from '../../../engine/player/api.ts';
 export { converse } from '../../../engine/player/converse.ts';
 export {
-  closeConversation, ConversationRateLimitError,
+  closeConversation, ConversationRateLimitError, ConversationUnavailableError,
   DEFAULT_CONVERSATION_RATE_LIMIT_PER_MINUTE, getHeldConversation,
   startConversation, takeConversationTurn,
 } from '../../../engine/player/conversation.ts';

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { closePool, query } from '../database/db.ts';
 import {
   getAgentDetail, getGameSync, queuePlayerMove, queueTimeScale, SessionAccessError,
+  upgradeLegacyWorldInferenceProfile,
 } from './game-api.ts';
 import {
   closeConversation, startConversation, takeConversationTurn,
@@ -73,6 +74,19 @@ describe('session game API against CockroachDB', { skip: !HAS_DB && 'DATABASE_UR
       getGameSync({ ...ref, sessionId: 'not-the-owner' }),
       SessionAccessError,
     );
+  });
+
+  test('a player can adopt a live provider for a legacy stub world only once', async () => {
+    const ref = await freshWorld();
+    assert.equal(await upgradeLegacyWorldInferenceProfile(ref, 'azure_terra'), true);
+    assert.equal(await upgradeLegacyWorldInferenceProfile(ref, 'bedrock_sonnet'), false);
+    assert.equal(await upgradeLegacyWorldInferenceProfile(
+      { ...ref, sessionId: 'not-the-owner' }, 'bedrock_sonnet',
+    ), false);
+    const profile = await query<{ inference_profile: string }>(
+      `SELECT inference_profile FROM worlds WHERE world_id = $1`, [ref.worldId],
+    );
+    assert.equal(profile[0]?.inference_profile, 'azure_terra');
   });
 
   test('agent detail exposes a bounded world-scoped memory trace with recall paths', async () => {

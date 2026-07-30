@@ -32,6 +32,13 @@ export class ConversationRateLimitError extends Error {
   }
 }
 
+export class ConversationUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConversationUnavailableError';
+  }
+}
+
 export interface ConversationRef {
   worldId: string;
   sessionId: string;
@@ -113,10 +120,12 @@ export async function startConversation(input: ConversationRef & {
       [input.worldId, input.sessionId, input.agentKey],
     );
     const row = context.rows[0];
-    if (!row) throw new Error('world, player, or agent is unavailable');
-    if (row.move_pending) throw new Error('the player is travelling and cannot start a conversation');
+    if (!row) throw new ConversationUnavailableError('world, player, or agent is unavailable');
+    if (row.move_pending) {
+      throw new ConversationUnavailableError('the player is travelling and cannot start a conversation');
+    }
     if (row.player_location_id !== row.agent_location_id) {
-      throw new Error(`${input.agentKey} is not at the player's location`);
+      throw new ConversationUnavailableError(`${input.agentKey} is not at the player's location`);
     }
     const held = await client.query<{ conversation_id: string }>(
       `SELECT conversation_id FROM world_conversation_sessions

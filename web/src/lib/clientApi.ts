@@ -4,9 +4,18 @@ import type {
   SocialGraph, TensionPoint,
 } from './contracts';
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 async function decode<T>(response: Response): Promise<T> {
   const body = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? `request failed (${response.status})`);
+  if (!response.ok) {
+    throw new ApiError(body.error ?? `request failed (${response.status})`, response.status);
+  }
   return body;
 }
 
