@@ -111,6 +111,21 @@ export function rankLocationAgents(
     .map(({ agent }) => agent);
 }
 
+/**
+ * Keep an explicit player selection stable while its detail request is in
+ * flight. Fall back to the first encounter only when entering a scene or when
+ * the selected person is no longer present.
+ */
+export function resolveEncounterSelection(
+  selectedAgentKey: string | null,
+  encounters: readonly Pick<AgentView, 'agentKey'>[],
+): string | null {
+  if (selectedAgentKey && encounters.some(({ agentKey }) => agentKey === selectedAgentKey)) {
+    return selectedAgentKey;
+  }
+  return encounters[0]?.agentKey ?? null;
+}
+
 export function portraitPath(agent: Pick<AgentView, 'agentKey' | 'factionKey'>): string {
   const female = FEMALE_AGENT_KEYS.has(agent.agentKey);
   if (agent.factionKey === 'aldreth') return `/assets/hollowmere/portraits/aldreth_${female ? 'female' : 'male'}.jpg`;

@@ -5,6 +5,7 @@ import { ArrowLeft, BookHeart, Heart, MessageCircle, Users } from 'lucide-react'
 
 import {
   atlasPosition, formatAction, LOCATION_SCENES, portraitPath, rankLocationAgents, relationshipLevel,
+  resolveEncounterSelection,
 } from '@/game/locationScenes';
 import type {
   AgentDetail, Bootstrap, GameSnapshot, RomanceArc, RomanceChoiceResult,
@@ -15,6 +16,7 @@ interface LocationSceneProps {
   bootstrap: Bootstrap;
   game: GameSnapshot;
   locationKey: string;
+  selectedAgentKey: string | null;
   selectedAgent: AgentDetail | null;
   bondChange: { agentKey: string; trust: number; affinity: number; fear: number; respect: number } | null;
   romance: RomanceArc | null;
@@ -28,7 +30,7 @@ interface LocationSceneProps {
 }
 
 export function LocationScene({
-  bootstrap, game, locationKey, selectedAgent, bondChange, romance, busy,
+  bootstrap, game, locationKey, selectedAgentKey, selectedAgent, bondChange, romance, busy,
   onBack, onInspect, onTalk, onRomanceChoice,
 }: LocationSceneProps) {
   const returnButton = useRef<HTMLButtonElement>(null);
@@ -47,13 +49,14 @@ export function LocationScene({
   const encounters = useMemo(() => rankLocationAgents(
     game.agents, locationKey, game.world.seed, game.world.day,
   ), [game.agents, game.world.day, game.world.seed, locationKey]);
-  const active = selectedAgent && encounters.some(({ agentKey }) => agentKey === selectedAgent.agent.agentKey)
-    ? selectedAgent : null;
+  const activeKey = resolveEncounterSelection(selectedAgentKey, encounters);
+  const activeEncounter = encounters.find(({ agentKey }) => agentKey === activeKey) ?? null;
+  const active = selectedAgent?.agent.agentKey === activeKey ? selectedAgent : null;
   const activeRomance = active?.agent.agentKey === romance?.agentKey ? romance : null;
 
   useEffect(() => {
-    if (!active && encounters[0]) onInspect(encounters[0].agentKey);
-  }, [active, encounters, onInspect]);
+    if (activeKey && activeKey !== selectedAgentKey) onInspect(activeKey);
+  }, [activeKey, onInspect, selectedAgentKey]);
 
   useEffect(() => setRomanceOpen(false), [active?.agent.agentKey]);
 
@@ -98,8 +101,8 @@ export function LocationScene({
       {encounters.length ? <div className="encounter-list">
         {encounters.map((encounter, index) => <button
           className={`encounter-card faction-${encounter.factionKey}`}
-          data-active={active?.agent.agentKey === encounter.agentKey || undefined}
-          aria-pressed={active?.agent.agentKey === encounter.agentKey}
+          data-active={activeKey === encounter.agentKey || undefined}
+          aria-pressed={activeKey === encounter.agentKey}
           key={encounter.agentKey}
           onClick={() => onInspect(encounter.agentKey)}
         >
@@ -112,14 +115,15 @@ export function LocationScene({
       </div>}
     </div>
 
-    {active && <aside className={`encounter-focus faction-${active.agent.factionKey}`}>
+    {activeEncounter && <aside className={`encounter-focus faction-${activeEncounter.factionKey}`} aria-busy={!active}>
       <div className="focus-portrait">
-        <img src={portraitPath(active.agent)} alt={`Portrait of ${active.agent.name}`} />
-        <span>{active.agent.factionKey === 'unaligned' ? 'Independent' : active.agent.factionKey}</span>
+        <img src={portraitPath(activeEncounter)} alt={`Portrait of ${activeEncounter.name}`} />
+        <span>{activeEncounter.factionKey === 'unaligned' ? 'Independent' : activeEncounter.factionKey}</span>
       </div>
       <div className="focus-copy">
         <span className="eyebrow">You cross paths</span>
-        <h2>{active.agent.name}</h2>
+        <h2>{activeEncounter.name}</h2>
+        {active ? <>
         <p className="focus-summary">{active.summary}</p>
         <p className="focus-reason"><b>Why here:</b> {formatAction(active.agent.currentAction)}.</p>
         <BondMeter relationship={active.playerRelationship} />
@@ -135,6 +139,7 @@ export function LocationScene({
           </button>
           <span>Words alter trust, affinity, fear, and respect.</span>
         </div>
+        </> : <p className="focus-summary" role="status">Remembering what you know about {activeEncounter.name}…</p>}
       </div>
     </aside>}
 

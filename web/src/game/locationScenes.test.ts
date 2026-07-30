@@ -5,6 +5,7 @@ import type { AgentView } from '@/lib/contracts';
 import { LOCATION_KEYS } from './mapManifest.ts';
 import {
   atlasPosition, formatAction, LOCATION_SCENES, portraitPath, rankLocationAgents, relationshipLevel,
+  resolveEncounterSelection,
 } from './locationScenes.ts';
 
 const agent = (agentKey: string, locationKey = 'quay'): AgentView => ({
@@ -38,6 +39,14 @@ describe('location scene presentation helpers', () => {
     const second = rankLocationAgents([unavailable, agent('b'), agent('a'), elsewhere], 'quay', 7, 12);
     assert.deepEqual(first.map(({ agentKey }) => agentKey), second.map(({ agentKey }) => agentKey));
     assert.equal(first.length, 2);
+  });
+
+  test('keeps a clicked encounter selected while its details are loading', () => {
+    const encounters = [agent('first'), agent('clicked')];
+    assert.equal(resolveEncounterSelection('clicked', encounters), 'clicked');
+    assert.equal(resolveEncounterSelection(null, encounters), 'first');
+    assert.equal(resolveEncounterSelection('departed', encounters), 'first');
+    assert.equal(resolveEncounterSelection(null, []), null);
   });
 
   test('covers every published map location with a unique scene cell', () => {

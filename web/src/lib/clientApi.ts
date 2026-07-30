@@ -54,8 +54,8 @@ export async function loadTension(): Promise<TensionPoint[]> {
   return decode(await fetch('/api/tension', { cache: 'no-store' }));
 }
 
-export async function loadAgent(agentKey: string): Promise<AgentDetail> {
-  return decode(await fetch(`/api/agent/${encodeURIComponent(agentKey)}`, { cache: 'no-store' }));
+export async function loadAgent(agentKey: string, signal?: AbortSignal): Promise<AgentDetail> {
+  return decode(await fetch(`/api/agent/${encodeURIComponent(agentKey)}`, { cache: 'no-store', signal }));
 }
 
 export async function loadTruth(): Promise<DebugTruth> {

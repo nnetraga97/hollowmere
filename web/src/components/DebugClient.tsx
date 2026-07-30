@@ -29,6 +29,7 @@ export function DebugClient() {
   const [chronicle, setChronicle] = useState<ChronicleEntry[]>([]);
   const [graph, setGraph] = useState<SocialGraph | null>(null);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
+  const [selectedAgentKey, setSelectedAgentKey] = useState<string | null>(null);
   const [talkingTo, setTalkingTo] = useState<string | null>(null);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [utterance, setUtterance] = useState('');
@@ -54,6 +55,7 @@ export function DebugClient() {
   const hydratedTick = useRef<number | null>(null);
   const conversationGeneration = useRef(0);
   const agentRequestGeneration = useRef(0);
+  const agentRequestController = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
     refreshController.current?.abort();
@@ -125,6 +127,10 @@ export function DebugClient() {
       setConversation(created.game.conversation);
       setTalkingTo(created.game.conversation?.agentKey ?? null);
       if (created.game.conversation) inspectAgent(created.game.conversation.agentKey);
+      else {
+        setAgent(null);
+        setSelectedAgentKey(null);
+      }
       setSceneLocationKey(null);
       setJourney(null);
       lastLocation.current = created.game.player.locationKey;
@@ -174,12 +180,22 @@ export function DebugClient() {
 
   const inspectAgent = useCallback((agentKey: string, openPanel = false) => {
     if (openPanel) setPanel('agent');
+    agentRequestController.current?.abort();
+    const controller = new AbortController();
+    agentRequestController.current = controller;
     const generation = ++agentRequestGeneration.current;
-    setAgent(null);
-    void loadAgent(agentKey).then((next) => {
+    setSelectedAgentKey(agentKey);
+    setAgent((current) => current?.agent.agentKey === agentKey ? current : null);
+    void loadAgent(agentKey, controller.signal).then((next) => {
       if (generation === agentRequestGeneration.current) setAgent(next);
-    }).catch((cause) => setError(String(cause)));
+    }).catch((cause) => {
+      if (!(cause instanceof DOMException && cause.name === 'AbortError')) setError(String(cause));
+    }).finally(() => {
+      if (agentRequestController.current === controller) agentRequestController.current = null;
+    });
   }, []);
+
+  useEffect(() => () => agentRequestController.current?.abort(), []);
 
   const queueMove = useCallback(async (locationKey: string) => {
     if (!game || !bootstrap || moveInFlight.current) return;
@@ -238,6 +254,8 @@ export function DebugClient() {
       setSceneLocationKey(game.player.locationKey);
       setPanel(null);
       setAgent(null);
+      setSelectedAgentKey(null);
+      agentRequestController.current?.abort();
     }
     lastLocation.current = game.player.locationKey;
   }, [game]);
@@ -376,6 +394,8 @@ export function DebugClient() {
         setTalkingTo(created.game.conversation?.agentKey ?? null);
         setTruth(null);
         setAgent(null);
+        setSelectedAgentKey(null);
+        agentRequestController.current?.abort();
         setSceneLocationKey(null);
         setJourney(null);
         setBondChange(null);
@@ -402,6 +422,9 @@ export function DebugClient() {
         if (body.action === 'end') {
           setConversation(null);
           setTalkingTo(null);
+          setAgent(null);
+          setSelectedAgentKey(null);
+          agentRequestController.current?.abort();
           setSceneLocationKey(null);
           setJourney(null);
           setEndWorldWarning(false);
@@ -439,11 +462,17 @@ export function DebugClient() {
       bootstrap={bootstrap}
       game={game}
       locationKey={sceneLocationKey}
+      selectedAgentKey={selectedAgentKey}
       selectedAgent={agent}
       bondChange={bondChange}
-      romance={game.romances.find((item) => item.agentKey === agent?.agent.agentKey) ?? null}
+      romance={game.romances.find((item) => item.agentKey === selectedAgentKey) ?? null}
       busy={sending}
-      onBack={() => { setSceneLocationKey(null); setAgent(null); }}
+      onBack={() => {
+        setSceneLocationKey(null);
+        setAgent(null);
+        setSelectedAgentKey(null);
+        agentRequestController.current?.abort();
+      }}
       onInspect={inspectAgent}
       onTalk={(agentKey) => void beginConversation(agentKey)}
       onRomanceChoice={makeRomanceChoice}
