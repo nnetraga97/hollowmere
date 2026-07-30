@@ -124,7 +124,7 @@ Dependencies: H-101
 
 - [ ] Select the final AWS deployment domain.
 - [ ] Confirm DNS ownership and ACM validation path.
-- [ ] Resolve the CockroachDB Cloud demo cluster ID.
+- [x] Resolve the CockroachDB Cloud demo cluster ID.
 - [ ] Confirm runtime and migrator database identities exist or will be created.
 - [ ] Choose the MCP-compatible client used for the recorded Town Archivist
   workflow.
@@ -642,12 +642,12 @@ Dependencies: H-103, H-502
 
 - [ ] Record the recurring-cost estimate and the latest date the public demo
   must remain available.
-- [ ] Tag all submission resources consistently for cost attribution.
-- [ ] Document the exact teardown order and CDK/database targets without running
+- [x] Tag all submission resources consistently for cost attribution.
+- [x] Document the exact teardown order and CDK/database targets without running
   destructive commands during judging.
-- [ ] Record which persistent evidence, images, logs, or database backups should
+- [x] Record which persistent evidence, images, logs, or database backups should
   be retained before teardown.
-- [ ] Require a fresh target review and explicit user approval before any
+- [x] Require a fresh target review and explicit user approval before any
   post-judging deletion.
 
 Evidence:

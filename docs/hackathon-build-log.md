@@ -393,3 +393,31 @@ Verification:
   no workflow errors.
 - The first end-to-end workflow run remains pending H-501/H-502 provisioning,
   repository variable setup, and the explicit bootstrap/deploy approvals.
+
+## 2026-07-30 — Final pre-deployment gate
+
+- Committed the completed local hackathon build as `65c2c17` while preserving
+  the pre-existing unstaged `engine/agents/dialogue.ts` change byte-for-byte.
+- Reconfirmed account `536260290118`, region `us-east-1`, the absent
+  `CDKToolkit` stack, and the absence of Route 53 hosted zones, ACM
+  certificates, and a persistent CloudTrail trail using read-only AWS calls.
+- Resolved CockroachDB Cloud cluster `changing-tides` to
+  `16fd535b-deb6-4ba3-a32a-676e2a87f56b`; no database identity, credential, or
+  cluster mutation was performed.
+- Added `docs/aws-predeployment-runbook.md` with the exact unresolved inputs,
+  live Price List API unit prices, a deterministic $92.96/month illustrative
+  AWS estimate, deployment stop point, retained evidence, and protected
+  teardown order.
+- Kept Bedrock dormant with `BEDROCK_ENABLED=false`; support-case resolution
+  and a successful deployment-equivalent preflight remain release gates.
+- Database role verification passed against an isolated database. The CDK
+  strict typecheck, 12 assertions, stack listing, strict synthesis, official
+  `actionlint` check, and web typecheck all passed; 21 web tests and the Next.js
+  production build passed.
+- The canonical root check passed 250 engine tests with three intentional slow
+  skips, but its deterministic twin-town test exceeded the 120-second per-test
+  cap under the full parallel database load. The exact test then passed alone
+  with a 240-second cap in 187.3 seconds. This is recorded as a release-check
+  timeout limitation, not represented as a completely green canonical run.
+- No CDK bootstrap, AWS resource mutation, image push, workflow run, Git push,
+  deployment, or destructive command occurred.
