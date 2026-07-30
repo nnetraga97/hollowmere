@@ -11,7 +11,9 @@ import { logWarn } from '../core/log.ts';
 import {
   applyStructuredConversationTurn, SPEECH_ACTS, type SpeechAct,
 } from './converse.ts';
-import { recall, recordAccesses } from '../social/retrieval.ts';
+import {
+  recall, recordAccesses, type RetrievalCandidatePath,
+} from '../social/retrieval.ts';
 import { romanceCandidate, type RomanceProfile, type RomanceStatus } from './romance-content.ts';
 
 export const CONVERSATION_TURN_PROMPT_VERSION = 'conversation-turn-v5';
@@ -42,7 +44,15 @@ export interface ConversationTurnView {
   reply: string;
   speechAct: SpeechAct;
   referencedClaimKeys: string[];
+  recalledMemories: ConversationMemoryReference[];
   fallback: boolean;
+}
+
+export type ConversationMemoryPath = RetrievalCandidatePath | 'pinned_anchor';
+
+export interface ConversationMemoryReference {
+  memoryId: string;
+  candidatePaths: ConversationMemoryPath[];
 }
 
 export interface ConversationView {
@@ -185,7 +195,10 @@ export async function getConversation(
     query<{
       turn_id: string; ordinal: number; player_text: string; reply: string | null;
       speech_act: string | null; status: string;
-      structured_outcome: { referencedClaimKeys?: unknown } | null;
+      structured_outcome: {
+        referencedClaimKeys?: unknown;
+        recalledMemories?: unknown;
+      } | null;
     }>(
       `SELECT turn_id, ordinal, player_text, reply, speech_act, status, structured_outcome
          FROM world_conversation_turns WHERE world_id = $1 AND conversation_id = $2
@@ -208,6 +221,7 @@ export async function getConversation(
       reply: row.reply!,
       speechAct: row.speech_act as SpeechAct,
       referencedClaimKeys: readClaimKeys(row.structured_outcome?.referencedClaimKeys),
+      recalledMemories: readRecalledMemories(row.structured_outcome?.recalledMemories),
       fallback: row.status === 'fallback',
     })),
   };
@@ -339,7 +353,8 @@ async function completeReservedTurn(
     if (!sessions.rows[0]) throw new Error('conversation is no longer open');
     const turns = await client.query<{
       turn_id: string; ordinal: number; status: string; player_text: string; reply: string | null;
-      structured_outcome: { suggested?: ParsedTurn }; model_id: string | null;
+      structured_outcome: { suggested?: ParsedTurn; recalledMemories?: unknown };
+      model_id: string | null;
       tokens_in: number; tokens_out: number; latency_ms: number; budget_tier: string;
     }>(
       `SELECT turn_id, ordinal, status, player_text, reply, structured_outcome, model_id,
@@ -413,7 +428,7 @@ async function completeReservedTurn(
         session.romance_stage,
         session.romance_status,
       ),
-      memories: [] as string[], beliefs: beliefs.rows,
+      memories: [] as ConversationPromptMemory[], beliefs: beliefs.rows,
       audience: agents.rows.filter((row) => row.observer).map((row) => row.name),
       commitments: commitments.rows,
       allAgentNames: agents.rows.map((row) => row.name),
@@ -427,6 +442,9 @@ async function completeReservedTurn(
   let parsed = normalizeParsedTurn(
     context.reserved.structured_outcome.suggested,
     allowedClaimKeys,
+  );
+  let recalledMemories = readRecalledMemories(
+    context.reserved.structured_outcome.recalledMemories,
   );
   let usage = {
     tokensIn: context.reserved.tokens_in,
@@ -455,6 +473,10 @@ async function completeReservedTurn(
         playerId: context.agent.player_id,
         tick: context.agent.current_tick,
         queryVector: embedded.vectors[0]!,
+      }));
+      recalledMemories = context.memories.map(({ memoryId, candidatePaths }) => ({
+        memoryId,
+        candidatePaths: [...candidatePaths],
       }));
     }
     const response = await input.inference.complete({
@@ -511,7 +533,7 @@ async function completeReservedTurn(
             model_id = $6, budget_tier = $7, tokens_in = $8, tokens_out = $9,
             latency_ms = $10
       WHERE world_id = $1 AND turn_id = $2 AND status = 'reserved'`,
-    [input.worldId, turnId, JSON.stringify({ suggested }), hash(input.text),
+    [input.worldId, turnId, JSON.stringify({ suggested, recalledMemories }), hash(input.text),
       CONVERSATION_TURN_PROMPT_VERSION, usage.modelId, budgetTier,
       usage.tokensIn, usage.tokensOut, usage.latencyMs],
   );
@@ -528,7 +550,12 @@ async function completeReservedTurn(
     ...suggested.referencedClaimKeys,
     ...(applied.claimKey ? [applied.claimKey] : []),
   ])];
-  const result = { ...suggested, reply: applied.reply, referencedClaimKeys };
+  const result = {
+    ...suggested,
+    reply: applied.reply,
+    referencedClaimKeys,
+    recalledMemories,
+  };
   await withSerializable(async (client) => {
     const updated = await client.query(
       `UPDATE world_conversation_turns
@@ -712,6 +739,14 @@ async function finalizeConversation(
         WHERE world_id = $1 AND conversation_id = $2 ORDER BY role DESC, agent_id`,
       [input.worldId, input.conversationId],
     );
+    const claimKeys = [...new Set(view.turns.flatMap((turn) => turn.referencedClaimKeys))];
+    const linkedClaim = claimKeys.length === 1
+      ? await client.query<{ claim_id: string }>(
+        `SELECT claim_id FROM world_claims WHERE world_id = $1 AND claim_key = $2`,
+        [input.worldId, claimKeys[0]],
+      )
+      : { rows: [] as { claim_id: string }[] };
+    const claimId = linkedClaim.rows[0]?.claim_id ?? null;
     let offset = 1;
     for (const participant of participants.rows) {
       const memorySeq = seq + offset++;
@@ -721,12 +756,12 @@ async function finalizeConversation(
       await client.query(
         `INSERT INTO world_memories
            (world_id, memory_id, agent_id, tick, seq, kind, content, embedding, importance,
-            subject_agent_id)
-         VALUES ($1, $2, $3, $4, $5, 'dialogue', $6, $7, $8, $9)
+            subject_agent_id, claim_id)
+         VALUES ($1, $2, $3, $4, $5, 'dialogue', $6, $7, $8, $9, $10)
          ON CONFLICT (world_id, memory_id) DO NOTHING`,
         [input.worldId, memoryId, participant.agent_id, row.current_tick, memorySeq,
           content, `[${vector.join(',')}]`, importance,
-          row.target_agent_id],
+          row.target_agent_id, claimId],
       );
       for (const turn of view.turns) {
         await client.query(
@@ -858,7 +893,7 @@ interface TurnPromptContext {
     current_tick: number; day: number; phase: string; escalation_stage: string;
   };
   transcript: readonly { ordinal: number; player_text: string; reply: string | null }[];
-  memories: readonly string[];
+  memories: readonly ConversationPromptMemory[];
   beliefs: readonly { claim_key: string; text: string; confidence: number; subject_name: string }[];
   audience: readonly string[];
   commitments: readonly {
@@ -872,6 +907,10 @@ interface TurnPromptContext {
     profile: RomanceProfile;
   } | null;
   latestPlayerUtterance: string;
+}
+
+interface ConversationPromptMemory extends ConversationMemoryReference {
+  content: string;
 }
 
 function playerMemoryQuery(
@@ -902,7 +941,7 @@ async function loadPlayerConversationMemories(
     tick: number;
     queryVector: readonly number[];
   },
-): Promise<string[]> {
+): Promise<ConversationPromptMemory[]> {
   const recalled = await recall(client, {
     worldId: input.worldId,
     agentId: input.agentId,
@@ -927,12 +966,31 @@ async function loadPlayerConversationMemories(
     [input.worldId, input.agentId, input.playerId],
   );
   const anchor = pinned.rows[0];
-  if (!anchor) return recalled.map((memory) => memory.content);
+  if (!anchor) return recalled.map(toConversationPromptMemory);
   if (recalled.some((memory) => memory.memoryId === anchor.memory_id)) {
-    return recalled.map((memory) => memory.content);
+    return recalled.map(toConversationPromptMemory);
   }
   await recordAccesses(client, input.worldId, [anchor.memory_id], input.tick);
-  return [anchor.content, ...recalled.slice(0, 7).map((memory) => memory.content)];
+  return [
+    {
+      memoryId: anchor.memory_id,
+      content: anchor.content,
+      candidatePaths: ['pinned_anchor'],
+    },
+    ...recalled.slice(0, 7).map(toConversationPromptMemory),
+  ];
+}
+
+function toConversationPromptMemory(memory: {
+  memoryId: string;
+  content: string;
+  candidatePaths: RetrievalCandidatePath[];
+}): ConversationPromptMemory {
+  return {
+    memoryId: memory.memoryId,
+    content: memory.content,
+    candidatePaths: [...memory.candidatePaths],
+  };
 }
 
 function buildTurnPrompt(context: TurnPromptContext): string {
@@ -994,7 +1052,7 @@ function buildTurnPrompt(context: TurnPromptContext): string {
       stance: belief.confidence > 0 ? 'believes' : belief.confidence < 0 ? 'disbelieves' : 'uncertain',
       confidence: Math.abs(belief.confidence),
     })),
-    recalledMemories: context.memories,
+    recalledMemories: context.memories.map((memory) => memory.content),
     activeHearingCommitments: context.commitments.map((commitment) => ({
       location: commitment.location_name,
       dueTick: commitment.due_tick,
@@ -1156,6 +1214,30 @@ async function groundedConversationSummary(worldId: string, view: ConversationVi
 function readClaimKeys(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((key): key is string => typeof key === 'string'))].slice(0, 3);
+}
+
+const CONVERSATION_MEMORY_PATHS = new Set<ConversationMemoryPath>([
+  'ann', 'importance', 'recency', 'pinned_anchor',
+]);
+
+function readRecalledMemories(value: unknown): ConversationMemoryReference[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const memories: ConversationMemoryReference[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const memoryId = 'memoryId' in candidate ? candidate.memoryId : undefined;
+    const candidatePaths = 'candidatePaths' in candidate ? candidate.candidatePaths : undefined;
+    if (typeof memoryId !== 'string' || seen.has(memoryId) || !Array.isArray(candidatePaths)) continue;
+    const paths = [...new Set(candidatePaths.filter(
+      (path): path is ConversationMemoryPath =>
+        typeof path === 'string' && CONVERSATION_MEMORY_PATHS.has(path as ConversationMemoryPath),
+    ))];
+    if (paths.length === 0) continue;
+    seen.add(memoryId);
+    memories.push({ memoryId, candidatePaths: paths });
+  }
+  return memories.slice(0, 8);
 }
 
 function normalizeParsedTurn(

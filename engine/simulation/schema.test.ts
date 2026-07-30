@@ -52,7 +52,10 @@ suite('schema conformance', () => {
     const rows = await query<{ table_name: string }>(
       `SELECT c.table_name
          FROM information_schema.columns c
+         JOIN information_schema.tables base
+           ON base.table_schema = c.table_schema AND base.table_name = c.table_name
         WHERE c.table_schema = 'public'
+          AND base.table_type = 'BASE TABLE'
           AND c.column_name = 'world_id'
           AND NOT EXISTS (
             SELECT 1
@@ -67,6 +70,52 @@ suite('schema conformance', () => {
         ORDER BY c.table_name`,
     );
     assert.deepEqual(rows, [], 'these world-scoped tables are missing world_id from their PK');
+  });
+
+  test('Archivist views expose only the reviewed world-scoped columns', async () => {
+    const expected: Record<string, string[]> = {
+      archivist_memory_sources: [
+        'world_id', 'memory_id', 'agent_id', 'agent_key', 'agent_name',
+        'memory_tick', 'memory_kind', 'memory_excerpt', 'claim_key', 'edge_id',
+        'source_kind', 'source_id', 'source_turn_ordinal', 'source_player_text',
+        'source_reply', 'source_event_tick', 'source_event_kind',
+        'source_event_description',
+      ],
+      archivist_memory_accesses: [
+        'world_id', 'access_id', 'memory_id', 'agent_id', 'agent_key',
+        'memory_tick', 'memory_kind', 'claim_key', 'accessed_tick',
+      ],
+      archivist_cognition: [
+        'world_id', 'outcome_kind', 'outcome_id', 'agent_id', 'agent_key',
+        'tick', 'task', 'model_id', 'prompt_version', 'recalled_memories',
+        'outcome_summary',
+      ],
+    };
+    for (const [view, columns] of Object.entries(expected)) {
+      const rows = await query<{ column_name: string }>(
+        `SELECT column_name
+           FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = $1
+          ORDER BY ordinal_position`,
+        [view],
+      );
+      assert.deepEqual(rows.map((row) => row.column_name), columns, `${view} column contract changed`);
+    }
+
+    const forbidden = await query<{ table_name: string; column_name: string }>(
+      `SELECT table_name, column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name IN (
+            'archivist_memory_sources', 'archivist_memory_accesses', 'archivist_cognition'
+          )
+          AND column_name IN (
+            'embedding', 'observation_vector', 'reflection_vector', 'input_hash',
+            'decision', 'structured_outcome', 'session_id', 'player_id'
+          )
+        ORDER BY table_name, column_name`,
+    );
+    assert.deepEqual(forbidden, [], 'Archivist views must not expose sensitive engine fields');
   });
 
   test('append-only history tables carry a (tick, seq) total order', async () => {
@@ -142,6 +191,19 @@ suite('schema conformance', () => {
 
     await assert.rejects(
       query(`UPDATE world_state SET escalation_stage = 'apocalypse' WHERE world_id = $1`, [worldId]),
+      /violates check|check constraint/i,
+    );
+
+    await cleanupWorlds([worldId]);
+  });
+
+  test('a world rejects arbitrary inference provider or model identifiers', async () => {
+    const scenarioId = await seedMinimalScenario();
+    const worldId = await createWorld(scenarioId);
+
+    await assert.rejects(
+      query(`UPDATE worlds SET inference_profile = 'client-supplied-model' WHERE world_id = $1`,
+        [worldId]),
       /violates check|check constraint/i,
     );
 

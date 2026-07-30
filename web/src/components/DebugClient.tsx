@@ -18,10 +18,15 @@ import { LocationScene } from './LocationScene';
 import { Panel } from './Panel';
 import { SocialGraphView } from './Charts';
 import { LandingScreen } from './LandingScreen';
+import { MemoryTrace } from './MemoryTrace';
 
 type PanelName = 'overview' | 'chronicle' | 'graph' | 'evidence' | 'hearings' | 'profile' | 'agent' | null;
 
-export function DebugClient() {
+export function DebugClient({
+  availableInferenceProfiles,
+}: {
+  availableInferenceProfiles: NonNullable<PlayerEntry['inferenceProfile']>[];
+}) {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [game, setGame] = useState<GameSnapshot | null>(null);
   const [panel, setPanel] = useState<PanelName>('overview');
@@ -439,7 +444,12 @@ export function DebugClient() {
   }
 
   if (!bootstrap || !game) {
-    return <LandingScreen onEnter={enterTown} busy={entering} error={error} />;
+    return <LandingScreen
+      onEnter={enterTown}
+      busy={entering}
+      error={error}
+      availableInferenceProfiles={availableInferenceProfiles}
+    />;
   }
 
   const stageProgress = Math.round(game.world.globalTension / 100);
@@ -559,7 +569,7 @@ export function DebugClient() {
       })}</section>
     </Panel>}
     {panel === 'agent' && <Panel title={agent?.agent.name ?? 'Agent inspector'} onClose={() => setPanel(null)}>
-      {!agent ? <p className="empty">Choose an NPC on the map.</p> : <><p>{agent.summary}</p><p className="tags">{agent.traits.join(' · ')}</p><p className="approach-note">{agent.agent.name} is {agent.agent.currentAction ?? 'going about their routine'}. They have not engaged you yet.</p>{agent.agent.locationKey === game.player.locationKey && ['alive', 'injured'].includes(agent.agent.status) && <button className="speak-button" disabled={sending || Boolean(game.player.pendingMove)} onClick={() => void beginConversation(agent.agent.agentKey)}>Speak to {agent.agent.name}</button>}<dl className="detail-list"><div><dt>faction</dt><dd>{agent.agent.factionKey}</dd></div><div><dt>location</dt><dd>{agent.agent.locationKey}</dd></div><div><dt>status</dt><dd>{agent.agent.status}</dd></div><div><dt>action</dt><dd>{agent.agent.currentAction ?? 'routine'}</dd></div></dl><h3>Personality</h3>{Object.entries(agent.personality).map(([name, value]) => <div className="metric-row" key={name}><b>{name}</b><span>{Math.round(value / 100)}%</span></div>)}<h3>Relationship with you</h3>{agent.playerRelationship ? <><div className="metric-row"><b>trust · affinity</b><span>{Math.round(agent.playerRelationship.trust / 100)} · {Math.round(agent.playerRelationship.affinity / 100)}</span></div><div className="metric-row"><b>fear · respect</b><span>{Math.round(agent.playerRelationship.fear / 100)} · {Math.round(agent.playerRelationship.respect / 100)}</span></div>{agent.playerRelationship.impression && <p className="notice">{agent.playerRelationship.impression}</p>}</> : <p className="empty">No impression yet.</p>}<h3>Recent dialogue</h3>{agent.recentDialogue.length ? agent.recentDialogue.map((item, index) => <div className="metric-row" key={`${item.tick}-${index}`}><b>t{item.tick}</b><span>{item.text}</span></div>) : <p className="empty">Nothing recorded.</p>}<h3>Strongest beliefs</h3>{agent.beliefs.map((belief) => <div className="metric-row" key={belief.claimKey}><b>{belief.claimKey}</b><span>{Math.round(belief.confidence / 100)}% · t{belief.updatedTick}</span></div>)}<h3>Relationships</h3>{agent.relationships.map((relationship) => <div className="metric-row" key={relationship.agentKey}><b>{relationship.agentKey}</b><span>sentiment {Math.round(relationship.sentiment / 100)} · trust {Math.round(relationship.trust / 100)}</span></div>)}</>}
+      {!agent ? <p className="empty">Choose an NPC on the map.</p> : <><p>{agent.summary}</p><p className="tags">{agent.traits.join(' · ')}</p><p className="approach-note">{agent.agent.name} is {agent.agent.currentAction ?? 'going about their routine'}. They have not engaged you yet.</p>{agent.agent.locationKey === game.player.locationKey && ['alive', 'injured'].includes(agent.agent.status) && <button className="speak-button" disabled={sending || Boolean(game.player.pendingMove)} onClick={() => void beginConversation(agent.agent.agentKey)}>Speak to {agent.agent.name}</button>}<dl className="detail-list"><div><dt>faction</dt><dd>{agent.agent.factionKey}</dd></div><div><dt>location</dt><dd>{agent.agent.locationKey}</dd></div><div><dt>status</dt><dd>{agent.agent.status}</dd></div><div><dt>action</dt><dd>{agent.agent.currentAction ?? 'routine'}</dd></div></dl><h3>Personality</h3>{Object.entries(agent.personality).map(([name, value]) => <div className="metric-row" key={name}><b>{name}</b><span>{Math.round(value / 100)}%</span></div>)}<h3>Relationship with you</h3>{agent.playerRelationship ? <><div className="metric-row"><b>trust · affinity</b><span>{Math.round(agent.playerRelationship.trust / 100)} · {Math.round(agent.playerRelationship.affinity / 100)}</span></div><div className="metric-row"><b>fear · respect</b><span>{Math.round(agent.playerRelationship.fear / 100)} · {Math.round(agent.playerRelationship.respect / 100)}</span></div>{agent.playerRelationship.impression && <p className="notice">{agent.playerRelationship.impression}</p>}</> : <p className="empty">No impression yet.</p>}<h3>Recent dialogue</h3>{agent.recentDialogue.length ? agent.recentDialogue.map((item, index) => <div className="metric-row" key={`${item.tick}-${index}`}><b>t{item.tick}</b><span>{item.text}</span></div>) : <p className="empty">Nothing recorded.</p>}<MemoryTrace memories={agent.memoryTrace} /><h3>Strongest beliefs</h3>{agent.beliefs.map((belief) => <div className="metric-row" key={belief.claimKey}><b>{belief.claimKey}</b><span>{Math.round(belief.confidence / 100)}% · t{belief.updatedTick}</span></div>)}<h3>Relationships</h3>{agent.relationships.map((relationship) => <div className="metric-row" key={relationship.agentKey}><b>{relationship.agentKey}</b><span>sentiment {Math.round(relationship.sentiment / 100)} · trust {Math.round(relationship.trust / 100)}</span></div>)}</>}
     </Panel>}
 
     {talkingTo && conversation && <section className="dialogue-stage" role="dialog" aria-modal="true" aria-label={`Conversation with ${talkingAgent?.name ?? talkingTo}`}>

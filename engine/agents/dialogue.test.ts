@@ -53,7 +53,7 @@ describe('NPC dialogue', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
 
   before(async () => {
     scenarioVersionId = (await publishScenario(
-      await loadScenarioFile(join(here, '..', 'scenario', 'hollowmere-v2.json')),
+      await loadScenarioFile(join(here, '..', '..', 'scenario', 'hollowmere-v2.json')),
     )).scenarioVersionId;
   });
   after(closePool);

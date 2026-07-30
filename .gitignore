@@ -9,6 +9,7 @@ dist/
 .next/
 coverage/
 *.tsbuildinfo
+infra/aws/cdk.out/
 
 # macOS
 .DS_Store

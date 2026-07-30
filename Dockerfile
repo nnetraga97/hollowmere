@@ -17,6 +17,16 @@ COPY scenario ./scenario
 COPY scheduler ./scheduler
 COPY web ./web
 
+FROM dependencies AS migration
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY --chown=node:node db ./db
+COPY --chown=node:node scripts/migrate.ts ./scripts/migrate.ts
+
+USER node
+CMD ["npm", "run", "db:migrate"]
+
 FROM source AS web-build
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1

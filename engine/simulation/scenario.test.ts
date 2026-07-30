@@ -19,7 +19,7 @@ import { checksumOf, loadScenarioFile, publishScenario } from '../../scenario/pu
 import { instantiateWorld, selectCulprit } from '../../scenario/instantiate.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
+const SCENARIO_PATH = join(here, '..', '..', 'scenario', 'hollowmere-v2.json');
 
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
@@ -248,11 +248,12 @@ dbSuite('publish and instantiate', () => {
   test('instantiates a complete world', async () => {
     const world = await instantiateWorld({
       scenarioVersionId, seed: 7, sessionId: `test-${Date.now()}-a`,
+      inferenceProfile: 'azure_terra',
     });
 
     const [counts] = await query<{
       agents: number; relationships: number; factions: number;
-      claims: number; rumors: number; faction_state: number;
+      claims: number; rumors: number; faction_state: number; inference_profile: string;
     }>(
       `SELECT
          (SELECT count(*)::INT8 FROM world_agents WHERE world_id = $1) AS agents,
@@ -260,7 +261,8 @@ dbSuite('publish and instantiate', () => {
          (SELECT count(*)::INT8 FROM world_factions WHERE world_id = $1) AS factions,
          (SELECT count(*)::INT8 FROM world_claims WHERE world_id = $1) AS claims,
          (SELECT count(*)::INT8 FROM world_rumors WHERE world_id = $1) AS rumors,
-         (SELECT count(*)::INT8 FROM world_faction_state WHERE world_id = $1) AS faction_state`,
+         (SELECT count(*)::INT8 FROM world_faction_state WHERE world_id = $1) AS faction_state,
+         (SELECT inference_profile FROM worlds WHERE world_id = $1) AS inference_profile`,
       [world.worldId],
     );
 
@@ -271,6 +273,7 @@ dbSuite('publish and instantiate', () => {
     assert.equal(counts?.claims, 11);
     assert.equal(counts?.rumors, 3);
     assert.equal(counts?.faction_state, 3);
+    assert.equal(counts?.inference_profile, 'azure_terra');
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
   });

@@ -9,8 +9,10 @@
 
 import {
   BedrockRuntimeClient,
+  ConverseCommand,
+  ConverseStreamCommand,
   InvokeModelCommand,
-  InvokeModelWithResponseStreamCommand,
+  type ConverseStreamOutput,
 } from '@aws-sdk/client-bedrock-runtime';
 
 import {
@@ -22,8 +24,6 @@ import {
   type StreamUsage,
 } from './types.ts';
 import { withChoiceConstraints } from './prompts.ts';
-
-const ANTHROPIC_VERSION = 'bedrock-2023-05-31';
 
 /**
  * Timeouts, because the SDK ships without them.
@@ -37,35 +37,10 @@ const ANTHROPIC_VERSION = 'bedrock-2023-05-31';
  * hung connection without cutting off a long stream that is still producing
  * tokens.
  */
-const CONNECT_TIMEOUT_MS = Number(process.env.BEDROCK_CONNECT_TIMEOUT_MS ?? 5_000);
-const REQUEST_TIMEOUT_MS = Number(process.env.BEDROCK_REQUEST_TIMEOUT_MS ?? 30_000);
-/** Total attempts, not retries. The SDK backs off on throttling between them. */
-const MAX_ATTEMPTS = Number(process.env.BEDROCK_MAX_ATTEMPTS ?? 4);
-
-interface ClaudeResponse {
-  content?: { type: string; text?: string }[];
-  usage?: { input_tokens?: number; output_tokens?: number };
-}
-
-/**
- * The shapes of the streamed chunks we care about.
- *
- * Token counts arrive twice and in two different vocabularies: Anthropic's own
- * `message_start` / `message_delta` usage, and the `amazon-bedrock-invocationMetrics`
- * block Bedrock appends to the final chunk. The Bedrock block is preferred
- * because it is what the account is billed on; the Anthropic fields are the
- * fallback for when it is absent.
- */
-interface StreamChunk {
-  type?: string;
-  delta?: { type?: string; text?: string };
-  message?: { usage?: { input_tokens?: number; output_tokens?: number } };
-  usage?: { input_tokens?: number; output_tokens?: number };
-  'amazon-bedrock-invocationMetrics'?: {
-    inputTokenCount?: number;
-    outputTokenCount?: number;
-  };
-}
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/** Total attempts, not retries. The adaptive SDK strategy owns backoff. */
+const DEFAULT_MAX_ATTEMPTS = 5;
 
 interface TitanResponse {
   embedding?: number[];
@@ -77,6 +52,33 @@ export interface BedrockOptions {
   reasoningModelId?: string;
   embeddingModelId?: string;
   dimensions?: number;
+  connectTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  maxAttempts?: number;
+  runtimeClient?: Pick<BedrockRuntimeClient, 'send'>;
+}
+
+export function bedrockRuntimeClientConfig(options: BedrockOptions = {}) {
+  return {
+    region: options.region ?? process.env.AWS_REGION ?? 'us-east-1',
+    maxAttempts: positiveInteger(
+      options.maxAttempts ?? Number(process.env.BEDROCK_MAX_ATTEMPTS ?? DEFAULT_MAX_ATTEMPTS),
+      'BEDROCK_MAX_ATTEMPTS',
+    ),
+    retryMode: 'adaptive' as const,
+    requestHandler: {
+      connectionTimeout: positiveInteger(
+        options.connectTimeoutMs
+          ?? Number(process.env.BEDROCK_CONNECT_TIMEOUT_MS ?? DEFAULT_CONNECT_TIMEOUT_MS),
+        'BEDROCK_CONNECT_TIMEOUT_MS',
+      ),
+      requestTimeout: positiveInteger(
+        options.requestTimeoutMs
+          ?? Number(process.env.BEDROCK_REQUEST_TIMEOUT_MS ?? DEFAULT_REQUEST_TIMEOUT_MS),
+        'BEDROCK_REQUEST_TIMEOUT_MS',
+      ),
+    },
+  };
 }
 
 export function createBedrockClient(options: BedrockOptions = {}): InferenceClient {
@@ -91,30 +93,21 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
     'amazon.titan-embed-text-v2:0';
   const dimensions = options.dimensions ?? Number(process.env.BEDROCK_EMBEDDING_DIM ?? 1024);
 
-  const client = new BedrockRuntimeClient({
-    region,
-    maxAttempts: MAX_ATTEMPTS,
-    // Passed as plain options rather than a constructed NodeHttpHandler so this
-    // module does not have to import @smithy/node-http-handler, which is only a
-    // transitive dependency here.
-    requestHandler: {
-      connectionTimeout: CONNECT_TIMEOUT_MS,
-      requestTimeout: REQUEST_TIMEOUT_MS,
-    },
-  });
+  const client = options.runtimeClient
+    ?? new BedrockRuntimeClient(bedrockRuntimeClientConfig({ ...options, region }));
   const decoder = new TextDecoder();
 
-  const buildBody = (request: CompletionRequest): string =>
-    JSON.stringify({
-      anthropic_version: ANTHROPIC_VERSION,
-      max_tokens: request.maxTokens,
-      system: withChoiceConstraints(request),
-      messages: [{ role: 'user', content: request.user }],
-      // Zero temperature does not make Bedrock reproducible, but it does keep
-      // NPC behaviour stable enough to reason about while tuning. True
-      // reproducibility comes from replaying cognition_records.
+  const converseInput = (request: CompletionRequest) => ({
+    modelId: reasoningModelId,
+    system: [{ text: withChoiceConstraints(request) }],
+    messages: [{ role: 'user' as const, content: [{ text: request.user }] }],
+    inferenceConfig: {
+      // Always explicit: Bedrock reserves quota from maxTokens at request start.
+      maxTokens: request.maxTokens,
+      // Replay, not provider sampling, is the deterministic contract.
       temperature: 0,
-    });
+    },
+  });
 
   return {
     mode: 'bedrock',
@@ -126,17 +119,10 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
       const startedAt = Date.now();
       try {
         const response = await client.send(
-          new InvokeModelCommand({
-            modelId: reasoningModelId,
-            contentType: 'application/json',
-            accept: 'application/json',
-            body: buildBody(request),
-          }),
+          new ConverseCommand(converseInput(request)),
         );
 
-        const parsed = JSON.parse(decoder.decode(response.body)) as ClaudeResponse;
-        const text = (parsed.content ?? [])
-          .filter((block) => block.type === 'text')
+        const text = (response.output?.message?.content ?? [])
           .map((block) => block.text ?? '')
           .join('');
 
@@ -146,14 +132,15 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
 
         return {
           text,
-          tokensIn: parsed.usage?.input_tokens ?? 0,
-          tokensOut: parsed.usage?.output_tokens ?? 0,
+          tokensIn: response.usage?.inputTokens ?? 0,
+          tokensOut: response.usage?.outputTokens ?? 0,
           modelId: reasoningModelId,
           latencyMs: Date.now() - startedAt,
+          ...(response.stopReason ? { stopReason: response.stopReason } : {}),
         };
       } catch (error) {
         if (error instanceof InferenceError) throw error;
-        throw new InferenceError(request.task, describe(error), { cause: error });
+        throw new InferenceError(request.task, describeBedrockError(error), { cause: error });
       }
     },
 
@@ -162,52 +149,42 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
       let response;
       try {
         response = await client.send(
-          new InvokeModelWithResponseStreamCommand({
-            modelId: reasoningModelId,
-            contentType: 'application/json',
-            accept: 'application/json',
-            body: buildBody(request),
-          }),
+          new ConverseStreamCommand(converseInput(request)),
         );
       } catch (error) {
-        throw new InferenceError(request.task, describe(error), { cause: error });
+        throw new InferenceError(request.task, describeBedrockError(error), { cause: error });
       }
 
       let tokensIn = 0;
       let tokensOut = 0;
+      let stopReason: string | undefined;
 
       try {
-        for await (const event of response.body ?? []) {
-          const bytes = event.chunk?.bytes;
-          if (!bytes) continue;
-          const chunk = JSON.parse(decoder.decode(bytes)) as StreamChunk;
-
-          if (chunk.type === 'content_block_delta' && chunk.delta?.text) {
-            yield chunk.delta.text;
-            continue;
-          }
-
-          // Anthropic's own accounting: input once at the top, output as it
-          // revises the running total on each message_delta.
-          if (chunk.message?.usage?.input_tokens) tokensIn = chunk.message.usage.input_tokens;
-          if (chunk.usage?.output_tokens) tokensOut = chunk.usage.output_tokens;
-
-          // Bedrock's block, on the final chunk. Last word, because it is the
-          // one the bill is computed from.
-          const metrics = chunk['amazon-bedrock-invocationMetrics'];
-          if (metrics) {
-            tokensIn = metrics.inputTokenCount ?? tokensIn;
-            tokensOut = metrics.outputTokenCount ?? tokensOut;
+        for await (const event of response.stream ?? []) {
+          const modeledError = streamError(event);
+          if (modeledError) throw modeledError;
+          const text = event.contentBlockDelta?.delta?.text;
+          if (text) yield text;
+          if (event.messageStop?.stopReason) stopReason = event.messageStop.stopReason;
+          if (event.metadata?.usage) {
+            tokensIn = event.metadata.usage.inputTokens ?? tokensIn;
+            tokensOut = event.metadata.usage.outputTokens ?? tokensOut;
           }
         }
       } catch (error) {
         // A mid-stream failure was previously raw. The caller distinguishes
         // inference failures from engine failures by type, so it has to be
         // wrapped here as well as at the initial send.
-        throw new InferenceError(request.task, describe(error), { cause: error });
+        throw new InferenceError(request.task, describeBedrockError(error), { cause: error });
       }
 
-      return { tokensIn, tokensOut, modelId: reasoningModelId, latencyMs: Date.now() - startedAt };
+      return {
+        tokensIn,
+        tokensOut,
+        modelId: reasoningModelId,
+        latencyMs: Date.now() - startedAt,
+        ...(stopReason ? { stopReason } : {}),
+      };
     },
 
     async embed(texts: readonly string[]): Promise<EmbeddingResponse> {
@@ -241,7 +218,7 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
         }
       } catch (error) {
         if (error instanceof InferenceError) throw error;
-        throw new InferenceError('embed', describe(error), { cause: error });
+        throw new InferenceError('embed', describeBedrockError(error), { cause: error });
       }
 
       return {
@@ -259,7 +236,7 @@ export function createBedrockClient(options: BedrockOptions = {}): InferenceClie
  * so map them to the actual remedy. The error name is always included: a wrong
  * hint costs more time than no hint.
  */
-function describe(error: unknown): string {
+export function describeBedrockError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
 
   const base = `${error.name}: ${error.message}`;
@@ -286,8 +263,42 @@ function describe(error: unknown): string {
 
   if (error.name === 'ThrottlingException') {
     return `${base}\n        Rate limited. The engine's per-world budget and cognition cap ` +
-      `should normally keep it below this.`;
+      `should normally keep it below this; the SDK has already applied adaptive retries.`;
+  }
+
+  if (isRetryableBedrockError(error)) {
+    return `${base}\n        Bedrock remained unavailable after adaptive SDK retries.`;
   }
 
   return base;
+}
+
+export function isRetryableBedrockError(error: unknown): boolean {
+  return error instanceof Error && new Set([
+    'ThrottlingException',
+    'ModelTimeoutException',
+    'ServiceUnavailableException',
+    'InternalServerException',
+  ]).has(error.name);
+}
+
+function streamError(event: ConverseStreamOutput): Error | null {
+  const modeled = event.internalServerException
+    ?? event.modelStreamErrorException
+    ?? event.validationException
+    ?? event.throttlingException
+    ?? event.serviceUnavailableException;
+  if (!modeled) return null;
+  const error = new Error(modeled.message ?? 'Bedrock stream failed');
+  error.name = event.internalServerException ? 'InternalServerException'
+    : event.modelStreamErrorException ? 'ModelStreamErrorException'
+      : event.validationException ? 'ValidationException'
+        : event.throttlingException ? 'ThrottlingException'
+          : 'ServiceUnavailableException';
+  return error;
+}
+
+function positiveInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+  return value;
 }

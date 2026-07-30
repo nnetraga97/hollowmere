@@ -76,6 +76,8 @@ export interface CompletionResponse {
   tokensOut: number;
   modelId: string;
   latencyMs: number;
+  /** Provider-normalized finish reason when the transport reports one. */
+  stopReason?: string;
 }
 
 export interface EmbeddingResponse {
@@ -102,6 +104,8 @@ export interface StreamUsage {
   tokensOut: number;
   modelId: string;
   latencyMs: number;
+  /** Provider-normalized finish reason from the stream's closing event. */
+  stopReason?: string;
 }
 
 export interface InferenceClient {

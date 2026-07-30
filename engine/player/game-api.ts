@@ -121,6 +121,18 @@ export interface AgentDetailView {
   relationships: { agentKey: string; sentiment: number; trust: number }[];
   cognition: CognitionView[];
   recentDialogue: { tick: number; text: string }[];
+  memoryTrace: {
+    memoryId: string;
+    formedTick: number;
+    lastAccessedTick: number | null;
+    kind: string;
+    excerpt: string;
+    claimKey: string | null;
+    sourceKind: 'turn' | 'event';
+    sourceId: string;
+    recalledByTurnId: string | null;
+    candidatePaths: ('ann' | 'importance' | 'recency' | 'pinned_anchor')[];
+  }[];
   personality: { kindness: number; engagement: number; honesty: number };
   playerRelationship: {
     trust: number; affinity: number; fear: number; respect: number; impression: string | null;
@@ -344,7 +356,10 @@ export async function getGameSync(ref: SessionRef): Promise<GameSync> {
 
 export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise<AgentDetailView> {
   await assertSession(ref);
-  const [agents, personas, beliefs, relationships, recent, recentDialogue, personality] =
+  const [
+    agents, personas, beliefs, relationships, recent, recentDialogue, personality,
+    memories, recallTurns,
+  ] =
     await Promise.all([
       query<{
         agent_key: string; name: string; faction_key: string; location_key: string;
@@ -418,6 +433,55 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
           WHERE a.world_id = $1 AND a.agent_key = $2`,
         [ref.worldId, agentKey, ref.sessionId],
       ),
+      query<{
+        memory_id: string; formed_tick: number; last_accessed_tick: number | null;
+        kind: string; excerpt: string; claim_key: string | null;
+        source_kind: 'turn' | 'event'; source_id: string;
+      }>(
+        `SELECT m.memory_id, m.tick AS formed_tick, access.last_accessed_tick,
+                m.kind, left(m.content, 220) AS excerpt, claim.claim_key,
+                source.source_kind, source.source_id
+           FROM world_memories m
+           JOIN world_agents a
+             ON a.world_id = m.world_id AND a.agent_id = m.agent_id
+           LEFT JOIN world_claims claim
+             ON claim.world_id = m.world_id AND claim.claim_id = m.claim_id
+           LEFT JOIN LATERAL (
+             SELECT max(accessed_tick)::INT8 AS last_accessed_tick
+               FROM memory_accesses
+              WHERE world_id = m.world_id AND memory_id = m.memory_id
+           ) access ON true
+           JOIN LATERAL (
+             SELECT edge.source_kind,
+                    COALESCE(edge.source_turn_id::STRING, edge.source_event_id::STRING) AS source_id
+               FROM memory_source_edges edge
+              WHERE edge.world_id = m.world_id AND edge.memory_id = m.memory_id
+                AND edge.source_kind IN ('turn', 'event')
+              ORDER BY CASE edge.source_kind WHEN 'turn' THEN 0 ELSE 1 END, edge.edge_id
+              LIMIT 1
+           ) source ON true
+          WHERE m.world_id = $1 AND a.agent_key = $2
+            AND m.kind NOT IN ('plan', 'reflection')
+          ORDER BY COALESCE(access.last_accessed_tick, m.tick) DESC,
+                   m.importance DESC, m.tick DESC, m.memory_id
+          LIMIT 5`,
+        [ref.worldId, agentKey],
+      ),
+      query<{ turn_id: string; structured_outcome: unknown }>(
+        `SELECT turn_row.turn_id, turn_row.structured_outcome
+           FROM world_conversation_turns turn_row
+           JOIN world_conversation_sessions session
+             ON session.world_id = turn_row.world_id
+            AND session.conversation_id = turn_row.conversation_id
+           JOIN world_agents agent
+             ON agent.world_id = session.world_id
+            AND agent.agent_id = session.target_agent_id
+          WHERE turn_row.world_id = $1 AND agent.agent_key = $2
+            AND turn_row.status IN ('completed', 'fallback')
+          ORDER BY turn_row.completed_at DESC, turn_row.turn_id
+          LIMIT 100`,
+        [ref.worldId, agentKey],
+      ),
     ]);
   const agentRow = agents[0];
   if (!agentRow) throw new Error(`unknown agent ${agentKey}`);
@@ -432,6 +496,7 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
     topConfidence: agentRow.top_confidence ?? 0,
   };
   const personal = personality[0];
+  const recalled = latestMemoryRecalls(recallTurns);
   return {
     agent,
     summary: personas[0]?.persona.summary ?? '',
@@ -451,6 +516,21 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
       latencyMs: row.latency_ms,
     })),
     recentDialogue: recentDialogue.map((row) => ({ tick: row.tick, text: row.description })),
+    memoryTrace: memories.map((row) => {
+      const recall = recalled.get(row.memory_id);
+      return {
+        memoryId: row.memory_id,
+        formedTick: row.formed_tick,
+        lastAccessedTick: row.last_accessed_tick,
+        kind: row.kind,
+        excerpt: row.excerpt,
+        claimKey: row.claim_key,
+        sourceKind: row.source_kind,
+        sourceId: row.source_id,
+        recalledByTurnId: recall?.turnId ?? null,
+        candidatePaths: recall?.candidatePaths ?? [],
+      };
+    }),
     personality: {
       kindness: personal?.kindness ?? 5000,
       engagement: personal?.engagement ?? 5000,
@@ -464,6 +544,40 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
       impression: personal.impression,
     },
   };
+}
+
+const MEMORY_CANDIDATE_PATHS = new Set([
+  'ann', 'importance', 'recency', 'pinned_anchor',
+] as const);
+
+function latestMemoryRecalls(
+  turns: { turn_id: string; structured_outcome: unknown }[],
+): Map<string, {
+  turnId: string;
+  candidatePaths: ('ann' | 'importance' | 'recency' | 'pinned_anchor')[];
+}> {
+  const result = new Map<string, {
+    turnId: string;
+    candidatePaths: ('ann' | 'importance' | 'recency' | 'pinned_anchor')[];
+  }>();
+  for (const turn of turns) {
+    if (!turn.structured_outcome || typeof turn.structured_outcome !== 'object') continue;
+    const recalled = (turn.structured_outcome as { recalledMemories?: unknown }).recalledMemories;
+    if (!Array.isArray(recalled)) continue;
+    for (const value of recalled) {
+      if (!value || typeof value !== 'object') continue;
+      const memoryId = (value as { memoryId?: unknown }).memoryId;
+      if (typeof memoryId !== 'string' || result.has(memoryId)) continue;
+      const rawPaths = (value as { candidatePaths?: unknown }).candidatePaths;
+      const candidatePaths = Array.isArray(rawPaths)
+        ? [...new Set(rawPaths.filter((path): path is
+          'ann' | 'importance' | 'recency' | 'pinned_anchor' =>
+          typeof path === 'string' && MEMORY_CANDIDATE_PATHS.has(path as never)))]
+        : [];
+      result.set(memoryId, { turnId: turn.turn_id, candidatePaths });
+    }
+  }
+  return result;
 }
 
 export async function getDebugTruth(ref: SessionRef): Promise<DebugTruthView> {

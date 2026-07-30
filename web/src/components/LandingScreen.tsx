@@ -1,18 +1,22 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowRight, CircleHelp, Feather, Shield, ShieldHalf } from 'lucide-react';
+import {
+  ArrowRight, BookOpenText, CircleHelp, Feather, Gauge, Shield, ShieldHalf,
+} from 'lucide-react';
 
 import type { PlayerEntry } from '@/lib/clientApi';
 
 const PROFILE_KEY = 'hollowmere-player-profile-v1';
 
 type Sympathy = NonNullable<PlayerEntry['sympathyFactionKey']>;
+type InferenceProfile = NonNullable<PlayerEntry['inferenceProfile']>;
 
 interface SavedProfile {
   playerName: string;
   background: string;
   sympathyFactionKey: Sympathy | null;
+  inferenceProfile: InferenceProfile | null;
 }
 
 const FACTIONS: {
@@ -26,15 +30,20 @@ const FACTIONS: {
   { key: 'unaligned', name: 'Independent', description: 'No house oath. The town must earn your trust.', Icon: CircleHelp },
 ];
 
-export function LandingScreen({ onEnter, busy, error }: {
+export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles }: {
   onEnter(entry: PlayerEntry): Promise<void>;
   busy: boolean;
   error: string | null;
+  availableInferenceProfiles: InferenceProfile[];
 }) {
   const [name, setName] = useState('');
   const [background, setBackground] = useState('');
   const [sympathy, setSympathy] = useState<Sympathy | null>(null);
+  const [inferenceProfile, setInferenceProfile] = useState<InferenceProfile | null>(
+    availableInferenceProfiles.length === 1 ? availableInferenceProfiles[0] ?? null : null,
+  );
   const [saved, setSaved] = useState<SavedProfile | null>(null);
+  const bedrockEnabled = availableInferenceProfiles.includes('bedrock_sonnet');
 
   useEffect(() => {
     try {
@@ -47,27 +56,36 @@ export function LandingScreen({ onEnter, busy, error }: {
         background: typeof profile.background === 'string' ? profile.background.slice(0, 360) : '',
         sympathyFactionKey: FACTIONS.some(({ key }) => key === profile.sympathyFactionKey)
           ? profile.sympathyFactionKey as Sympathy : null,
+        inferenceProfile: (profile.inferenceProfile === 'azure_terra'
+          || profile.inferenceProfile === 'bedrock_sonnet')
+          && availableInferenceProfiles.includes(profile.inferenceProfile)
+          ? profile.inferenceProfile
+          : availableInferenceProfiles.length === 1
+            ? availableInferenceProfiles[0] ?? null
+            : null,
       };
       setSaved(restored);
       setName(restored.playerName);
       setBackground(restored.background);
       setSympathy(restored.sympathyFactionKey);
+      setInferenceProfile(restored.inferenceProfile);
     } catch {
       window.localStorage.removeItem(PROFILE_KEY);
     }
-  }, []);
+  }, [availableInferenceProfiles]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!name.trim() || !inferenceProfile) return;
     const profile: SavedProfile = {
       playerName: name.trim().slice(0, 60),
       background: background.trim().slice(0, 360),
       sympathyFactionKey: sympathy,
+      inferenceProfile,
     };
-    if (!profile.playerName) return;
     window.localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
     setSaved(profile);
-    await onEnter(profile);
+    await onEnter({ ...profile, inferenceProfile });
   }
 
   function restoreSaved() {
@@ -75,6 +93,7 @@ export function LandingScreen({ onEnter, busy, error }: {
     setName(saved.playerName);
     setBackground(saved.background);
     setSympathy(saved.sympathyFactionKey);
+    setInferenceProfile(saved.inferenceProfile);
   }
 
   return <main className="entry-screen">
@@ -117,9 +136,29 @@ export function LandingScreen({ onEnter, busy, error }: {
         </div>
       </fieldset>
 
+      <fieldset className="inference-field">
+        <legend>{bedrockEnabled ? 'Choose how Hollowmere thinks' : 'How Hollowmere thinks'}</legend>
+        <p className="inference-intro">{bedrockEnabled
+          ? 'Select an inference profile for your private world, balancing fast responses with richer NPC dialogue and planning.'
+          : 'Hollowmere currently uses Azure Foundry for fast, grounded conversations, rumours, and agent decisions.'}</p>
+        <div className="inference-grid">
+          <button type="button" className="inference-card" aria-pressed={inferenceProfile === 'azure_terra'} onClick={() => setInferenceProfile('azure_terra')}>
+            <Gauge size={22} strokeWidth={1.45} aria-hidden="true" />
+            <span><strong>Azure Foundry</strong><b>GPT-5.6 Terra</b></span>
+            <small>Strong, efficient reasoning across conversations, rumours, and agent decisions.</small>
+          </button>
+          {bedrockEnabled && <button type="button" className="inference-card" aria-pressed={inferenceProfile === 'bedrock_sonnet'} onClick={() => setInferenceProfile('bedrock_sonnet')}>
+            <BookOpenText size={22} strokeWidth={1.45} aria-hidden="true" />
+            <span><strong>Amazon Bedrock</strong><b>Claude Sonnet 5</b></span>
+            <small>Especially nuanced character dialogue and long-running investigations.</small>
+          </button>}
+        </div>
+        <p className="inference-rule">Your choice changes the voice and responsiveness of the town—not its rules. Evidence, memories, belief updates, and outcomes remain grounded and replayable in CockroachDB.</p>
+      </fieldset>
+
       {error && <p className="entry-error" role="alert">{error}</p>}
 
-      <button className="enter-town-button" disabled={busy || !name.trim()}>
+      <button className="enter-town-button" disabled={busy || !name.trim() || !inferenceProfile}>
         <span>{busy ? 'Starting your world…' : 'Start your world'}</span><ArrowRight size={18} aria-hidden="true" />
       </button>
       {saved && <button className="restore-profile-button" type="button" onClick={restoreSaved} disabled={busy}><Feather size={14} aria-hidden="true" /> Restore saved player record</button>}

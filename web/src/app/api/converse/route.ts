@@ -6,7 +6,7 @@ import {
   logInfo, logWarn, startConversation, takeConversationTurn,
 } from '@/server/engine';
 import { jsonBody, requireSameOrigin, requireSession, routeError } from '@/server/http';
-import { inference } from '@/server/inference';
+import { inferenceForWorld } from '@/server/inference';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,6 +32,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     requireSameOrigin(request);
     const ref = await requireSession();
+    const inference = await inferenceForWorld(ref.worldId);
     const body = await jsonBody<{
       action?: 'start' | 'turn' | 'close'; agentKey?: string; conversationId?: string;
       text?: string; idempotencyKey?: string;

@@ -22,7 +22,7 @@ import { loadScenarioFile, publishScenario } from '../../scenario/publish.ts';
 import { instantiateWorld } from '../../scenario/instantiate.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
+const SCENARIO_PATH = join(here, '..', '..', 'scenario', 'hollowmere-v2.json');
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
 describe('replay', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {

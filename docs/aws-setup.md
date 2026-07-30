@@ -125,8 +125,13 @@ AWS error.
 ### 4. Switch the engine over
 
 ```
-INFERENCE_MODE=bedrock
+INFERENCE_MODE=world
+BEDROCK_ENABLED=true
 ```
+
+Deployed Hollowmere already keeps `INFERENCE_MODE=world`; after the preflight
+passes, changing only `BEDROCK_ENABLED` exposes Bedrock to new worlds. Until
+then it remains `false` and Azure is the only accepted public profile.
 
 ## Model identifiers
 

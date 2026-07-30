@@ -90,6 +90,7 @@ function withInferenceLogging(client: InferenceClient): InferenceClient {
           modelId: response.modelId,
           tokensIn: response.tokensIn,
           tokensOut: response.tokensOut,
+          stopReason: response.stopReason,
           latencyMs: response.latencyMs,
           wallTimeMs: Date.now() - startedAt,
         });
@@ -115,6 +116,7 @@ function withInferenceLogging(client: InferenceClient): InferenceClient {
               modelId: next.value.modelId,
               tokensIn: next.value.tokensIn,
               tokensOut: next.value.tokensOut,
+              stopReason: next.value.stopReason,
               latencyMs: next.value.latencyMs,
               wallTimeMs: Date.now() - startedAt,
               chunks,

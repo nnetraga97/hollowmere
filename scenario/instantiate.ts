@@ -13,6 +13,7 @@ import { withSerializable, type Client } from '../engine/database/db.ts';
 import { pickRumorOriginator, seedRumor } from '../engine/social/gossip.ts';
 import { createSeq } from '../engine/core/seq.ts';
 import type { OpeningEventDef } from './schema.ts';
+import type { WorldInferenceProfile } from '../engine/inference/profiles.ts';
 
 /** Starting sentiment and trust, by relationship of the two agents' factions. */
 const INITIAL_SAME_FACTION = { sentiment: 3_000, trust: 6_500 };
@@ -23,6 +24,7 @@ export interface InstantiateOptions {
   scenarioVersionId: string;
   seed: number;
   sessionId: string;
+  inferenceProfile?: WorldInferenceProfile;
   playerName?: string;
   playerProfile?: {
     background: string;
@@ -60,8 +62,9 @@ export async function instantiateWorldOnClient(
   const scenario = await loadScenarioRows(client, options.scenarioVersionId);
 
   const world = await client.query<{ world_id: string }>(
-    `INSERT INTO worlds (scenario_version_id, seed) VALUES ($1, $2) RETURNING world_id`,
-    [options.scenarioVersionId, options.seed],
+    `INSERT INTO worlds (scenario_version_id, seed, inference_profile)
+     VALUES ($1, $2, $3) RETURNING world_id`,
+    [options.scenarioVersionId, options.seed, options.inferenceProfile ?? 'stub'],
   );
   const worldId = world.rows[0]!.world_id;
 

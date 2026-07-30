@@ -95,10 +95,10 @@ try {
 
 console.log();
 if (failures === 0) {
-  console.log(`${GREEN}Bedrock is ready.${RESET} Set INFERENCE_MODE=bedrock to use it.\n`);
+  console.log(`${GREEN}Bedrock is ready.${RESET} Set BEDROCK_ENABLED=true to expose it to new worlds.\n`);
 } else {
   console.log(`${RED}${failures} check(s) failed.${RESET}`);
-  console.log('The engine still runs fully on INFERENCE_MODE=stub while you sort this out.');
+  console.log('Azure remains the only enabled world profile while you sort this out.');
   console.log('See docs/aws-setup.md.\n');
   process.exitCode = 1;
 }

@@ -27,7 +27,7 @@ import { instantiateWorld } from '../../scenario/instantiate.ts';
 import { slowTest } from '../testing/slow-tests.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
+const SCENARIO_PATH = join(here, '..', '..', 'scenario', 'hollowmere-v2.json');
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
 describe('speech act parsing', () => {

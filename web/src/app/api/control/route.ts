@@ -53,10 +53,12 @@ export async function POST(request: NextRequest) {
       const { value: started } = await withSerializable(async (client) => {
         const rows = await client.query<{
           status: string; scenario_version_id: string; player_name: string;
+          inference_profile: 'stub' | 'azure_terra' | 'bedrock_sonnet';
           profile: { background?: string; sympathyFactionKey?: string | null };
           successor_world_id: string | null; successor_seed: number | null;
         }>(
-          `SELECT w.status, w.scenario_version_id, p.name AS player_name, p.profile,
+          `SELECT w.status, w.scenario_version_id, w.inference_profile,
+                  p.name AS player_name, p.profile,
                   successor.successor_world_id, next.seed AS successor_seed
              FROM worlds w
              JOIN world_players p ON p.world_id = w.world_id AND p.session_id = $2
@@ -82,6 +84,7 @@ export async function POST(request: NextRequest) {
           seed,
           sessionId: ref.sessionId,
           playerName: current.player_name,
+          inferenceProfile: current.inference_profile,
           playerProfile: {
             background: current.profile?.background ?? '',
             sympathyFactionKey: current.profile?.sympathyFactionKey ?? null,

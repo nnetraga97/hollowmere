@@ -11,6 +11,11 @@ export {
 export { chooseRomanceMoment, getRomanceArcs } from '../../../engine/player/romance.ts';
 export { query, withSerializable } from '../../../engine/database/db.ts';
 export { createInferenceClient } from '../../../engine/inference/index.ts';
+export { inferenceForWorld } from '../../../engine/inference/world.ts';
+export {
+  enabledInferenceProfiles, isInferenceProfileEnabled, isSelectableInferenceProfile,
+} from '../../../engine/inference/profiles.ts';
+export type { SelectableInferenceProfile } from '../../../engine/inference/profiles.ts';
 export {
   errorLogFields, logDebug, logError, logInfo, logWarn,
 } from '../../../engine/core/log.ts';

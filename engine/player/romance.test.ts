@@ -81,7 +81,7 @@ databaseSuite('romance persistence', () => {
   let worldId = '';
 
   before(async () => {
-    const scenario = await loadScenarioFile(join(here, '..', 'scenario', 'hollowmere-v2.json'));
+    const scenario = await loadScenarioFile(join(here, '..', '..', 'scenario', 'hollowmere-v2.json'));
     const published = await publishScenario(scenario);
     worldId = (await instantiateWorld({
       scenarioVersionId: published.scenarioVersionId,

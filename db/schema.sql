@@ -214,6 +214,11 @@ CREATE TABLE IF NOT EXISTS worlds (
   -- Together with the scenario version and the ordered command log, this seed
   -- fully determines a stub run.
   seed                INT8 NOT NULL,
+  -- Immutable, server-allowlisted inference routing. The selected provider may
+  -- shape language and planning, but never owns rules or world state.
+  inference_profile   STRING NOT NULL DEFAULT 'stub'
+                        CHECK (inference_profile IN
+                          ('stub', 'azure_terra', 'bedrock_sonnet')),
   current_tick        INT8 NOT NULL DEFAULT 0,
   -- Monotonic counter assigning a total order to external commands.
   command_seq         INT8 NOT NULL DEFAULT 0,
@@ -244,6 +249,12 @@ CREATE TABLE IF NOT EXISTS worlds (
 
 CREATE INDEX IF NOT EXISTS worlds_schedulable_idx
   ON worlds (status, lease_expires_at);
+
+-- Existing local and deployed databases predate per-world inference routing.
+ALTER TABLE worlds ADD COLUMN IF NOT EXISTS inference_profile STRING NOT NULL DEFAULT 'stub';
+ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_inference_profile;
+ALTER TABLE worlds ADD CONSTRAINT check_inference_profile
+  CHECK (inference_profile IN ('stub', 'azure_terra', 'bedrock_sonnet'));
 
 ALTER TABLE worlds
   ADD COLUMN IF NOT EXISTS time_debt_ticks INT8 NOT NULL DEFAULT 0;
@@ -1073,3 +1084,123 @@ ALTER TABLE world_commands ADD CONSTRAINT check_kind
 -- Pending commands are drained in order each tick.
 CREATE INDEX IF NOT EXISTS world_commands_pending_idx
   ON world_commands (world_id, applied_tick, command_seq);
+
+-- ===========================================================================
+-- SECTION 5 — Stable read models for the Town Archivist
+--
+-- These views deliberately expose world_id as a required query input rather
+-- than attempting to infer a browser session. They omit embeddings, replay
+-- vectors, prompt hashes, raw provider payloads, cookies, and connection data.
+-- The documented MCP workflow always binds an explicit world_id.
+-- ===========================================================================
+
+CREATE OR REPLACE VIEW archivist_memory_sources AS
+SELECT
+  memory.world_id,
+  memory.memory_id,
+  holder.agent_id,
+  holder.agent_key,
+  holder.name AS agent_name,
+  memory.tick AS memory_tick,
+  memory.kind AS memory_kind,
+  left(memory.content, 500) AS memory_excerpt,
+  claim.claim_key,
+  edge.edge_id,
+  edge.source_kind,
+  COALESCE(
+    edge.source_turn_id::STRING,
+    edge.source_event_id::STRING,
+    edge.source_memory_id::STRING
+  ) AS source_id,
+  source_turn.ordinal AS source_turn_ordinal,
+  left(source_turn.player_text, 500) AS source_player_text,
+  left(source_turn.reply, 500) AS source_reply,
+  source_event.tick AS source_event_tick,
+  source_event.kind AS source_event_kind,
+  left(source_event.description, 500) AS source_event_description
+FROM world_memories AS memory
+JOIN world_agents AS holder
+  ON holder.world_id = memory.world_id AND holder.agent_id = memory.agent_id
+LEFT JOIN world_claims AS claim
+  ON claim.world_id = memory.world_id AND claim.claim_id = memory.claim_id
+JOIN memory_source_edges AS edge
+  ON edge.world_id = memory.world_id AND edge.memory_id = memory.memory_id
+LEFT JOIN world_conversation_turns AS source_turn
+  ON source_turn.world_id = edge.world_id AND source_turn.turn_id = edge.source_turn_id
+LEFT JOIN world_events AS source_event
+  ON source_event.world_id = edge.world_id AND source_event.event_id = edge.source_event_id;
+
+CREATE OR REPLACE VIEW archivist_memory_accesses AS
+SELECT
+  access.world_id,
+  access.access_id,
+  access.memory_id,
+  holder.agent_id,
+  holder.agent_key,
+  memory.tick AS memory_tick,
+  memory.kind AS memory_kind,
+  claim.claim_key,
+  access.accessed_tick
+FROM memory_accesses AS access
+JOIN world_memories AS memory
+  ON memory.world_id = access.world_id AND memory.memory_id = access.memory_id
+JOIN world_agents AS holder
+  ON holder.world_id = memory.world_id AND holder.agent_id = memory.agent_id
+LEFT JOIN world_claims AS claim
+  ON claim.world_id = memory.world_id AND claim.claim_id = memory.claim_id;
+
+CREATE OR REPLACE VIEW archivist_cognition AS
+SELECT
+  record.world_id,
+  'cognition'::STRING AS outcome_kind,
+  record.record_id AS outcome_id,
+  record.agent_id,
+  agent.agent_key,
+  record.tick,
+  record.task,
+  record.model_id,
+  record.prompt_version,
+  CASE record.task
+    WHEN 'plan' THEN COALESCE(record.decision->'recalled', '[]'::JSONB)
+    WHEN 'dialogue' THEN jsonb_build_object(
+      'sender', COALESCE(record.decision->'senderRecalledMemoryIds', '[]'::JSONB),
+      'listener', COALESCE(record.decision->'listenerRecalledMemoryIds', '[]'::JSONB)
+    )
+    ELSE '[]'::JSONB
+  END AS recalled_memories,
+  left(CASE record.task
+    WHEN 'plan' THEN COALESCE(record.decision->>'action', record.decision->>'intention', '')
+    WHEN 'reflect' THEN COALESCE(record.decision->>'reflection', '')
+    WHEN 'dialogue' THEN COALESCE(record.decision->>'line', '')
+    WHEN 'strategy' THEN concat_ws(' ', record.decision->>'posture', record.decision->>'tactic')
+    WHEN 'attendance' THEN COALESCE(record.decision->>'response', '')
+    ELSE ''
+  END, 500) AS outcome_summary
+FROM cognition_records AS record
+JOIN world_agents AS agent
+  ON agent.world_id = record.world_id AND agent.agent_id = record.agent_id
+
+UNION ALL
+
+SELECT
+  turn.world_id,
+  'conversation_turn'::STRING AS outcome_kind,
+  turn.turn_id AS outcome_id,
+  session.target_agent_id AS agent_id,
+  agent.agent_key,
+  COALESCE(command.applied_tick, session.opened_tick) AS tick,
+  'player_turn'::STRING AS task,
+  COALESCE(turn.model_id, 'deterministic-fallback') AS model_id,
+  COALESCE(turn.prompt_version, 'unknown') AS prompt_version,
+  COALESCE(turn.structured_outcome->'recalledMemories', '[]'::JSONB) AS recalled_memories,
+  left(COALESCE(turn.reply, ''), 500) AS outcome_summary
+FROM world_conversation_turns AS turn
+JOIN world_conversation_sessions AS session
+  ON session.world_id = turn.world_id AND session.conversation_id = turn.conversation_id
+JOIN world_agents AS agent
+  ON agent.world_id = session.world_id AND agent.agent_id = session.target_agent_id
+LEFT JOIN world_commands AS command
+  ON command.world_id = turn.world_id
+ AND command.kind = 'conversation_turn'
+ AND command.payload->>'turnId' = turn.turn_id::STRING
+WHERE turn.status IN ('completed', 'fallback');

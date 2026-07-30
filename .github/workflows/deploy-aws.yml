@@ -1,0 +1,410 @@
+name: Validate and deploy AWS production
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-aws.yml'
+      - '.dockerignore'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'engine/**'
+      - 'infra/aws/**'
+      - 'scenario/**'
+      - 'scheduler/**'
+      - 'web/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-aws.yml'
+      - '.dockerignore'
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'engine/**'
+      - 'infra/aws/**'
+      - 'scenario/**'
+      - 'scheduler/**'
+      - 'web/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECS_CLUSTER: hollowmere
+  WEB_REPOSITORY: hollowmere-web
+  WEB_SERVICE: hollowmere-web
+  WEB_TASK_FAMILY: hollowmere-web
+  SCHEDULER_REPOSITORY: hollowmere-scheduler
+  SCHEDULER_SERVICE: hollowmere-scheduler
+  SCHEDULER_TASK_FAMILY: hollowmere-scheduler
+  PRODUCTION_URL: ${{ vars.HOLLOWMERE_AWS_PRODUCTION_URL }}
+
+jobs:
+  validate:
+    name: Validate application and AWS infrastructure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            infra/aws/package-lock.json
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Install infrastructure dependencies
+        run: npm ci --prefix infra/aws
+
+      - name: Start isolated CockroachDB
+        run: |
+          docker run --rm --detach \
+            --name hollowmere-aws-ci \
+            --publish 127.0.0.1:26257:26257 \
+            cockroachdb/cockroach:v26.2.4 \
+            start-single-node \
+            --insecure \
+            --store=type=mem,size=768MiB \
+            --cache=128MiB \
+            --max-sql-memory=128MiB
+
+          for attempt in $(seq 1 30); do
+            if docker exec hollowmere-aws-ci ./cockroach sql --insecure --execute 'SELECT 1' > /dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs hollowmere-aws-ci
+          exit 1
+
+      - name: Apply test database schema
+        env:
+          DATABASE_URL: postgresql://root@127.0.0.1:26257/hollowmere?sslmode=disable
+        run: npm run db:migrate -- --fresh
+
+      - name: Validate application
+        env:
+          DATABASE_URL: postgresql://root@127.0.0.1:26257/hollowmere?sslmode=disable
+          LOG_LEVEL: silent
+        run: npm run check
+
+      - name: Validate CDK application
+        run: npm run check --prefix infra/aws
+
+      - name: Stop isolated CockroachDB
+        if: always()
+        run: docker stop hollowmere-aws-ci || true
+
+  deploy:
+    name: Deploy scheduler, then web
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
+      vars.AWS_DEPLOY_ENABLED == 'true'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: ${{ env.PRODUCTION_URL }}
+    concurrency:
+      group: hollowmere-aws-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.HOLLOWMERE_AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: hollowmere-${{ github.run_id }}
+
+      - name: Resolve ECR registry
+        id: aws
+        run: |
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          echo "registry=${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Sign in to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.aws.outputs.registry }}
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Check for an idempotent image rerun
+        id: existing
+        env:
+          DEPLOYED_TAG: deployed-${{ github.sha }}
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: |
+          image_pair_exists() {
+            local repository="$1"
+            local sha_exists=false
+            local deployed_exists=false
+
+            if aws ecr describe-images --repository-name "$repository" --image-ids imageTag="$IMAGE_TAG" > /dev/null 2>&1; then
+              sha_exists=true
+            fi
+            if aws ecr describe-images --repository-name "$repository" --image-ids imageTag="$DEPLOYED_TAG" > /dev/null 2>&1; then
+              deployed_exists=true
+            fi
+
+            if [[ "$sha_exists" != "$deployed_exists" ]]; then
+              echo "Partial immutable tag pair in $repository; refusing an ambiguous rerun." >&2
+              return 2
+            fi
+            [[ "$sha_exists" == "true" ]]
+          }
+
+          record_pair_state() {
+            local output_name="$1"
+            local repository="$2"
+            local status
+
+            if image_pair_exists "$repository"; then
+              echo "${output_name}=true" >> "$GITHUB_OUTPUT"
+              return 0
+            else
+              status=$?
+            fi
+            if [[ "$status" -eq 2 ]]; then
+              return 2
+            fi
+            echo "${output_name}=false" >> "$GITHUB_OUTPUT"
+          }
+
+          record_pair_state web "$WEB_REPOSITORY"
+          record_pair_state scheduler "$SCHEDULER_REPOSITORY"
+
+      - name: Build and push web image
+        if: steps.existing.outputs.web != 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: web
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.aws.outputs.registry }}/${{ env.WEB_REPOSITORY }}:sha-${{ github.sha }}
+            ${{ steps.aws.outputs.registry }}/${{ env.WEB_REPOSITORY }}:deployed-${{ github.sha }}
+          cache-from: type=gha,scope=hollowmere-aws-web
+          cache-to: type=gha,mode=max,scope=hollowmere-aws-web
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Build and push scheduler image
+        if: steps.existing.outputs.scheduler != 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: scheduler
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.aws.outputs.registry }}/${{ env.SCHEDULER_REPOSITORY }}:sha-${{ github.sha }}
+            ${{ steps.aws.outputs.registry }}/${{ env.SCHEDULER_REPOSITORY }}:deployed-${{ github.sha }}
+          cache-from: type=gha,scope=hollowmere-aws-scheduler
+          cache-to: type=gha,mode=max,scope=hollowmere-aws-scheduler
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Resolve immutable image digests
+        id: images
+        env:
+          ECR_REGISTRY: ${{ steps.aws.outputs.registry }}
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: |
+          web_digest=$(aws ecr describe-images \
+            --repository-name "$WEB_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+          scheduler_digest=$(aws ecr describe-images \
+            --repository-name "$SCHEDULER_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          echo "web_digest=$web_digest" >> "$GITHUB_OUTPUT"
+          echo "scheduler_digest=$scheduler_digest" >> "$GITHUB_OUTPUT"
+          echo "web_image=${ECR_REGISTRY}/${WEB_REPOSITORY}@${web_digest}" >> "$GITHUB_OUTPUT"
+          echo "scheduler_image=${ECR_REGISTRY}/${SCHEDULER_REPOSITORY}@${scheduler_digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Register scheduler task definition
+        id: scheduler_task
+        env:
+          IMAGE: ${{ steps.images.outputs.scheduler_image }}
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$SCHEDULER_TASK_FAMILY" \
+            --query taskDefinition \
+            --output json > scheduler-current.json
+          jq --arg image "$IMAGE" --arg revision "$GITHUB_SHA" '
+            .containerDefinitions[0].image = $image
+            | (.containerDefinitions[0].environment[] | select(.name == "BUILD_REVISION").value) = $revision
+            | del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy
+              )
+          ' scheduler-current.json > scheduler-next.json
+          task_definition=$(aws ecs register-task-definition \
+            --cli-input-json file://scheduler-next.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "arn=$task_definition" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy scheduler and inspect service events
+        env:
+          TASK_DEFINITION: ${{ steps.scheduler_task.outputs.arn }}
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$SCHEDULER_SERVICE" \
+            --task-definition "$TASK_DEFINITION" \
+            --output json > /dev/null
+
+          if ! aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$SCHEDULER_SERVICE"; then
+            aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$SCHEDULER_SERVICE" \
+              --query 'services[0].events[0:15]' \
+              --output table
+            exit 1
+          fi
+
+          aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$SCHEDULER_SERVICE" \
+            --query 'services[0].events[0:5]' \
+            --output table
+
+      - name: Register web task definition
+        id: web_task
+        env:
+          IMAGE: ${{ steps.images.outputs.web_image }}
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$WEB_TASK_FAMILY" \
+            --query taskDefinition \
+            --output json > web-current.json
+          jq --arg image "$IMAGE" --arg revision "$GITHUB_SHA" '
+            .containerDefinitions[0].image = $image
+            | (.containerDefinitions[0].environment[] | select(.name == "BUILD_REVISION").value) = $revision
+            | del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy
+              )
+          ' web-current.json > web-next.json
+          task_definition=$(aws ecs register-task-definition \
+            --cli-input-json file://web-next.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "arn=$task_definition" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy web and wait for healthy targets
+        env:
+          TASK_DEFINITION: ${{ steps.web_task.outputs.arn }}
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$WEB_SERVICE" \
+            --task-definition "$TASK_DEFINITION" \
+            --output json > /dev/null
+
+          if ! aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$WEB_SERVICE"; then
+            aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$WEB_SERVICE" \
+              --query 'services[0].events[0:15]' \
+              --output table
+            exit 1
+          fi
+
+          aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$WEB_SERVICE" \
+            --query 'services[0].events[0:5]' \
+            --output table
+
+      - name: Verify health, readiness, and landing page
+        run: |
+          if [[ -z "$PRODUCTION_URL" ]]; then
+            echo "HOLLOWMERE_AWS_PRODUCTION_URL is required." >&2
+            exit 1
+          fi
+
+          for path in /api/health /api/ready /; do
+            passed=false
+            for attempt in $(seq 1 18); do
+              if curl --fail --silent --show-error --max-time 15 "${PRODUCTION_URL%/}${path}" > /dev/null; then
+                passed=true
+                break
+              fi
+              sleep 10
+            done
+            if [[ "$passed" != "true" ]]; then
+              echo "Smoke check failed: ${PRODUCTION_URL%/}${path}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Publish deployment summary
+        if: always()
+        env:
+          SCHEDULER_DIGEST: ${{ steps.images.outputs.scheduler_digest }}
+          SCHEDULER_TASK_DEFINITION: ${{ steps.scheduler_task.outputs.arn }}
+          WEB_DIGEST: ${{ steps.images.outputs.web_digest }}
+          WEB_TASK_DEFINITION: ${{ steps.web_task.outputs.arn }}
+        run: |
+          {
+            echo "## Hollowmere AWS deployment"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Commit | $GITHUB_SHA |"
+            echo "| Region | $AWS_REGION |"
+            echo "| Scheduler digest | ${SCHEDULER_DIGEST:-not registered} |"
+            echo "| Scheduler task | ${SCHEDULER_TASK_DEFINITION:-not registered} |"
+            echo "| Web digest | ${WEB_DIGEST:-not registered} |"
+            echo "| Web task | ${WEB_TASK_DEFINITION:-not registered} |"
+            echo "| Public URL | ${PRODUCTION_URL:-not configured} |"
+            echo "| Result | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

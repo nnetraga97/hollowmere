@@ -14,6 +14,7 @@
 import { query } from '../database/db.ts';
 import type { Fixed } from '../core/fixedpoint.ts';
 import type { EscalationStage } from '../simulation/tension.ts';
+import type { WorldInferenceProfile } from '../inference/profiles.ts';
 
 export interface WorldSummary {
   worldId: string;
@@ -26,6 +27,7 @@ export interface WorldSummary {
   globalTension: Fixed;
   peaceStreak: number;
   seed: number;
+  inferenceProfile: WorldInferenceProfile;
   timeScale: number;
   timeDebtTicks: number;
   agentsAlive: number;
@@ -36,11 +38,13 @@ export interface WorldSummary {
 export async function getWorldSummary(worldId: string): Promise<WorldSummary | null> {
   const rows = await query<{
     world_id: string; status: string; ending: string | null; current_tick: number;
-    seed: number; time_scale: number; time_debt_ticks: number; day: number; phase: string;
+    seed: number; inference_profile: WorldInferenceProfile; time_scale: number;
+    time_debt_ticks: number; day: number; phase: string;
     escalation_stage: EscalationStage; global_tension: number; peace_streak: number;
     agents_alive: number; inference_calls: number; est_cost_micros: number;
   }>(
-    `SELECT w.world_id, w.status, w.ending, w.current_tick, w.seed, w.time_scale,
+    `SELECT w.world_id, w.status, w.ending, w.current_tick, w.seed,
+            w.inference_profile, w.time_scale,
             w.time_debt_ticks,
             s.day, s.phase, s.escalation_stage, s.global_tension, s.peace_streak,
             (SELECT count(*)::INT8 FROM world_agents a
@@ -67,6 +71,7 @@ export async function getWorldSummary(worldId: string): Promise<WorldSummary | n
     globalTension: row.global_tension,
     peaceStreak: row.peace_streak,
     seed: row.seed,
+    inferenceProfile: row.inference_profile,
     timeScale: row.time_scale,
     timeDebtTicks: row.time_debt_ticks,
     agentsAlive: row.agents_alive,

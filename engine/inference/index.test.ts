@@ -15,6 +15,10 @@ import {
 } from './index.ts';
 import type { CompletionRequest } from './index.ts';
 import {
+  enabledInferenceProfiles, isInferenceProfileEnabled, isSelectableInferenceProfile,
+} from './profiles.ts';
+import { effectiveWorldInferenceProfile, inferenceForProfile } from './world.ts';
+import {
   deriveGroundedClaimSupport, parsePlan, parseReflectionRefs,
 } from '../agents/cognition.ts';
 
@@ -25,6 +29,47 @@ test('only live provider inference is billable', () => {
   assert.equal(isBillableInferenceMode('azure'), true);
   assert.equal(isBillableInferenceMode('stub'), false);
   assert.equal(isBillableInferenceMode('replay'), false);
+});
+
+test('world inference choices are a closed server allowlist', () => {
+  assert.equal(isSelectableInferenceProfile('azure_terra'), true);
+  assert.equal(isSelectableInferenceProfile('bedrock_sonnet'), true);
+  assert.equal(isSelectableInferenceProfile('stub'), false);
+  assert.equal(isSelectableInferenceProfile('arbitrary-model-id'), false);
+});
+
+test('Azure is available by default and one environment flag enables Bedrock', () => {
+  assert.deepEqual(enabledInferenceProfiles(''), ['azure_terra']);
+  assert.deepEqual(enabledInferenceProfiles('false'), ['azure_terra']);
+  assert.deepEqual(enabledInferenceProfiles('true'), ['azure_terra', 'bedrock_sonnet']);
+  assert.equal(isInferenceProfileEnabled('azure_terra', ''), true);
+  assert.equal(isInferenceProfileEnabled('bedrock_sonnet', ''), false);
+  assert.equal(isInferenceProfileEnabled('bedrock_sonnet', 'TRUE'), true);
+});
+
+test('per-world routing is live only after explicit deployment opt-in', () => {
+  assert.equal(effectiveWorldInferenceProfile('azure_terra', 'world'), 'azure_terra');
+  assert.equal(effectiveWorldInferenceProfile('bedrock_sonnet', 'world'), 'bedrock_sonnet');
+  assert.equal(effectiveWorldInferenceProfile('azure_terra', 'stub'), 'stub');
+  assert.equal(effectiveWorldInferenceProfile('bedrock_sonnet', undefined), 'stub');
+});
+
+test('a stored Bedrock profile cannot invoke Bedrock while its deployment flag is off', () => {
+  const previousMode = process.env.INFERENCE_MODE;
+  const previousEnabled = process.env.BEDROCK_ENABLED;
+  process.env.INFERENCE_MODE = 'world';
+  process.env.BEDROCK_ENABLED = 'false';
+  try {
+    assert.throws(
+      () => inferenceForProfile('bedrock_sonnet'),
+      /bedrock_sonnet is disabled/,
+    );
+  } finally {
+    if (previousMode === undefined) delete process.env.INFERENCE_MODE;
+    else process.env.INFERENCE_MODE = previousMode;
+    if (previousEnabled === undefined) delete process.env.BEDROCK_ENABLED;
+    else process.env.BEDROCK_ENABLED = previousEnabled;
+  }
 });
 
 function request(overrides: Partial<CompletionRequest> = {}): CompletionRequest {

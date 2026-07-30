@@ -5,9 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 import { closePool, query } from '../database/db.ts';
 import {
-  getGameSync, queuePlayerMove, queueTimeScale, SessionAccessError,
+  getAgentDetail, getGameSync, queuePlayerMove, queueTimeScale, SessionAccessError,
 } from './game-api.ts';
-import { startConversation } from './conversation.ts';
+import {
+  closeConversation, startConversation, takeConversationTurn,
+} from './conversation.ts';
+import { createStubClient } from '../inference/index.ts';
 import { instantiateWorld } from '../../scenario/instantiate.ts';
 import { loadScenarioFile, publishScenario } from '../../scenario/publish.ts';
 
@@ -20,7 +23,7 @@ describe('session game API against CockroachDB', { skip: !HAS_DB && 'DATABASE_UR
   const worlds: string[] = [];
 
   before(async () => {
-    const scenario = await loadScenarioFile(join(here, '..', 'scenario', 'hollowmere-v2.json'));
+    const scenario = await loadScenarioFile(join(here, '..', '..', 'scenario', 'hollowmere-v2.json'));
     scenarioVersionId = (await publishScenario(scenario)).scenarioVersionId;
   });
 
@@ -70,6 +73,98 @@ describe('session game API against CockroachDB', { skip: !HAS_DB && 'DATABASE_UR
       getGameSync({ ...ref, sessionId: 'not-the-owner' }),
       SessionAccessError,
     );
+  });
+
+  test('agent detail exposes a bounded world-scoped memory trace with recall paths', async () => {
+    const ref = await freshWorld();
+    const [target] = await query<{ agent_id: string; agent_key: string }>(
+      `SELECT agent.agent_id, agent.agent_key
+         FROM world_agents agent
+         JOIN world_players player
+           ON player.world_id = agent.world_id AND player.location_id = agent.location_id
+        WHERE player.world_id = $1 AND player.session_id = $2
+        ORDER BY agent.agent_key LIMIT 1`,
+      [ref.worldId, ref.sessionId],
+    );
+    assert.ok(target);
+    const inference = createStubClient();
+    const first = await startConversation({
+      ...ref, agentKey: target.agent_key, idempotencyKey: crypto.randomUUID(),
+    });
+    const firstTurn = await takeConversationTurn({
+      ...ref,
+      conversationId: first.conversationId,
+      text: 'Remember that I warned you about the chapel ledger.',
+      idempotencyKey: crypto.randomUUID(),
+      inference,
+    });
+    await closeConversation({
+      ...ref,
+      conversationId: first.conversationId,
+      idempotencyKey: crypto.randomUUID(),
+      inference,
+    });
+    const [formed] = await query<{ memory_id: string }>(
+      `SELECT memory.memory_id
+         FROM world_memories memory
+         JOIN memory_source_edges edge
+           ON edge.world_id = memory.world_id AND edge.memory_id = memory.memory_id
+        WHERE memory.world_id = $1 AND memory.agent_id = $2
+          AND edge.source_turn_id = $3`,
+      [ref.worldId, target.agent_id, firstTurn.turn.turnId],
+    );
+    assert.ok(formed);
+
+    const second = await startConversation({
+      ...ref, agentKey: target.agent_key, idempotencyKey: crypto.randomUUID(),
+    });
+    const recalled = await takeConversationTurn({
+      ...ref,
+      conversationId: second.conversationId,
+      text: 'What did I ask you to remember?',
+      idempotencyKey: crypto.randomUUID(),
+      inference,
+    });
+
+    const foreign = await freshWorld();
+    const [foreignAgent] = await query<{ agent_id: string }>(
+      `SELECT agent_id FROM world_agents WHERE world_id = $1 AND agent_key = $2`,
+      [foreign.worldId, target.agent_key],
+    );
+    const [foreignEvent] = await query<{ event_id: string }>(
+      `SELECT event_id FROM world_events WHERE world_id = $1 ORDER BY tick, seq LIMIT 1`,
+      [foreign.worldId],
+    );
+    const foreignContent = 'FOREIGN WORLD MEMORY MUST NEVER APPEAR';
+    const foreignVector = (await inference.embed([foreignContent])).vectors[0]!;
+    const foreignMemoryId = crypto.randomUUID();
+    await query(
+      `INSERT INTO world_memories
+         (world_id, memory_id, agent_id, tick, seq, kind, content, embedding, importance)
+       VALUES ($1, $2, $3, 0, 9900002, 'observation', $4, $5, 10000)`,
+      [foreign.worldId, foreignMemoryId, foreignAgent!.agent_id, foreignContent,
+        `[${foreignVector.join(',')}]`],
+    );
+    await query(
+      `INSERT INTO memory_source_edges
+         (world_id, edge_id, memory_id, source_kind, source_event_id)
+       VALUES ($1, $2, $3, 'event', $4)`,
+      [foreign.worldId, crypto.randomUUID(), foreignMemoryId, foreignEvent!.event_id],
+    );
+
+    const detail = await getAgentDetail(ref, target.agent_key);
+    assert.ok(detail.memoryTrace.length > 0 && detail.memoryTrace.length <= 5);
+    const memory = detail.memoryTrace.find((item) => item.memoryId === formed.memory_id);
+    assert.ok(memory);
+    assert.equal(memory.sourceKind, 'turn');
+    assert.equal(memory.sourceId, firstTurn.turn.turnId);
+    assert.equal(memory.recalledByTurnId, recalled.turn.turnId);
+    assert.ok(memory.candidatePaths.length > 0);
+    assert.ok(memory.formedTick >= 0);
+    assert.ok(memory.lastAccessedTick != null);
+    assert.ok(memory.excerpt.length > 0 && memory.excerpt.length <= 220);
+    const serialized = JSON.stringify(detail.memoryTrace);
+    assert.doesNotMatch(serialized, /FOREIGN WORLD MEMORY|embedding|systemPrompt|userPrompt/);
   });
 
   test('movement applies immediately, records its tick, and replays idempotently', async () => {

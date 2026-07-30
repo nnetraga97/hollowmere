@@ -30,6 +30,9 @@ export const DEFAULT_WEIGHTS: RetrievalWeights = {
   relevance: SCALE,
 };
 
+export const RETRIEVAL_CANDIDATE_PATHS = ['ann', 'importance', 'recency'] as const;
+export type RetrievalCandidatePath = typeof RETRIEVAL_CANDIDATE_PATHS[number];
+
 export interface RetrievedMemory {
   memoryId: string;
   kind: string;
@@ -41,6 +44,8 @@ export interface RetrievedMemory {
   claimId: string | null;
   /** True when a durable source edge proves this memory came from an event/turn. */
   grounded: boolean;
+  /** Every hybrid draw that supplied this candidate. */
+  candidatePaths: RetrievalCandidatePath[];
   /** Component scores, retained so retrieval decisions can be explained. */
   recency: Fixed;
   relevance: Fixed;
@@ -105,6 +110,9 @@ interface CandidateRow {
   grounded: boolean;
   last_accessed_tick: number | null;
   distance: number;
+  from_ann: boolean;
+  from_importance: boolean;
+  from_recency: boolean;
 }
 
 /**
@@ -153,10 +161,18 @@ export async function retrieveMemories(
        ORDER BY tick DESC, seq DESC
        LIMIT $5
     ),
+    candidate_draw AS (
+      SELECT memory_id, 'ann' AS candidate_path FROM nearest
+      UNION ALL SELECT memory_id, 'importance' AS candidate_path FROM most_important
+      UNION ALL SELECT memory_id, 'recency' AS candidate_path FROM most_recent
+    ),
     candidate AS (
-      SELECT memory_id FROM nearest
-      UNION SELECT memory_id FROM most_important
-      UNION SELECT memory_id FROM most_recent
+      SELECT memory_id,
+             bool_or(candidate_path = 'ann') AS from_ann,
+             bool_or(candidate_path = 'importance') AS from_importance,
+             bool_or(candidate_path = 'recency') AS from_recency
+        FROM candidate_draw
+       GROUP BY memory_id
     )
     -- world_memories is append-only history, so its creation tick is the same
     -- "tick" column that carries the (tick, seq) total order.
@@ -166,6 +182,7 @@ export async function retrieveMemories(
                     WHERE edge.world_id = m.world_id AND edge.memory_id = m.memory_id
                       AND edge.source_kind IN ('event', 'turn')) AS grounded,
            m.embedding <=> $3 AS distance,
+           c.from_ann, c.from_importance, c.from_recency,
            (SELECT max(a.accessed_tick)
               FROM memory_accesses a
              WHERE a.world_id = $1 AND a.memory_id = m.memory_id) AS last_accessed_tick
@@ -207,6 +224,7 @@ export async function retrieveMemories(
       subjectAgentId: row.subject_agent_id,
       claimId: row.claim_id,
       grounded: row.grounded,
+      candidatePaths: candidatePaths(row),
       recency,
       relevance,
       score,
@@ -220,6 +238,14 @@ export async function retrieveMemories(
   );
 
   return scored.slice(0, limit);
+}
+
+function candidatePaths(row: CandidateRow): RetrievalCandidatePath[] {
+  return [
+    ...(row.from_ann ? ['ann' as const] : []),
+    ...(row.from_importance ? ['importance' as const] : []),
+    ...(row.from_recency ? ['recency' as const] : []),
+  ];
 }
 
 /**

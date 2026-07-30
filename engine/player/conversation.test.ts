@@ -124,7 +124,7 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
 
   before(async () => {
     scenarioVersionId = (await publishScenario(
-      await loadScenarioFile(join(here, '..', 'scenario', 'hollowmere-v2.json')),
+      await loadScenarioFile(join(here, '..', '..', 'scenario', 'hollowmere-v2.json')),
     )).scenarioVersionId;
   });
   after(closePool);
@@ -340,18 +340,18 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     assert.match(durable[0]!.content, /I will ruin you/);
 
     // Fill and overrun the old latest-eight window. These memories are newer
-    // and maximally important but have no player-turn provenance, so the pinned
-    // relationship slot must still carry the threat into the next prompt.
-    const fillerTexts = Array.from({ length: 12 }, (_, index) =>
+    // and maximally important but have no player-turn provenance, so durable
+    // relationship retrieval must still carry the threat into the next prompt.
+    const fillerTexts = Array.from({ length: 60 }, (_, index) =>
       `Routine market observation number ${index + 1}.`);
-    const fillerVectors = await stub.embed(fillerTexts);
+    const retrievalVector = Array.from({ length: 1024 }, () => 1);
     for (const [index, text] of fillerTexts.entries()) {
       await query(
         `INSERT INTO world_memories
            (world_id, agent_id, tick, seq, kind, content, embedding, importance)
          VALUES ($1, $2, $3, $4, 'observation', $5, $6, 10000)`,
         [ref.worldId, durable[0]!.agent_id, index + 1, 8_000_000 + index,
-          text, `[${fillerVectors.vectors[index]!.join(',')}]`],
+          text, `[${retrievalVector.join(',')}]`],
       );
     }
     await query(`UPDATE worlds SET current_tick = 27 WHERE world_id = $1`, [ref.worldId]);
@@ -365,6 +365,10 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     let speechActChoices: readonly string[] = [];
     const observing = {
       ...stub,
+      async embed(texts: readonly string[]) {
+        const embedded = await stub.embed(texts);
+        return { ...embedded, vectors: texts.map(() => retrievalVector) };
+      },
       async complete(request: Parameters<typeof stub.complete>[0]) {
         if (request.task === 'conversation_turn') {
           systemPrompt = request.system;
@@ -374,7 +378,11 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
         return stub.complete(request);
       },
     };
-    await takeConversationTurn({
+    const recalled = await takeConversationTurn({
+      worldId: ref.worldId, sessionId: ref.sessionId, conversationId: second.conversationId,
+      text: 'Do you remember me?', idempotencyKey: 'turn-2', inference: observing,
+    });
+    const replay = await takeConversationTurn({
       worldId: ref.worldId, sessionId: ref.sessionId, conversationId: second.conversationId,
       text: 'Do you remember me?', idempotencyKey: 'turn-2', inference: observing,
     });
@@ -403,6 +411,39 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     assert.ok(prompt.recalledMemories.length > 0);
     assert.ok(prompt.recalledMemories.some((memory) => memory.includes('I will ruin you')),
       'the salient player memory must survive restart and more than eight newer memories');
+    assert.ok(recalled.turn.recalledMemories.length > 1,
+      'the completed turn should identify every memory supplied to the prompt');
+    const durableReference = recalled.turn.recalledMemories.find(
+      (memory) => memory.memoryId === durable[0]!.memory_id,
+    );
+    assert.deepEqual(durableReference?.candidatePaths, ['pinned_anchor'],
+      'the durable relationship memory should identify the separately pinned path');
+    assert.deepEqual(replay.turn.recalledMemories, recalled.turn.recalledMemories,
+      'an idempotent replay must expose the exact recorded memory references');
+
+    const stored = await query<{ structured_outcome: unknown }>(
+      `SELECT structured_outcome FROM world_conversation_turns
+        WHERE world_id = $1 AND turn_id = $2`,
+      [ref.worldId, recalled.turn.turnId],
+    );
+    const storedJson = JSON.stringify(stored[0]!.structured_outcome);
+    assert.deepEqual(
+      (stored[0]!.structured_outcome as {
+        recalledMemories: typeof recalled.turn.recalledMemories;
+      }).recalledMemories,
+      recalled.turn.recalledMemories,
+      'the structured outcome must persist the memory IDs and candidate paths',
+    );
+    assert.doesNotMatch(storedJson, /embedding|systemPrompt|userPrompt|recalledMemoryText/);
+
+    const attachedIds = recalled.turn.recalledMemories.map((memory) => memory.memoryId);
+    const attached = await query<{ count: number }>(
+      `SELECT count(*)::INT8 AS count FROM world_memories
+        WHERE world_id = $1 AND memory_id = ANY($2::UUID[])`,
+      [ref.worldId, attachedIds],
+    );
+    assert.equal(attached[0]!.count, attachedIds.length,
+      'every persisted reference must resolve inside the same world');
     assert.ok(Array.isArray(prompt.knowledgeItems));
     assert.doesNotMatch(userPrompt, /audibleWitnesses/);
     assert.equal(prompt.latestPlayerUtterance, 'Do you remember me?');
@@ -437,8 +478,40 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
       text: 'Good evening.', idempotencyKey: 'turn', inference: observing,
     });
     assert.equal(result.turn.fallback, false);
+    assert.deepEqual(result.turn.recalledMemories, []);
     assert.equal(embeddingCalls, 0, 'an empty memory set needs no query embedding');
     assert.equal(completionCalls, 1);
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
+  test('a turn records one recalled memory and every path that supplied it', async () => {
+    const ref = await freshWorld(717);
+    const stub = createStubClient();
+    const [agent] = await query<{ agent_id: string }>(
+      `SELECT agent_id FROM world_agents WHERE world_id = $1 AND agent_key = $2`,
+      [ref.worldId, ref.agentKey],
+    );
+    const content = 'A single grounded observation about the outsider.';
+    const vector = (await stub.embed([content])).vectors[0]!;
+    await query(
+      `INSERT INTO world_memories
+         (world_id, agent_id, tick, seq, kind, content, embedding, importance)
+       VALUES ($1, $2, 0, 9900001, 'observation', $3, $4, 5000)`,
+      [ref.worldId, agent!.agent_id, content, `[${vector.join(',')}]`],
+    );
+
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const result = await takeConversationTurn({
+      ...ref,
+      conversationId: started.conversationId,
+      text: 'What do you recall?',
+      idempotencyKey: 'turn',
+      inference: stub,
+    });
+
+    assert.equal(result.turn.recalledMemories.length, 1);
+    assert.deepEqual(result.turn.recalledMemories[0]!.candidatePaths,
+      ['ann', 'importance', 'recency']);
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
   });
 

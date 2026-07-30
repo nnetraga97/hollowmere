@@ -14,6 +14,7 @@ export interface PlayerEntry {
   playerName?: string;
   background?: string;
   sympathyFactionKey?: 'aldreth' | 'corvane' | 'unaligned' | null;
+  inferenceProfile?: 'azure_terra' | 'bedrock_sonnet';
   seed?: number;
 }
 

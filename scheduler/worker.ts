@@ -10,7 +10,7 @@
 import { hostname } from 'node:os';
 
 import { closePool } from '../engine/database/db.ts';
-import { createInferenceClient } from '../engine/inference/index.ts';
+import { inferenceForWorld } from '../engine/inference/world.ts';
 import { errorLogFields, logError, logInfo } from '../engine/core/log.ts';
 import { createScheduler } from './loop.ts';
 
@@ -19,7 +19,7 @@ process.env.SERVICE_NAME ??= 'hollowmere-scheduler';
 const owner = process.env.SCHEDULER_OWNER ?? `${hostname()}:${process.pid}`;
 
 const scheduler = createScheduler({
-  inference: createInferenceClient(),
+  inferenceForWorld,
   owner,
   tickIntervalMs: Number(process.env.TICK_INTERVAL_MS ?? 5_000),
   maxWorlds: Number(process.env.SCHEDULER_MAX_WORLDS ?? 25),

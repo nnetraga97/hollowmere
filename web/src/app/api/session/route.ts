@@ -3,8 +3,10 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import {
   assertSession, errorLogFields, getGameSnapshot, getTownMap, instantiateWorld, logInfo,
-  logWarn, query, resumeSessionWorld, setPlayerProfile,
+  isInferenceProfileEnabled, isSelectableInferenceProfile, logWarn, query,
+  resumeSessionWorld, setPlayerProfile,
 } from '@/server/engine';
+import type { SelectableInferenceProfile } from '@/server/engine';
 import { jsonBody, requireSameOrigin, routeError } from '@/server/http';
 import { clearSession, readSession, writeSession } from '@/server/session';
 
@@ -15,6 +17,7 @@ interface SessionBody {
   playerName?: string;
   background?: string;
   sympathyFactionKey?: string | null;
+  inferenceProfile?: SelectableInferenceProfile;
 }
 
 const FACTION_KEYS = new Set(['aldreth', 'corvane', 'unaligned']);
@@ -59,6 +62,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (!isSelectableInferenceProfile(body.inferenceProfile)
+      || !isInferenceProfileEnabled(body.inferenceProfile)) {
+      return Response.json({ error: 'choose an available inference profile' }, { status: 400 });
+    }
     const seed = Number.isSafeInteger(body.seed) ? Math.trunc(body.seed as number) : randomInt(1, 2_147_483_647);
     const scenarioVersion = process.env.SCENARIO_VERSION ?? 'hollowmere-v2';
     const versions = await query<{ scenario_version_id: string }>(
@@ -72,10 +79,16 @@ export async function POST(request: NextRequest) {
       sessionId,
       playerName,
       playerProfile,
+      inferenceProfile: body.inferenceProfile,
     });
     const ref = { sessionId, worldId: created.worldId };
     await writeSession(ref);
-    logInfo('session_created', { worldId: ref.worldId, seed, scenarioVersion });
+    logInfo('session_created', {
+      worldId: ref.worldId,
+      seed,
+      scenarioVersion,
+      inferenceProfile: body.inferenceProfile,
+    });
     return NextResponse.json({
       session: { worldId: ref.worldId },
       map: await getTownMap(ref),

@@ -30,7 +30,8 @@ import { sweepExpiredConversations } from '../engine/player/conversation.ts';
 import { errorLogFields, logEntry } from '../engine/core/log.ts';
 
 export interface SchedulerOptions {
-  inference: InferenceClient;
+  inference?: InferenceClient;
+  inferenceForWorld?: (worldId: string) => Promise<InferenceClient>;
   /** Identifies this process in the lease. */
   owner: string;
   /** Real milliseconds per tick at 1×. */
@@ -63,6 +64,9 @@ export interface Scheduler {
 }
 
 export function createScheduler(options: SchedulerOptions): Scheduler {
+  if (!options.inference && !options.inferenceForWorld) {
+    throw new Error('scheduler requires inference or inferenceForWorld');
+  }
   const tickIntervalMs = options.tickIntervalMs ?? 5_000;
   const leaseTtlMs = options.leaseTtlMs ?? 30_000;
   const pollIntervalMs = options.pollIntervalMs ?? 2_000;
@@ -116,13 +120,16 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
     let lastSweep = 0;
 
     try {
+      const inference = options.inferenceForWorld
+        ? await options.inferenceForWorld(worldId)
+        : options.inference!;
       for (;;) {
         if (!running) break;
 
         const started = Date.now();
         const report = await runWithLease(
           worldId,
-          () => runTick({ worldId, inference: options.inference }),
+          () => runTick({ worldId, inference }),
         );
 
         const elapsed = Date.now() - started;
@@ -160,7 +167,7 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
           while (running && await readTimeDebt(worldId) > 0) {
             const charged = await runWithLease(
               worldId,
-              () => runTick({ worldId, inference: options.inference, debtTick: true }),
+              () => runTick({ worldId, inference, debtTick: true }),
             );
           log({
             level: 'info', event: 'conversation_tick', worldId, tick: charged.tick,

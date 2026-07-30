@@ -27,7 +27,7 @@ import { loadScenarioFile, publishScenario } from '../../scenario/publish.ts';
 import { instantiateWorld } from '../../scenario/instantiate.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SCENARIO_PATH = join(here, '..', 'scenario', 'hollowmere-v2.json');
+const SCENARIO_PATH = join(here, '..', '..', 'scenario', 'hollowmere-v2.json');
 const DIMS = 1024;
 
 describe('distance conversion', () => {
@@ -64,9 +64,11 @@ dbSuite('retrieval against CockroachDB', () => {
   let worldId: string;
   let agentId: string;
   let otherAgentId: string;
+  let scenarioVersionId: string;
 
   before(async () => {
     const published = await publishScenario(await loadScenarioFile(SCENARIO_PATH));
+    scenarioVersionId = published.scenarioVersionId;
     const world = await instantiateWorld({
       scenarioVersionId: published.scenarioVersionId,
       seed: 4242,
@@ -162,6 +164,10 @@ dbSuite('retrieval against CockroachDB', () => {
         (results[0]?.relevance ?? 0) > (results[2]?.relevance ?? 0),
         'relevance should be strictly ordered',
       );
+      assert.ok(results.every((memory) => memory.candidatePaths.includes('ann')));
+      assert.ok(results.some((memory) =>
+        memory.candidatePaths.includes('ann') && memory.candidatePaths.includes('importance')),
+      'a memory supplied by multiple draws must retain every matching path');
     } finally {
       client.release();
     }
@@ -180,6 +186,21 @@ dbSuite('retrieval against CockroachDB', () => {
         /granary books/,
         'the most important memory should win when only importance counts',
       );
+      assert.ok(byImportance[0]?.candidatePaths.includes('importance'));
+    } finally {
+      client.release();
+    }
+  });
+
+  test('the recency draw is retained as candidate provenance', async () => {
+    const client = await getPool().connect();
+    try {
+      const [mostRecent] = await retrieveMemories(client, {
+        worldId, agentId, tick: 100, limit: 1,
+        queryVector: stubEmbed('unrelated query', DIMS),
+        weights: { recency: SCALE, importance: 0, relevance: 0 },
+      });
+      assert.ok(mostRecent?.candidatePaths.includes('recency'));
     } finally {
       client.release();
     }
@@ -223,6 +244,44 @@ dbSuite('retrieval against CockroachDB', () => {
       assert.equal(matches.length, 1, 'memories must not leak between agents');
     } finally {
       client.release();
+    }
+  });
+
+  test('never returns another world\'s memories or provenance', async () => {
+    const otherWorld = await instantiateWorld({
+      scenarioVersionId,
+      seed: 4243,
+      sessionId: `retrieval-other-world-${Date.now()}`,
+    });
+    try {
+      const [otherAgent] = await query<{ agent_id: string }>(
+        `SELECT agent_id FROM world_agents WHERE world_id = $1 AND agent_key = 'wyn_thatcher'`,
+        [otherWorld.worldId],
+      );
+      const client = await getPool().connect();
+      try {
+        await insertMemory(client, {
+          worldId: otherWorld.worldId,
+          agentId: otherAgent!.agent_id,
+          tick: 999,
+          seq: 999,
+          content: 'rowan corvane was seen near the quay that night',
+          importance: 10_000,
+        });
+        const foreign = await query<{ memory_id: string }>(
+          `SELECT memory_id FROM world_memories WHERE world_id = $1 AND agent_id = $2`,
+          [otherWorld.worldId, otherAgent!.agent_id],
+        );
+        const results = await retrieveMemories(client, {
+          worldId, agentId, tick: 1_000, limit: 20,
+          queryVector: stubEmbed('rowan corvane quay night', DIMS),
+        });
+        assert.ok(!results.some((memory) => memory.memoryId === foreign[0]!.memory_id));
+      } finally {
+        client.release();
+      }
+    } finally {
+      await query(`DELETE FROM worlds WHERE world_id = $1`, [otherWorld.worldId]);
     }
   });
 
