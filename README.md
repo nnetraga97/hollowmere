@@ -152,10 +152,10 @@ ACR's admin account is disabled; GitHub stores only the Azure client, tenant,
 and subscription identifiers needed for OIDC. Application credentials remain
 in Key Vault and are not copied into GitHub.
 
-Database migration is intentionally separate from image deployment. Apply and
-verify an idempotent migration with a DDL-capable database identity before
-deploying code that requires a new schema; the application containers use a
-restricted runtime database role.
+Production deployment builds a dedicated migration image and runs it with the
+DDL-capable migrator identity before either application service is updated. A
+failed migration blocks the rollout. The web and scheduler containers continue
+to use the restricted runtime database role and never receive migration credentials.
 
 To start the same production workflow manually:
 

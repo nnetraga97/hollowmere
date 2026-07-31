@@ -273,6 +273,10 @@ describe("HollowmereRuntimeStack", () => {
     assert.ok(deployPolicy);
     const deployJson = JSON.stringify(deployPolicy);
     assert.match(deployJson, /ecs:RegisterTaskDefinition/);
+    assert.match(deployJson, /ecs:RunTask/);
+    assert.match(deployJson, /ecs:DescribeTasks/);
+    assert.match(deployJson, /MigrationExecutionRole/);
+    assert.match(deployJson, /MigrationTaskRole/);
     assert.match(deployJson, /iam:PassRole/);
     assert.match(deployJson, /ecs-tasks\.amazonaws\.com/);
     assert.doesNotMatch(deployJson, /AdministratorAccess/);

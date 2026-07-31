@@ -1,0 +1,2 @@
+ALTER TABLE world_player_evidence
+  ADD COLUMN IF NOT EXISTS role STRING NULL;

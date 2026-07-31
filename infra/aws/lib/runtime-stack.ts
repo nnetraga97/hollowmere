@@ -389,6 +389,7 @@ export class HollowmereRuntimeStack extends Stack {
       schedulerService,
       webRoles,
       schedulerRoles,
+      migrationRoles,
     );
 
     new CfnOutput(this, "ClusterName", { value: cluster.clusterName });
@@ -749,11 +750,20 @@ export class HollowmereRuntimeStack extends Stack {
     schedulerService: ecs.IService,
     webRoles: ServiceRoles,
     schedulerRoles: ServiceRoles,
+    migrationRoles: ServiceRoles,
   ): void {
     const deployServices = new iam.PolicyStatement({
       sid: "DeployHollowmereServices",
       actions: ["ecs:DescribeServices", "ecs:UpdateService"],
       resources: [webService.serviceArn, schedulerService.serviceArn],
+    });
+    const runMigration = new iam.PolicyStatement({
+      sid: "RunHollowmereMigration",
+      actions: ["ecs:RunTask", "ecs:DescribeTasks"],
+      resources: ["*"],
+      conditions: {
+        ArnEquals: { "ecs:cluster": cluster.clusterArn },
+      },
     });
     const registerTaskDefinitions = new iam.PolicyStatement({
       sid: "RegisterHollowmereTaskDefinitions",
@@ -771,6 +781,8 @@ export class HollowmereRuntimeStack extends Stack {
         webRoles.task.roleArn,
         schedulerRoles.execution.roleArn,
         schedulerRoles.task.roleArn,
+        migrationRoles.execution.roleArn,
+        migrationRoles.task.roleArn,
       ],
     });
     const describeCluster = new iam.PolicyStatement({
@@ -783,6 +795,7 @@ export class HollowmereRuntimeStack extends Stack {
       roles: [role],
       statements: [
         deployServices,
+        runMigration,
         registerTaskDefinitions,
         passTaskRoles,
         describeCluster,
@@ -791,7 +804,7 @@ export class HollowmereRuntimeStack extends Stack {
     Validations.of(policy).acknowledge({
       id: "AwsSolutions-IAM5[Resource::*]",
       reason:
-        "ECS RegisterTaskDefinition and DescribeTaskDefinition do not support resource-level permissions; service updates and PassRole remain exact-resource scoped.",
+        "ECS task-definition registration and the one-off migration task need wildcard resources where stable ARNs are unavailable; migration execution is constrained to the exact Hollowmere cluster, while service updates and PassRole remain exact-resource scoped.",
     });
   }
 }

@@ -7,8 +7,10 @@ on:
       - '.github/workflows/deploy-production.yml'
       - '.dockerignore'
       - 'Dockerfile'
+      - 'db/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/migrate.ts'
       - 'tsconfig.json'
       - 'engine/**'
       - 'scenario/**'
@@ -20,8 +22,10 @@ on:
       - '.github/workflows/deploy-production.yml'
       - '.dockerignore'
       - 'Dockerfile'
+      - 'db/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/migrate.ts'
       - 'tsconfig.json'
       - 'engine/**'
       - 'scenario/**'
@@ -40,6 +44,7 @@ env:
   # deployment; changing this one value completes the upgrade after quota lands.
   AZURE_PROFILE_DEPLOYMENT: hollowmere-gpt-5-4-mini
   AZURE_RESOURCE_GROUP: hollowmere-prod-rg
+  MIGRATION_JOB: hollowmere-migration
   WEB_APP: hollowmere-web
   SCHEDULER_APP: hollowmere-scheduler
   PRODUCTION_URL: https://hollowmere-web.victorioussand-d8121435.eastus.azurecontainerapps.io
@@ -171,8 +176,73 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
+      - name: Build and push migration image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migration
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ACR_SERVER }}/hollowmere-migration:${{ github.sha }}
+          cache-from: type=gha,scope=hollowmere-migration
+          cache-to: type=gha,mode=max,scope=hollowmere-migration
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
       - name: Install Container Apps CLI extension
         run: az extension add --name containerapp --upgrade --yes
+
+      - name: Run production database migration
+        id: migration
+        run: |
+          az containerapp job update \
+            --name "$MIGRATION_JOB" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$ACR_SERVER/hollowmere-migration:$GITHUB_SHA" \
+            --replica-timeout 1800 \
+            --only-show-errors \
+            --output none
+
+          execution=$(az containerapp job start \
+            --name "$MIGRATION_JOB" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query name \
+            --output tsv)
+          if [[ -z "$execution" ]]; then
+            echo "Migration job did not return an execution name." >&2
+            exit 1
+          fi
+          echo "execution=$execution" >> "$GITHUB_OUTPUT"
+
+          for attempt in $(seq 1 180); do
+            state=$(az containerapp job execution show \
+              --name "$MIGRATION_JOB" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --job-execution-name "$execution" \
+              --query properties.status \
+              --output tsv)
+            case "$state" in
+              Succeeded)
+                echo "Production migration succeeded: $execution"
+                exit 0
+                ;;
+              Failed)
+                az containerapp job execution show \
+                  --name "$MIGRATION_JOB" \
+                  --resource-group "$AZURE_RESOURCE_GROUP" \
+                  --job-execution-name "$execution" \
+                  --output table
+                exit 1
+                ;;
+            esac
+            echo "Waiting for migration $execution ($attempt/180): state=$state"
+            sleep 10
+          done
+
+          echo "Migration execution timed out: $execution" >&2
+          exit 1
 
       - name: Deploy scheduler
         run: |
@@ -290,6 +360,7 @@ jobs:
             echo '## Production deployment'
             echo
             echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Migration: \`${{ steps.migration.outputs.execution }}\`"
             echo "- Web revision: \`$web_revision\`"
             echo "- Scheduler revision: \`$scheduler_revision\`"
             echo "- URL: $PRODUCTION_URL"

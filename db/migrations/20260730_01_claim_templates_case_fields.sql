@@ -1,0 +1,4 @@
+ALTER TABLE claim_templates
+  ADD COLUMN IF NOT EXISTS kind STRING NOT NULL DEFAULT 'accusation',
+  ADD COLUMN IF NOT EXISTS subject_slot STRING NULL,
+  ADD COLUMN IF NOT EXISTS initially_locked BOOL NOT NULL DEFAULT false;

@@ -1,0 +1,2 @@
+ALTER TABLE world_culprit
+  ADD COLUMN IF NOT EXISTS case_state JSONB NOT NULL DEFAULT '{}';

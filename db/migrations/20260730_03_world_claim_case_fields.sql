@@ -1,0 +1,3 @@
+ALTER TABLE world_claims
+  ADD COLUMN IF NOT EXISTS kind STRING NOT NULL DEFAULT 'accusation',
+  ADD COLUMN IF NOT EXISTS initially_locked BOOL NOT NULL DEFAULT false;
