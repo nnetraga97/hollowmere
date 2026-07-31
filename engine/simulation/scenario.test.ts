@@ -291,6 +291,7 @@ dbSuite('publish and instantiate', () => {
       agents: number; relationships: number; factions: number;
       claims: number; rumors: number; belief_updates: number; faction_state: number;
       case_evidence: number; opening_evidence: number; inference_profile: string;
+      player_location: string;
     }>(
       `SELECT
          (SELECT count(*)::INT8 FROM world_agents WHERE world_id = $1) AS agents,
@@ -303,7 +304,11 @@ dbSuite('publish and instantiate', () => {
          (SELECT count(*)::INT8 FROM world_player_evidence
            WHERE world_id = $1 AND role = 'tamper_sign') AS opening_evidence,
          (SELECT count(*)::INT8 FROM world_faction_state WHERE world_id = $1) AS faction_state,
-         (SELECT inference_profile FROM worlds WHERE world_id = $1) AS inference_profile`,
+         (SELECT inference_profile FROM worlds WHERE world_id = $1) AS inference_profile,
+         (SELECT location.location_key FROM world_players player
+           JOIN world_locations location
+             ON location.world_id = player.world_id AND location.location_id = player.location_id
+          WHERE player.world_id = $1) AS player_location`,
       [world.worldId],
     );
 
@@ -318,6 +323,7 @@ dbSuite('publish and instantiate', () => {
     assert.equal(counts?.opening_evidence, 1);
     assert.equal(counts?.faction_state, 3);
     assert.equal(counts?.inference_profile, 'azure_terra');
+    assert.equal(counts?.player_location, 'chapel');
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
   });

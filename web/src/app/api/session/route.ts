@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'choose an available inference profile' }, { status: 400 });
     }
     const seed = Number.isSafeInteger(body.seed) ? Math.trunc(body.seed as number) : randomInt(1, 2_147_483_647);
-    const scenarioVersion = process.env.SCENARIO_VERSION ?? 'hollowmere-v4';
+    const scenarioVersion = process.env.SCENARIO_VERSION ?? 'hollowmere-v5';
     const versions = await query<{ scenario_version_id: string }>(
       `SELECT scenario_version_id FROM scenario_versions WHERE version = $1`, [scenarioVersion],
     );

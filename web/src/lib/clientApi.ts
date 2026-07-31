@@ -52,8 +52,9 @@ export async function movePlayer(locationKey: string, idempotencyKey: string) {
   }));
 }
 
-export async function loadChronicle(): Promise<ChronicleEntry[]> {
-  return decode(await fetch('/api/chronicle?limit=100', { cache: 'no-store' }));
+export async function loadChronicle(sinceTick = 0, limit = 100): Promise<ChronicleEntry[]> {
+  const params = new URLSearchParams({ sinceTick: String(sinceTick), limit: String(limit) });
+  return decode(await fetch(`/api/chronicle?${params}`, { cache: 'no-store' }));
 }
 
 export async function loadGraph(): Promise<SocialGraph> {
@@ -181,5 +182,14 @@ export async function streamConversationTurn(
     if (done) break;
   }
   if (!final) throw new Error('conversation ended without a result');
+  if (final.turn.fallback) {
+    console.warn('[Hollowmere] conversation fallback', {
+      conversationId: final.conversation.conversationId,
+      agentKey: final.conversation.agentKey,
+      agentName: final.conversation.agentName,
+      turnId: final.turn.turnId,
+      speechAct: final.turn.speechAct,
+    });
+  }
   return final;
 }

@@ -178,6 +178,8 @@ export async function runGossip(
           trust: listener.trust,
           heat,
           alignment,
+          direction: rumor.kind === 'accusation' && alignment === 'same'
+            ? 'deny' : 'believe',
         });
 
         // First contact is recorded once and never rewritten — this table is

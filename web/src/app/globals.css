@@ -138,6 +138,12 @@ kbd { min-width: 20px; padding: 0.12rem 0.32rem; border: 1px solid var(--line-st
 .scene-clock { justify-self: end; display: flex; flex-direction: column; align-items: flex-end; gap: .3rem; color: #b7ad9e; font-size: .58rem; letter-spacing: .15em; text-transform: uppercase; }
 .scene-clock strong { color: var(--gold); font: 600 1rem var(--serif); letter-spacing: .1em; }
 .scene-encounters { position: absolute; left: clamp(1.5rem, 4vw, 3.6rem); bottom: clamp(2.2rem, 5vh, 4rem); width: min(350px, 31vw); }
+.case-opening-card { display: grid; grid-template-columns: 1fr auto; gap: .55rem .8rem; margin-bottom: .8rem; border: 1px solid rgba(240,185,79,.32); border-left: 2px solid var(--gold); background: rgba(10,10,14,.9); padding: .85rem; box-shadow: 0 16px 44px #0008; backdrop-filter: blur(14px); }
+.case-opening-card h2 { margin: .25rem 0 0; color: #eee4d3; font: 600 .92rem var(--serif); letter-spacing: .06em; }
+.case-opening-card > svg { color: var(--gold); }
+.case-opening-card p { grid-column: 1 / -1; margin: 0; color: #bdb3a5; font: italic .7rem/1.48 Georgia, serif; }
+.case-opening-card .case-opening-lead { color: #d8cebd; font-style: normal; }
+.case-opening-card button { grid-column: 1 / -1; justify-self: start; border-color: rgba(240,185,79,.4); color: var(--gold); font-size: .56rem; letter-spacing: .09em; text-transform: uppercase; }
 .encounter-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: .75rem; margin-bottom: .7rem; }
 .encounter-heading > span { display: flex; align-items: center; gap: .45rem; color: #ded4c3; font: 600 .65rem var(--serif); letter-spacing: .1em; text-transform: uppercase; }
 .encounter-heading small { color: #817c76; font-size: .49rem; letter-spacing: .08em; text-transform: uppercase; }
@@ -185,9 +191,11 @@ kbd { min-width: 20px; padding: 0.12rem 0.32rem; border: 1px solid var(--line-st
 .instrument dt { color: var(--muted); font: 500 0.57rem/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; }
 .instrument dd { margin: 0.34rem 0 0; color: var(--ink); font: 500 0.75rem/1 var(--mono); text-transform: lowercase; white-space: nowrap; }
 .stage-instrument dd { color: var(--gold); text-transform: uppercase; }
-.tension-instrument { min-width: 145px; }
+.tension-instrument { min-width: 190px; }
 .tension-instrument dd { display: flex; align-items: center; gap: 0.55rem; }
 .tension-instrument b { color: var(--gold); font-size: 0.68rem; font-weight: 500; }
+.tension-copy { display: grid; gap: .12rem; }
+.tension-copy small { color: #8f887e; font-size: .48rem; letter-spacing: .04em; text-transform: uppercase; }
 .tension-track { display: block; width: 84px; height: 5px; overflow: hidden; border: 1px solid var(--line); background: #09090c; }
 .tension-track span { display: block; height: 100%; background: linear-gradient(90deg, #d89c35, var(--corvane)); box-shadow: 0 0 10px rgba(249, 115, 22, 0.35); }
 .controls { display: flex; flex: 0 0 auto; align-items: center; gap: 0.5rem; }
@@ -245,6 +253,11 @@ kbd { min-width: 20px; padding: 0.12rem 0.32rem; border: 1px solid var(--line-st
   border: 1px solid rgba(240, 185, 79, 0.42); background: rgba(17, 17, 22, 0.94); padding: 0.48rem 0.75rem;
   color: var(--gold); font: 0.64rem var(--mono); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
 }
+.story-notice { position: absolute; z-index: 55; top: 86px; left: 94px; width: min(430px, calc(100vw - 120px)); border: 1px solid rgba(240,185,79,.36); border-left: 3px solid var(--gold); background: rgba(13,13,18,.96); padding: .9rem 1rem; box-shadow: 0 18px 60px #000a; backdrop-filter: blur(16px); animation: encounter-rise 350ms ease both; }
+.story-notice p { margin: .5rem 0 .75rem; color: #ded4c3; font: .86rem/1.48 Georgia, serif; }
+.story-notice > div { display: flex; align-items: center; gap: .45rem; }
+.story-notice button { min-height: 30px; color: var(--gold); font-size: .55rem; letter-spacing: .08em; text-transform: uppercase; }
+.story-notice .dismiss-story { width: 32px; margin-left: auto; border: 0; color: var(--muted); padding: 0; }
 
 .panel {
   position: absolute; z-index: 40; top: 84px; right: 12px; bottom: 54px; width: min(430px, calc(100vw - 112px));

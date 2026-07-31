@@ -20,12 +20,6 @@ const FACTION_TEXT: Record<string, string> = {
   unaligned: '#b1bfce',
 };
 
-const FACTION_NAME: Record<string, string> = {
-  aldreth: 'ALDRETH',
-  corvane: 'CORVANE',
-  unaligned: 'INDEPENDENT',
-};
-
 const FEMALE_AGENT_KEYS = new Set([
   'maren_aldreth', 'sella_dorn', 'oriel_faskin', 'annet_pike', 'mabel_thorn', 'tamsin_vye',
   'edda_lyle', 'veranne_thule', 'hester_lowe', 'widow_sable', 'morna_dell', 'jenna_ryle',
@@ -62,6 +56,7 @@ export class TownScene extends Phaser.Scene {
     interact: Phaser.Input.Keyboard.Key;
   };
   private nearestAgent: string | null = null;
+  private hoveredAgent: string | null = null;
   private overlayCaptured = false;
   private domInputCaptured = false;
   private cleaned = false;
@@ -309,17 +304,25 @@ export class TownScene extends Phaser.Scene {
       let sprite = this.agents.get(agent.agentKey);
       if (!sprite) {
         const color = FACTION_TINT[agent.factionKey] ?? 0x94a3b8;
-        const portrait = this.add.image(0, 0, this.portraitFor(agent)).setDisplaySize(42, 42);
-        const frame = this.add.rectangle(0, 0, 48, 48, 0x111116, 0.92)
+        const portrait = this.add.image(0, 0, this.portraitFor(agent)).setDisplaySize(36, 36);
+        const frame = this.add.rectangle(0, 0, 42, 42, 0x111116, 0.92)
           .setStrokeStyle(2, color, 0.88);
-        const label = this.add.text(0, -34, '', {
+        const label = this.add.text(0, -30, '', {
           fontFamily: 'ui-monospace, monospace', fontStyle: 'bold', fontSize: '9px',
           color: '#ded6c8', backgroundColor: '#0d0d12f2', padding: { x: 5, y: 3 },
-        }).setOrigin(0.5);
+        }).setOrigin(0.5).setVisible(false);
         sprite = this.add.container(target.x, target.y, [frame, portrait, label])
-          .setSize(52, 68).setDepth(15).setInteractive({ useHandCursor: true });
+          .setSize(46, 52).setDepth(15).setInteractive({ useHandCursor: true });
         sprite.setData('locationKey', agent.locationKey);
         sprite.on('pointerdown', () => EventBus.emit('select-agent', { agentKey: agent.agentKey }));
+        sprite.on('pointerover', () => {
+          this.hoveredAgent = agent.agentKey;
+          this.updateAgentLabel(agent, agent.agentKey === this.nearestAgent, true);
+        });
+        sprite.on('pointerout', () => {
+          if (this.hoveredAgent === agent.agentKey) this.hoveredAgent = null;
+          this.updateAgentLabel(agent, agent.agentKey === this.nearestAgent, false);
+        });
         this.agents.set(agent.agentKey, sprite);
         this.labels.set(agent.agentKey, label);
       } else if (sprite.getData('locationKey') !== agent.locationKey) {
@@ -334,7 +337,11 @@ export class TownScene extends Phaser.Scene {
       } else {
         sprite.setPosition(target.x, target.y);
       }
-      this.updateAgentLabel(agent, agent.agentKey === this.nearestAgent);
+      this.updateAgentLabel(
+        agent,
+        agent.agentKey === this.nearestAgent,
+        agent.agentKey === this.hoveredAgent,
+      );
       if (agent.status === 'dead' || agent.status === 'detained') sprite.setAlpha(0.4);
       else sprite.setAlpha(1);
     }
@@ -347,14 +354,14 @@ export class TownScene extends Phaser.Scene {
     }
   }
 
-  private updateAgentLabel(agent: AgentView, nearby: boolean): void {
+  private updateAgentLabel(agent: AgentView, nearby: boolean, hovered = false): void {
     const label = this.labels.get(agent.agentKey);
     if (!label?.active || !label.scene) return;
     const firstName = agent.name.split(' ')[0] ?? agent.name;
-    const faction = FACTION_NAME[agent.factionKey] ?? agent.factionKey.toUpperCase();
-    label.setText(`${nearby ? 'E · ' : ''}${firstName} · ${faction}`);
+    label.setText(`${nearby ? 'E · ' : ''}${firstName}`);
     label.setColor(FACTION_TEXT[agent.factionKey] ?? '#ded6c8');
     label.setBackgroundColor(nearby ? '#2d2718f5' : '#10110eee');
+    label.setVisible(nearby || hovered);
   }
 
   private portraitFor(agent: AgentView): string {

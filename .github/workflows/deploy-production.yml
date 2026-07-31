@@ -45,7 +45,7 @@ env:
   AZURE_PROFILE_DEPLOYMENT: hollowmere-gpt-5-4-mini
   AZURE_RESOURCE_GROUP: hollowmere-prod-rg
   MIGRATION_JOB: hollowmere-migration
-  SCENARIO_VERSION: hollowmere-v4
+  SCENARIO_VERSION: hollowmere-v5
   WEB_APP: hollowmere-web
   SCHEDULER_APP: hollowmere-scheduler
   PRODUCTION_URL: https://hollowmere-web.victorioussand-d8121435.eastus.azurecontainerapps.io

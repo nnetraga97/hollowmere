@@ -49,6 +49,8 @@ export interface ConfidenceShiftInput {
   heat: Fixed;
   /** Listener's factional relationship to the claim's subject. */
   alignment: FactionAlignment;
+  /** Hostile claims about one's own House reinforce denial instead of belief. */
+  direction?: 'believe' | 'deny';
 }
 
 /**
@@ -67,12 +69,13 @@ export function shiftConfidence(input: ConfidenceShiftInput): Fixed {
   const weighted = fpMul(receptiveness, input.heat);
   const capped = Math.min(weighted, BELIEF.maxShiftPerTransmission);
 
-  // Remaining distance to certainty. A listener already at 0.9 moves less than
-  // one at 0.1 from the same retelling.
-  const headroom = SCALE - input.current;
+  // Remaining distance to the relevant pole. Repetition hardens an outsider's
+  // belief, while a hostile accusation about one's own House hardens denial.
+  const denying = input.direction === 'deny';
+  const headroom = denying ? SCALE + input.current : SCALE - input.current;
   const delta = fpMul(capped, headroom);
 
-  return clampSigned(input.current + delta);
+  return clampSigned(input.current + (denying ? -delta : delta));
 }
 
 export interface RecordBeliefInput {

@@ -106,6 +106,11 @@ describe('player conversation output parsing', () => {
       null,
       'an unknown name supplied by the player may be repeated without becoming an engine fact',
     );
+    assert.equal(
+      findUnsupportedCapitalizedToken("I questioned Edryc's account.", new Set(['edryc'])),
+      null,
+      'a possessive suffix must not turn a grounded name into a different token',
+    );
 
     const rejected = [
       'I heard it from Marla while she polished the lantern glass.',
@@ -575,9 +580,11 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     });
     const refused = await takeConversationTurn({
       ...remembered, conversationId: rememberedConversation.conversationId,
-      text: 'Can you remember me?', idempotencyKey: 'turn', inference: rememberedInference,
+      text: 'What do you remember about me', idempotencyKey: 'turn', inference: rememberedInference,
     });
     assert.equal(refused.turn.fallback, true);
+    assert.equal(refused.turn.speechAct, 'inquire',
+      'punctuation-free questions must remain questions in fallback output');
     assert.equal(rememberedEmbeddings, 0, 'retrieval must not spend the final slot by itself');
     assert.equal(rememberedCompletions, 0);
 
@@ -618,6 +625,53 @@ describe('durable conversations', { skip: !HAS_DB && 'DATABASE_URL not set' }, (
     assert.equal(second.turn.fallback, false);
     assert.equal(second.turn.reply, replies[1]);
     await query(`DELETE FROM worlds WHERE world_id = $1`, [ref.worldId]);
+  });
+
+  test('a selected claim grounds every cast member named in its text', async () => {
+    const sessionId = `conversation-multi-agent-claim-${Date.now()}`;
+    const world = await instantiateWorld({
+      scenarioVersionId, seed: 305728257, sessionId,
+    });
+    const [speaker] = await query<{ agent_key: string; location_id: string }>(
+      `SELECT agent.agent_key, agent.location_id
+         FROM agent_beliefs belief
+         JOIN world_agents agent
+           ON agent.world_id = belief.world_id AND agent.agent_id = belief.agent_id
+         JOIN world_claims claim
+           ON claim.world_id = belief.world_id AND claim.claim_id = belief.claim_id
+        WHERE belief.world_id = $1 AND claim.claim_key = 'target_murdered_edryc'
+        ORDER BY abs(belief.confidence) DESC, agent.agent_key
+        LIMIT 1`,
+      [world.worldId],
+    );
+    assert.ok(speaker, 'the seeded accusation needs a holder');
+    await query(`UPDATE world_players SET location_id = $2 WHERE world_id = $1`,
+      [world.worldId, speaker.location_id]);
+
+    const stub = createStubClient();
+    const scripted = {
+      ...stub,
+      async complete(request: Parameters<typeof stub.complete>[0]) {
+        const base = await stub.complete(request);
+        if (request.task !== 'conversation_turn') return base;
+        return { ...base, text: JSON.stringify({
+          reply: 'I have heard talk that points at Rusk Baelen in connection with Prince Edryc\'s death.',
+          speechAct: 'inquire', disclosure: null, hearingResponse: null,
+          referencedClaimKeys: ['target_murdered_edryc'],
+        }) };
+      },
+    };
+    const ref = { worldId: world.worldId, sessionId, agentKey: speaker.agent_key };
+    const started = await startConversation({ ...ref, idempotencyKey: 'start' });
+    const result = await takeConversationTurn({
+      ...ref, conversationId: started.conversationId,
+      text: 'What did you hear about Rusk Baelen', idempotencyKey: 'turn', inference: scripted,
+    });
+
+    assert.equal(result.turn.fallback, false);
+    assert.match(result.turn.reply, /Rusk Baelen/);
+    assert.match(result.turn.reply, /Prince Edryc/);
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
   });
 
   test('unsupported named people do not enter the authoritative transcript', async () => {

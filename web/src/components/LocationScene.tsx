@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, BookHeart, Heart, MessageCircle, Users } from 'lucide-react';
+import { ArrowLeft, BookHeart, BookOpen, Heart, MessageCircle, Users } from 'lucide-react';
 
 import {
   atlasPosition, formatAction, LOCATION_SCENES, portraitPath, rankLocationAgents, relationshipLevel,
@@ -24,6 +24,7 @@ interface LocationSceneProps {
   onBack: () => void;
   onInspect: (agentKey: string) => void;
   onTalk: (agentKey: string) => void;
+  onOpenEvidence: () => void;
   onRomanceChoice: (input: {
     agentKey: string; sceneKey: string; choiceKey: string; locationKey: string;
   }) => Promise<RomanceChoiceResult>;
@@ -31,7 +32,7 @@ interface LocationSceneProps {
 
 export function LocationScene({
   bootstrap, game, locationKey, selectedAgentKey, selectedAgent, bondChange, romance, busy,
-  onBack, onInspect, onTalk, onRomanceChoice,
+  onBack, onInspect, onTalk, onOpenEvidence, onRomanceChoice,
 }: LocationSceneProps) {
   const returnButton = useRef<HTMLButtonElement>(null);
   const onBackRef = useRef(onBack);
@@ -53,6 +54,8 @@ export function LocationScene({
   const activeEncounter = encounters.find(({ agentKey }) => agentKey === activeKey) ?? null;
   const active = selectedAgent?.agent.agentKey === activeKey ? selectedAgent : null;
   const activeRomance = active?.agent.agentKey === romance?.agentKey ? romance : null;
+  const notebookEvidence = game.evidence.find((item) => item.role === 'tamper_sign');
+  const notebookClaim = game.claims.find((item) => item.claimKey === notebookEvidence?.claimKey);
 
   useEffect(() => {
     if (activeKey && activeKey !== selectedAgentKey) onInspect(activeKey);
@@ -94,6 +97,13 @@ export function LocationScene({
     </header>
 
     <div className="scene-encounters">
+      {locationKey === 'chapel' && notebookEvidence && <article className="case-opening-card">
+        <div><span className="eyebrow">The first evidence</span><h2>Prince Edryc’s notebook</h2></div>
+        <BookOpen size={24} aria-hidden="true" />
+        <p>{notebookClaim?.text ?? 'The binding and damaged pages show visible interference.'} It points to tampering, not to who did it.</p>
+        <p className="case-opening-lead"><b>Begin here:</b> Father Ansel found the body. Ask what he saw, then look for a record that can be compared with these pages.</p>
+        <button onClick={onOpenEvidence}>Inspect the notebook</button>
+      </article>}
       <div className="encounter-heading">
         <span><Users size={14} aria-hidden="true" /> Present now</span>
         <small>{encounters.length} {encounters.length === 1 ? 'person' : 'people'} · live simulation</small>

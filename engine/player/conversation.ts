@@ -1165,8 +1165,10 @@ function logConversationResponseRejected(input: {
 }
 
 function fallbackTurn(text: string): ParsedTurn {
-  const lower = text.toLowerCase();
-  const speechAct: SpeechAct = lower.includes('?') ? 'inquire'
+  const lower = text.trim().toLowerCase();
+  const asksQuestion = lower.includes('?') ||
+    /^(?:what|who|where|when|why|how|is|are|am|do|does|did|can|could|would|will|have|has|had|should|may|might)\b/.test(lower);
+  const speechAct: SpeechAct = asksQuestion ? 'inquire'
     : lower.includes('peace') || lower.includes('forgive') ? 'reconcile'
     : lower.includes('kill') || lower.includes('or else') ? 'threaten'
     : 'smalltalk';
@@ -1298,6 +1300,14 @@ function findUnsupportedProperName(parsed: ParsedTurn, context: TurnPromptContex
     context.agent.agent_name.toLowerCase(),
     ...selected.map((belief) => belief.subject_name.toLowerCase()),
   ]);
+  // A claim can name more than its designated subject. For example,
+  // "Rusk Baelen murdered Prince Edryc" is about Rusk, but Edryc is still
+  // grounded by the selected claim and must not invalidate the whole reply.
+  for (const name of allAgentNames) {
+    if (selected.some((belief) => containsPhrase(belief.text, name))) {
+      allowedAgentNames.add(name.toLowerCase());
+    }
+  }
 
   for (const name of allAgentNames) {
     if (allowedAgentNames.has(name.toLowerCase())) continue;
@@ -1325,7 +1335,8 @@ export function findUnsupportedCapitalizedToken(
 ): string | null {
   for (const match of reply.matchAll(/\b[A-Z][A-Za-z']*\b/g)) {
     const token = match[0];
-    if (token === 'I' || allowedTokens.has(token.toLowerCase())) continue;
+    const groundedToken = token.replace(/'s$/i, '').toLowerCase();
+    if (token === 'I' || allowedTokens.has(groundedToken)) continue;
     const index = match.index ?? 0;
     if (!isSentenceStart(reply, index)) {
       return `unsupported capitalized token ${JSON.stringify(token)}`;

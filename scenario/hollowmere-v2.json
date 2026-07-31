@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "hollowmere-v4",
+  "version": "hollowmere-v5",
   "name": "Hollowmere: The Prince at the Chapel Steps",
 
   "factions": [
@@ -357,7 +357,7 @@
   ],
 
   "opening": {
-    "location": "plaza",
+    "location": "chapel",
     "description": "Prince Edryc is found dead at the chapel steps before dawn. His ordinary personal notebook lies with the body; its disturbed binding and damaged pages make the interference plain, but not who altered it.",
     "seedRumors": [
       { "claim": "target_murdered_edryc", "heat": 8500, "valence": -8500 }

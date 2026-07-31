@@ -1,6 +1,7 @@
 import type { AgentView, TownMap } from '@/lib/contracts';
 
-export const MAP_VERSION = 'hollowmere-v4';
+export const MAP_VERSION = 'hollowmere-v5';
+const SUPPORTED_MAP_VERSIONS = new Set(['hollowmere-v4', MAP_VERSION]);
 export const MAP_SCALE = 16;
 export const MAP_PADDING = 150;
 export const WORLD_WIDTH = 1_400;
@@ -23,7 +24,9 @@ const routeKey = (a: string, b: string) => [a, b].sort().join('::');
 
 export function validateTownMap(map: TownMap): string[] {
   const errors: string[] = [];
-  if (map.scenarioVersion !== MAP_VERSION) errors.push(`unsupported scenario ${map.scenarioVersion}`);
+  if (!SUPPORTED_MAP_VERSIONS.has(map.scenarioVersion)) {
+    errors.push(`unsupported scenario ${map.scenarioVersion}`);
+  }
   const actualLocations = new Set(map.locations.map((location) => location.key));
   for (const key of LOCATION_KEYS) if (!actualLocations.has(key)) errors.push(`map is missing location ${key}`);
   for (const key of actualLocations) if (!(LOCATION_KEYS as readonly string[]).includes(key)) errors.push(`map has unknown location ${key}`);
@@ -75,10 +78,17 @@ export function stableHash(value: string): number {
 
 export function npcOffset(agentKey: string, colocated: readonly AgentView[]) {
   const ordered = [...colocated].sort((a, b) => a.agentKey.localeCompare(b.agentKey));
-  const index = Math.max(0, ordered.findIndex((agent) => agent.agentKey === agentKey));
-  const ring = Math.floor(index / 8) + 1;
-  const angle = ((index % 8) / 8) * Math.PI * 2 + (stableHash(agentKey) % 17) / 40;
-  const radius = 22 + ring * 15;
+  let index = Math.max(0, ordered.findIndex((agent) => agent.agentKey === agentKey));
+  const capacities = [5, 8, 12] as const;
+  const radii = [38, 70, 100] as const;
+  let ring = 0;
+  while (ring < capacities.length - 1 && index >= capacities[ring]!) {
+    index -= capacities[ring]!;
+    ring++;
+  }
+  const capacity = capacities[ring]!;
+  const angle = (index / capacity) * Math.PI * 2 + (stableHash(agentKey) % 11) / 55;
+  const radius = radii[ring]!;
   return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
 }
 

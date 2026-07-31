@@ -16,7 +16,7 @@ const routes = [
 ] as const;
 
 const map: TownMap = {
-  scenarioVersion: 'hollowmere-v4',
+  scenarioVersion: 'hollowmere-v5',
   locations: LOCATION_KEYS.map((key, index) => ({
     key, name: key, districtKey: 'test', x: index, y: index,
     gossipBonus: 0, controllingFactionKey: null,
@@ -46,6 +46,15 @@ test('NPC offsets are deterministic regardless of API row order', () => {
   const agents = [agent('maren'), agent('alric'), agent('veranne')];
   assert.deepEqual(npcOffset('maren', agents), npcOffset('maren', [...agents].reverse()));
   assert.notDeepEqual(npcOffset('maren', agents), npcOffset('alric', agents));
+});
+
+test('crowded locations spread NPCs across multiple rings', () => {
+  const agents = Array.from({ length: 10 }, (_, index) => agent(`agent-${index}`));
+  const distances = agents.map((item) => {
+    const offset = npcOffset(item.agentKey, agents);
+    return Math.round(Math.hypot(offset.x, offset.y));
+  });
+  assert.deepEqual([...new Set(distances)], [38, 70]);
 });
 
 test('route interpolation follows an edge and clamps overshoot', () => {

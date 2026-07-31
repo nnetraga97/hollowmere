@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, FileSearch, Heart, Map, Network, Pause, Play, Scale, Square, UserRound } from 'lucide-react';
+import { ArrowRight, BookOpen, FileSearch, Heart, Map, Network, Pause, Play, Scale, Square, UserRound, X } from 'lucide-react';
 
 import { EventBus } from '@/game/EventBus';
 import { atlasPosition, portraitPath, relationshipLevel } from '@/game/locationScenes';
@@ -21,6 +21,14 @@ import { LandingScreen } from './LandingScreen';
 import { MemoryTrace } from './MemoryTrace';
 
 type PanelName = 'overview' | 'chronicle' | 'graph' | 'evidence' | 'hearings' | 'profile' | 'agent' | null;
+
+const STAGE_THRESHOLDS = [
+  { name: 'suspicion', value: 1_500 },
+  { name: 'public accusations', value: 3_500 },
+  { name: 'trials', value: 5_800 },
+  { name: 'first blood', value: 7_800 },
+  { name: 'war', value: 9_400 },
+] as const;
 
 export function DebugClient({
   availableInferenceProfiles,
@@ -54,6 +62,7 @@ export function DebugClient({
   const [rumorListener, setRumorListener] = useState('');
   const [rumorText, setRumorText] = useState('');
   const [deceptionResult, setDeceptionResult] = useState<string | null>(null);
+  const [storyNotice, setStoryNotice] = useState<ChronicleEntry | null>(null);
   const moveInFlight = useRef(false);
   const lastLocation = useRef<string | null>(null);
   const gameRef = useRef<GameSnapshot | null>(null);
@@ -74,6 +83,7 @@ export function DebugClient({
     const mutationGeneration = stateGeneration.current;
     const interactionGeneration = conversationGeneration.current;
     try {
+      const previousTick = hydratedTick.current;
       const next = await loadGame(controller.signal);
       if (generation !== refreshGeneration.current || mutationGeneration !== stateGeneration.current) return;
       gameRef.current = next;
@@ -85,6 +95,14 @@ export function DebugClient({
       }
       setError(null);
       if (!next.player.pendingMove) moveInFlight.current = false;
+      if (previousTick !== null && next.world.currentTick > previousTick) {
+        void loadChronicle(previousTick + 1, 30).then((entries) => {
+          if (generation !== refreshGeneration.current) return;
+          const milestone = entries.find((entry) =>
+            entry.kind === 'trigger' || entry.kind === 'escalation');
+          if (milestone) setStoryNotice(milestone);
+        }).catch(() => undefined);
+      }
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === 'AbortError') return;
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -143,6 +161,11 @@ export function DebugClient({
       setSceneLocationKey(null);
       setJourney(null);
       lastLocation.current = created.game.player.locationKey;
+      setStoryNotice(null);
+      if (created.game.world.currentTick <= 1 && created.game.player.locationKey === 'chapel') {
+        setSceneLocationKey('chapel');
+        inspectAgent('father_ansel');
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -535,6 +558,10 @@ export function DebugClient({
   }
 
   const stageProgress = Math.round(game.world.globalTension / 100);
+  const nextStage = STAGE_THRESHOLDS.find((threshold) =>
+    threshold.value > game.world.globalTension);
+  const pointsToNextStage = nextStage
+    ? Math.max(1, Math.ceil((nextStage.value - game.world.globalTension) / 100)) : 0;
   const currentLocation = bootstrap.map.locations.find(({ key }) => key === game.player.locationKey)?.name
     ?? game.player.locationKey;
   const journeyFrom = journey ? bootstrap.map.locations.find(({ key }) => key === journey.from)?.name ?? journey.from : null;
@@ -567,6 +594,7 @@ export function DebugClient({
       }}
       onInspect={inspectAgent}
       onTalk={(agentKey) => void beginConversation(agentKey)}
+      onOpenEvidence={() => { setSceneLocationKey(null); setPanel('evidence'); }}
       onRomanceChoice={makeRomanceChoice}
     />}
     {journey && <section className="journey-cinematic" aria-live="polite">
@@ -581,7 +609,7 @@ export function DebugClient({
         <div className="instrument"><dt>tick</dt><dd>{game.world.currentTick}</dd></div>
         <div className="instrument"><dt>tick pace</dt><dd>{conversation ? 'held' : game.world.status === 'paused' ? 'paused' : `${tickSeconds.toFixed(tickSeconds < 1 ? 1 : 0)}s`}</dd></div>
         <div className="instrument stage-instrument"><dt>stage</dt><dd>{game.world.stage.replaceAll('_', ' ')}</dd></div>
-        <div className="instrument tension-instrument"><dt>tension</dt><dd><span className="tension-track"><span style={{ width: `${stageProgress}%` }} /></span><b>{stageProgress}%</b></dd></div>
+        <div className="instrument tension-instrument"><dt>tension</dt><dd><span className="tension-track"><span style={{ width: `${stageProgress}%` }} /></span><span className="tension-copy"><b>{stageProgress}%</b><small>{nextStage ? `${pointsToNextStage}% to ${nextStage.name}` : 'war threshold crossed'}</small></span></dd></div>
         <div className="instrument"><dt>phase</dt><dd>{game.world.phase}</dd></div>
         {game.world.timeDebtTicks > 0 && <div className="instrument"><dt>talk cost</dt><dd>+{game.world.timeDebtTicks} ticks</dd></div>}
         <div className="instrument seed-instrument"><dt>seed</dt><dd>{game.world.seed}</dd></div>
@@ -624,6 +652,11 @@ export function DebugClient({
         onClick={() => void queueMove(location.key)}>{location.name}<small>travel</small></button>)}
     </nav>}
     {game.player.pendingMove && <div className="pending">Finishing earlier travel to {pendingDestination?.name ?? game.player.pendingMove.locationKey}</div>}
+    {storyNotice && <aside className="story-notice" role="status" aria-live="polite">
+      <span className="eyebrow">The town changes · tick {storyNotice.tick}</span>
+      <p>{storyNotice.description}</p>
+      <div><button onClick={() => { setPanel('chronicle'); setStoryNotice(null); }}>Open chronicle</button><button className="dismiss-story" aria-label="Dismiss" onClick={() => setStoryNotice(null)}><X size={15} aria-hidden="true" /></button></div>
+    </aside>}
     {error && <div className="toast" role="alert">{error}<button onClick={() => setError(null)}>dismiss</button></div>}
 
     {panel === 'chronicle' && <Panel title="Chronicle" onClose={() => setPanel(null)}>{chronicle.map((entry) => <article className={`chronicle kind-${entry.kind}`} key={`${entry.tick}-${entry.seq}`}><time>t{entry.tick}</time><div><b>{entry.kind}</b><p>{entry.description}</p><small>{entry.actorKey ?? 'world'} · {entry.locationKey ?? 'town-wide'}</small></div></article>)}</Panel>}

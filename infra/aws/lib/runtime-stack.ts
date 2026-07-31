@@ -625,7 +625,7 @@ export class HollowmereRuntimeStack extends Stack {
       INFERENCE_MODE: "world",
       LOG_LEVEL: "info",
       NODE_ENV: "production",
-      SCENARIO_VERSION: "hollowmere-v4",
+      SCENARIO_VERSION: "hollowmere-v5",
       SERVICE_NAME: web ? "hollowmere-web" : "hollowmere-scheduler",
     };
     if (web) {

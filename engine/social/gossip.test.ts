@@ -47,6 +47,16 @@ describe('belief shifting', () => {
     assert.ok(unaligned > same, 'a bystander should believe more than a housemate');
   });
 
+  test('a hostile accusation hardens a housemate toward denial', () => {
+    const denied = shiftConfidence({ ...base, alignment: 'same', direction: 'deny' });
+    assert.ok(denied < 0, `a housemate should reject the accusation, got ${denied}`);
+
+    const repeated = shiftConfidence({
+      ...base, current: denied, alignment: 'same', direction: 'deny',
+    });
+    assert.ok(repeated < denied, 'repetition should reinforce denial rather than reverse it');
+  });
+
   test('alignment factors are ordered', () => {
     assert.ok(alignmentFactor('rival') > alignmentFactor('unaligned'));
     assert.ok(alignmentFactor('unaligned') > alignmentFactor('same'));
@@ -273,6 +283,21 @@ dbSuite('gossip against CockroachDB', () => {
       rival.avg_confidence > target.avg_confidence,
       `the accused house should resist: target ${target.avg_confidence} vs rival ${rival.avg_confidence}`,
     );
+    assert.ok(
+      target.avg_confidence < 0,
+      `the accused house should move toward denial, got ${target.avg_confidence}`,
+    );
+
+    const [subject] = await query<{ confidence: number }>(
+      `SELECT belief.confidence FROM agent_beliefs belief
+         JOIN world_claims claim
+           ON claim.world_id = belief.world_id AND claim.claim_id = belief.claim_id
+        WHERE belief.world_id = $1 AND belief.claim_id = $2
+          AND belief.agent_id = claim.subject_agent_id`,
+      [worldId, claimId],
+    );
+    assert.ok((subject?.confidence ?? 0) < 0,
+      `the accused person must not internalize their own guilt: ${subject?.confidence}`);
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
   });
