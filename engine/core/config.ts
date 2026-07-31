@@ -38,6 +38,9 @@ export const GOSSIP = {
   /** Trust below this and the listener does not even repeat it. */
   minTrustToTransmit: fromPercent(15) as Fixed,
 
+  /** A player-invented story dies with a listener who affirmatively rejects it. */
+  playerRumorMinConfidenceToTransmit: fromPercent(10) as Fixed,
+
   /**
    * Ticks before someone can be told the same thing again.
    *
@@ -184,6 +187,12 @@ export const COGNITION = {
 export const CONVERSE = {
   /** How hot a rumor the player's accusation starts at. */
   accusationHeat: fromPercent(75) as Fixed,
+
+  /** Novel lies start cooler than an already-circulating accusation. */
+  playerRumorHeat: fromPercent(48) as Fixed,
+
+  /** A convincing forged record may add at most this much apparent support. */
+  manufacturedEvidenceHeatBoost: fromPercent(28) as Fixed,
 
   /**
    * How much weight one player utterance carries against a townsperson's

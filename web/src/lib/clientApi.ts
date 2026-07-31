@@ -81,6 +81,49 @@ export async function chooseRomance(input: {
   }));
 }
 
+export interface PlantRumorResult {
+  commandId: string;
+  replayed: boolean;
+  claimKey: string;
+  listenerKey: string;
+  confidenceBefore: number;
+  confidenceAfter: number;
+  reaction: 'believes' | 'uncertain' | 'rejects';
+  usedManufacturedEvidence: boolean;
+  response: string;
+}
+
+export async function plantRumor(input: {
+  listenerAgentKey: string;
+  subjectAgentKey?: string;
+  text?: string;
+  claimKey?: string;
+  evidenceId?: string;
+}): Promise<PlantRumorResult> {
+  return decode(await fetch('/api/deception', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'plant', ...input, idempotencyKey: crypto.randomUUID() }),
+  }));
+}
+
+export interface ManufactureEvidenceResult {
+  commandId: string;
+  replayed: boolean;
+  claimKey: string;
+  outcome: 'created' | 'failed' | 'exposed';
+  chance: number;
+  quality: number;
+  evidenceId: string | null;
+  response: string;
+}
+
+export async function manufactureEvidence(claimKey: string): Promise<ManufactureEvidenceResult> {
+  return decode(await fetch('/api/deception', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'manufacture', claimKey, idempotencyKey: crypto.randomUUID() }),
+  }));
+}
+
 export async function control(body: Record<string, unknown>) {
   return decode<Record<string, unknown>>(await fetch('/api/control', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),

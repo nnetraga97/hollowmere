@@ -15,6 +15,7 @@ import {
 } from './api.ts';
 import { getHeldConversation, type ConversationView } from './conversation.ts';
 import { getRomanceArcs, type RomanceArcView } from './romance.ts';
+import { getPlayerRumors, type PlayerRumorView } from './deception.ts';
 
 export interface SessionRef {
   sessionId: string;
@@ -64,6 +65,9 @@ export interface EvidenceView {
   accusedKey: string | null;
   claimKey: string | null;
   foundTick: number;
+  manufactured: boolean;
+  credibility: number;
+  discoveredTick: number | null;
   genuine?: boolean;
 }
 
@@ -92,6 +96,7 @@ export interface GameSnapshot {
   factions: FactionView[];
   claims: ClaimView[];
   evidence: EvidenceView[];
+  playerRumors: PlayerRumorView[];
   hearings: HearingView[];
   cognition: CognitionView[];
   metrics: TickMetrics[];
@@ -282,7 +287,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
 
   const [
     agents, factions, claims, cognition, metrics, reputations, pending, evidence,
-    hearings, romances, conversation, capabilities,
+    hearings, romances, conversation, capabilities, playerRumors,
   ] =
     await Promise.all([
       listAgents(ref.worldId),
@@ -309,6 +314,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
       getRomanceArcs(ref),
       getHeldConversation(ref),
       getCapabilities(),
+      getPlayerRumors(ref),
     ]);
 
   return {
@@ -328,6 +334,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
     factions,
     claims,
     evidence,
+    playerRumors,
     hearings,
     cognition,
     metrics,
@@ -922,9 +929,11 @@ async function readEvidence(
   const rows = await optionalQuery<{
     evidence_id: string; kind: EvidenceView['kind']; accused_key: string | null;
     claim_key: string | null; found_tick: number; genuine: boolean;
+    manufactured: boolean; credibility: number; discovered_tick: number | null;
   }>(
     `SELECT e.evidence_id, e.kind, a.agent_key AS accused_key,
-            c.claim_key, e.found_tick, e.genuine
+            c.claim_key, e.found_tick, e.genuine, e.manufactured,
+            e.credibility, e.discovered_tick
        FROM world_player_evidence e
        LEFT JOIN world_agents a
          ON a.world_id = e.world_id AND a.agent_id = e.accused_id
@@ -939,6 +948,9 @@ async function readEvidence(
     accusedKey: row.accused_key,
     claimKey: row.claim_key,
     foundTick: row.found_tick,
+    manufactured: row.manufactured,
+    credibility: row.credibility,
+    discoveredTick: row.discovered_tick,
     ...(includeTruth ? { genuine: row.genuine } : {}),
   }));
 }

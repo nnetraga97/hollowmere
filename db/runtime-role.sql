@@ -59,6 +59,8 @@ GRANT INSERT, UPDATE, DELETE ON TABLE
   world_hearings,
   world_agent_commitments,
   world_player_evidence,
+  world_player_rumors,
+  world_player_fabrication_attempts,
   world_state_history,
   trigger_firings,
   cognition_records,

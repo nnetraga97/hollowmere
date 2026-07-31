@@ -407,6 +407,10 @@ async function completeReservedTurn(
         ORDER BY agent.agent_key`,
       [input.worldId, input.conversationId],
     );
+    const locations = await client.query<{ name: string }>(
+      `SELECT name FROM world_locations WHERE world_id = $1 ORDER BY location_key`,
+      [input.worldId],
+    );
     const commitments = await client.query<{
       location_name: string; due_tick: number; response: string;
       commitment_status: string; hearing_status: string;
@@ -441,6 +445,7 @@ async function completeReservedTurn(
       audience: agents.rows.filter((row) => row.observer).map((row) => row.name),
       commitments: commitments.rows,
       allAgentNames: agents.rows.map((row) => row.name),
+      allLocationNames: locations.rows.map((row) => row.name),
       reserved,
       inferenceCalls: session.inference_calls,
       hasMemories: session.has_memories,
@@ -533,7 +538,7 @@ async function completeReservedTurn(
       rawProviderResponse,
     });
   }
-  const suggested = parsed ?? fallbackTurn(input.text);
+  const suggested = normalizeDisclosureFollowUp(parsed ?? fallbackTurn(input.text));
   // Checkpoint the paid result before effects. A process crash can resume this
   // reserved turn without making the provider call a second time.
   await query(
@@ -910,6 +915,8 @@ interface TurnPromptContext {
     commitment_status: string; hearing_status: string;
   }[];
   allAgentNames?: readonly string[];
+  /** Validator allowlist only; intentionally omitted from the model prompt. */
+  allLocationNames?: readonly string[];
   romanceContext: {
     status: RomanceStatus;
     completedChapters: number;
@@ -1257,17 +1264,35 @@ function normalizeParsedTurn(
   return parseTurn(JSON.stringify(value), allowedClaimKeys);
 }
 
+/**
+ * Short answers such as "yes" or "the name" are replies to the preceding
+ * provenance exchange, not standalone statements. If the constrained model
+ * selected a disclosure and exactly one claim, make the mechanical act match
+ * that decision so the engine can append the authoritative source.
+ */
+function normalizeDisclosureFollowUp(turn: ParsedTurn): ParsedTurn {
+  if (turn.disclosure && turn.referencedClaimKeys.length === 1
+    && (turn.speechAct === 'inform' || turn.speechAct === 'smalltalk')) {
+    return { ...turn, speechAct: 'inquire' };
+  }
+  return turn;
+}
+
 function findUnsupportedProperName(parsed: ParsedTurn, context: TurnPromptContext): string | null {
   const selected = context.beliefs.filter((belief) => parsed.referencedClaimKeys.includes(belief.claim_key));
   const allowedPhrases = [
     'Hollowmere', context.agent.agent_name, context.agent.player_name,
     context.agent.location_name, context.agent.faction_name,
+    ...(context.allLocationNames ?? []),
     ...selected.flatMap((belief) => [belief.subject_name, belief.text]),
     ...context.commitments.map((commitment) => commitment.location_name),
     context.latestPlayerUtterance,
     ...context.transcript.map((turn) => turn.player_text),
   ];
-  const allowedTokens = new Set(allowedPhrases.flatMap(capitalizedTokens).map((token) => token.toLowerCase()));
+  const allowedTokens = new Set([
+    ...allowedPhrases.flatMap(capitalizedTokens).map((token) => token.toLowerCase()),
+    "i'm", "i've", "i'll", "i'd",
+  ]);
   const allAgentNames = context.allAgentNames ?? [];
   const allowedAgentNames = new Set([
     context.agent.agent_name.toLowerCase(),

@@ -907,6 +907,7 @@ CREATE TABLE IF NOT EXISTS world_rumor_tellings (
   rumor_id      UUID NOT NULL,
   claim_id      UUID NOT NULL,
   from_agent_id UUID NULL,
+  from_player_id UUID NULL,
   to_agent_id   UUID NOT NULL,
   event_id      UUID NULL,
   tick          INT8 NOT NULL,
@@ -917,9 +918,21 @@ CREATE TABLE IF NOT EXISTS world_rumor_tellings (
   FOREIGN KEY (world_id, rumor_id) REFERENCES world_rumors (world_id, rumor_id),
   FOREIGN KEY (world_id, claim_id) REFERENCES world_claims (world_id, claim_id),
   FOREIGN KEY (world_id, from_agent_id) REFERENCES world_agents (world_id, agent_id),
+  CONSTRAINT telling_player_source_fk
+    FOREIGN KEY (world_id, from_player_id) REFERENCES world_players (world_id, player_id),
   FOREIGN KEY (world_id, to_agent_id) REFERENCES world_agents (world_id, agent_id),
-  FOREIGN KEY (world_id, event_id) REFERENCES world_events (world_id, event_id)
+  FOREIGN KEY (world_id, event_id) REFERENCES world_events (world_id, event_id),
+  CONSTRAINT one_telling_source CHECK (from_agent_id IS NULL OR from_player_id IS NULL)
 );
+
+ALTER TABLE world_rumor_tellings
+  ADD COLUMN IF NOT EXISTS from_player_id UUID NULL;
+ALTER TABLE world_rumor_tellings DROP CONSTRAINT IF EXISTS telling_player_source_fk;
+ALTER TABLE world_rumor_tellings ADD CONSTRAINT telling_player_source_fk
+  FOREIGN KEY (world_id, from_player_id) REFERENCES world_players (world_id, player_id);
+ALTER TABLE world_rumor_tellings DROP CONSTRAINT IF EXISTS one_telling_source;
+ALTER TABLE world_rumor_tellings ADD CONSTRAINT one_telling_source
+  CHECK (from_agent_id IS NULL OR from_player_id IS NULL);
 
 CREATE INDEX IF NOT EXISTS world_rumor_tellings_source_idx
   ON world_rumor_tellings (world_id, to_agent_id, claim_id, tick DESC);
@@ -967,6 +980,11 @@ CREATE TABLE IF NOT EXISTS world_player_evidence (
   claim_id    UUID NULL,
   accused_id  UUID NULL,
   genuine     BOOL NOT NULL,
+  -- A player may knowingly create a false record. It can influence belief,
+  -- but `genuine = false` keeps it out of the real exposure threshold.
+  manufactured BOOL NOT NULL DEFAULT false,
+  credibility INT8 NOT NULL DEFAULT 10000,
+  discovered_tick INT8 NULL,
   found_tick  INT8 NOT NULL,
   PRIMARY KEY (world_id, evidence_id),
   UNIQUE (world_id, player_id, kind, telling_id, event_id),
@@ -974,7 +992,55 @@ CREATE TABLE IF NOT EXISTS world_player_evidence (
   FOREIGN KEY (world_id, telling_id) REFERENCES world_rumor_tellings (world_id, telling_id),
   FOREIGN KEY (world_id, event_id) REFERENCES world_events (world_id, event_id),
   FOREIGN KEY (world_id, claim_id) REFERENCES world_claims (world_id, claim_id),
-  FOREIGN KEY (world_id, accused_id) REFERENCES world_agents (world_id, agent_id)
+  FOREIGN KEY (world_id, accused_id) REFERENCES world_agents (world_id, agent_id),
+  CONSTRAINT check_evidence_credibility CHECK (credibility BETWEEN 0 AND 10000)
+);
+
+ALTER TABLE world_player_evidence
+  ADD COLUMN IF NOT EXISTS manufactured BOOL NOT NULL DEFAULT false;
+ALTER TABLE world_player_evidence
+  ADD COLUMN IF NOT EXISTS credibility INT8 NOT NULL DEFAULT 10000;
+ALTER TABLE world_player_evidence
+  ADD COLUMN IF NOT EXISTS discovered_tick INT8 NULL;
+ALTER TABLE world_player_evidence DROP CONSTRAINT IF EXISTS check_evidence_credibility;
+ALTER TABLE world_player_evidence ADD CONSTRAINT check_evidence_credibility
+  CHECK (credibility BETWEEN 0 AND 10000);
+
+-- Runtime claims deliberately invented by a player. Keeping ownership beside
+-- the ordinary claim row lets the existing rumor, belief, memory, and replay
+-- machinery carry the lie without teaching those systems a second claim type.
+CREATE TABLE IF NOT EXISTS world_player_rumors (
+  world_id        UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  claim_id        UUID NOT NULL,
+  player_id       UUID NOT NULL,
+  origin_event_id UUID NOT NULL,
+  created_tick    INT8 NOT NULL,
+  status          STRING NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'discredited')),
+  PRIMARY KEY (world_id, claim_id),
+  FOREIGN KEY (world_id, claim_id) REFERENCES world_claims (world_id, claim_id),
+  FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, origin_event_id) REFERENCES world_events (world_id, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS world_player_fabrication_attempts (
+  world_id      UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  attempt_id    UUID NOT NULL,
+  player_id     UUID NOT NULL,
+  claim_id      UUID NOT NULL,
+  event_id      UUID NOT NULL,
+  tick          INT8 NOT NULL,
+  seq           INT8 NOT NULL,
+  method        STRING NOT NULL CHECK (method IN ('forged_record')),
+  outcome       STRING NOT NULL CHECK (outcome IN ('created', 'failed', 'exposed')),
+  chance        INT8 NOT NULL CHECK (chance BETWEEN 0 AND 10000),
+  quality       INT8 NOT NULL DEFAULT 0 CHECK (quality BETWEEN 0 AND 10000),
+  PRIMARY KEY (world_id, attempt_id),
+  UNIQUE (world_id, player_id, claim_id, method),
+  UNIQUE (world_id, tick, seq),
+  FOREIGN KEY (world_id, player_id) REFERENCES world_players (world_id, player_id),
+  FOREIGN KEY (world_id, claim_id) REFERENCES world_claims (world_id, claim_id),
+  FOREIGN KEY (world_id, event_id) REFERENCES world_events (world_id, event_id)
 );
 
 CREATE TABLE IF NOT EXISTS world_state_history (
@@ -1079,7 +1145,8 @@ ALTER TABLE world_commands DROP CONSTRAINT IF EXISTS check_kind;
 ALTER TABLE world_commands ADD CONSTRAINT check_kind
   CHECK (kind IN ('converse', 'conversation_start', 'conversation_turn',
                   'conversation_close', 'finalize_conversation', 'summon',
-                  'move_player', 'restart', 'set_time_scale', 'romance_choice'));
+                  'move_player', 'restart', 'set_time_scale', 'romance_choice',
+                  'plant_rumor', 'manufacture_evidence'));
 
 -- Pending commands are drained in order each tick.
 CREATE INDEX IF NOT EXISTS world_commands_pending_idx

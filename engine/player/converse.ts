@@ -473,7 +473,15 @@ export async function applyStructuredConversationTurn(input: {
   const prepared = await withClient(async (client) => {
     const agent = await loadAgentContext(client, input);
     const candidates = await loadClaimCandidates(client, input.worldId);
-    const claim = resolveClaim(input.text, candidates);
+    const lexicalClaim = resolveClaim(input.text, candidates);
+    const referencedClaims = candidates.filter((candidate) =>
+      input.referencedClaimKeys?.includes(candidate.claimKey));
+    // Follow-up provenance questions frequently contain only "who?" or "yes".
+    // The claim key is still server-allowlisted by conversation parsing, so an
+    // unambiguous referenced key is safer than discarding the disclosure.
+    const claim = lexicalClaim ?? (
+      input.act === 'inquire' && referencedClaims.length === 1 ? referencedClaims[0]! : null
+    );
     const command = await client.query<{ command_seq: number; payload: Record<string, unknown> }>(
       `SELECT command_seq, payload FROM world_commands
         WHERE world_id = $1 AND payload->>'turnId' = $2`, [input.worldId, input.turnId],

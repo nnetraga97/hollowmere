@@ -414,11 +414,18 @@ async function loadHolders(
             s.distorted_text
        FROM world_rumor_spread s
        JOIN world_agents a ON a.world_id = s.world_id AND a.agent_id = s.agent_id
+       JOIN world_claims c ON c.world_id = s.world_id AND c.claim_id = (
+         SELECT claim_id FROM world_rumors
+          WHERE world_id = s.world_id AND rumor_id = s.rumor_id
+       )
+       LEFT JOIN agent_beliefs b
+         ON b.world_id = s.world_id AND b.agent_id = s.agent_id AND b.claim_id = c.claim_id
       WHERE s.world_id = $1 AND s.rumor_id = $2
         AND a.status = 'alive'
+        AND (c.authored OR COALESCE(b.confidence, 0) >= $4)
       ORDER BY a.talkativeness DESC, a.agent_key
       LIMIT $3`,
-    [worldId, rumorId, GOSSIP.maxTellersPerRumor],
+    [worldId, rumorId, GOSSIP.maxTellersPerRumor, GOSSIP.playerRumorMinConfidenceToTransmit],
   );
   return result.rows;
 }
@@ -491,6 +498,8 @@ export async function seedRumor(
     originEventId?: string | null;
     channel?: TellingChannel;
     fromAgentId?: string | null;
+    fromPlayerId?: string | null;
+    initialConfidence?: Fixed;
   },
 ): Promise<string> {
   const existing = await client.query<{ rumor_id: string; heat: number }>(
@@ -526,6 +535,7 @@ export async function seedRumor(
     rumorId,
     claimId: input.claimId,
     fromAgentId: input.fromAgentId ?? null,
+    fromPlayerId: input.fromPlayerId ?? null,
     toAgentId: input.originAgentId,
     eventId: input.originEventId ?? null,
     tick: input.tick,
@@ -539,7 +549,7 @@ export async function seedRumor(
     claimId: input.claimId,
     tick: input.tick,
     seq: input.seq.next(),
-    confidence: clampUnit(input.heat),
+    confidence: clampSigned(input.initialConfidence ?? clampUnit(input.heat)),
     causeEventId: input.originEventId ?? null,
   });
 
@@ -555,6 +565,7 @@ export async function recordTelling(
     rumorId: string;
     claimId: string;
     fromAgentId: string | null;
+    fromPlayerId?: string | null;
     toAgentId: string;
     eventId?: string | null;
     tick: number;
@@ -564,14 +575,16 @@ export async function recordTelling(
 ): Promise<string> {
   const row = await client.query<{ telling_id: string }>(
     `INSERT INTO world_rumor_tellings
-       (world_id, rumor_id, claim_id, from_agent_id, to_agent_id, event_id, tick, seq, channel)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (world_id, rumor_id, claim_id, from_agent_id, from_player_id,
+        to_agent_id, event_id, tick, seq, channel)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING telling_id`,
     [
       input.worldId,
       input.rumorId,
       input.claimId,
       input.fromAgentId,
+      input.fromPlayerId ?? null,
       input.toAgentId,
       input.eventId ?? null,
       input.tick,

@@ -48,6 +48,8 @@ const HISTORY_TABLES = [
   'player_romance_flags',
   'player_romance_arcs',
   'world_player_evidence',
+  'world_player_fabrication_attempts',
+  'world_player_rumors',
   'world_agent_commitments',
   'world_hearings',
   'world_rumor_tellings',
@@ -94,6 +96,13 @@ export async function rewindWorld(worldId: string): Promise<RewindResult> {
     for (const table of HISTORY_TABLES) {
       await client.query(`DELETE FROM ${table} WHERE world_id = $1`, [worldId]);
     }
+
+    // Player-invented claims are accumulated history, unlike scenario claims.
+    // Their ownership rows have already been removed above, so the FK is clear.
+    await client.query(
+      `DELETE FROM world_claims WHERE world_id = $1 AND NOT authored`,
+      [worldId],
+    );
 
     await resetAgents(client, worldId);
     await resetInstigatorState(client, worldId);

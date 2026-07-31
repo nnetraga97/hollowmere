@@ -6,12 +6,12 @@ import { ArrowRight, BookOpen, FileSearch, Heart, Map, Network, Pause, Play, Sca
 import { EventBus } from '@/game/EventBus';
 import { atlasPosition, portraitPath, relationshipLevel } from '@/game/locationScenes';
 import type {
-  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot,
+  AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, PlayerRumor,
   RomanceChoiceResult, SocialGraph,
 } from '@/lib/contracts';
 import {
-  ApiError, chooseRomance, closeConversation, control, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, movePlayer,
-  startConversation, startSession, streamConversationTurn, type PlayerEntry,
+  ApiError, chooseRomance, closeConversation, control, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, manufactureEvidence, movePlayer,
+  plantRumor, startConversation, startSession, streamConversationTurn, type PlayerEntry,
 } from '@/lib/clientApi';
 import { PhaserGame } from './PhaserGame';
 import { LocationScene } from './LocationScene';
@@ -50,6 +50,10 @@ export function DebugClient({
   const [bondChange, setBondChange] = useState<{
     agentKey: string; trust: number; affinity: number; fear: number; respect: number;
   } | null>(null);
+  const [rumorSubject, setRumorSubject] = useState('');
+  const [rumorListener, setRumorListener] = useState('');
+  const [rumorText, setRumorText] = useState('');
+  const [deceptionResult, setDeceptionResult] = useState<string | null>(null);
   const moveInFlight = useRef(false);
   const lastLocation = useRef<string | null>(null);
   const gameRef = useRef<GameSnapshot | null>(null);
@@ -284,6 +288,72 @@ export function DebugClient({
   const talkingAgent = useMemo(() => game?.agents.find((item) => item.agentKey === talkingTo) ?? null, [game, talkingTo]);
   const talkingDetail = agent?.agent.agentKey === talkingTo ? agent : null;
   const talkingBond = relationshipLevel(talkingDetail?.playerRelationship);
+  const localRumorListeners = useMemo(() => game?.agents.filter((item) =>
+    item.locationKey === game.player.locationKey && ['alive', 'injured'].includes(item.status)) ?? [], [game]);
+
+  useEffect(() => {
+    if (rumorListener && !localRumorListeners.some((item) => item.agentKey === rumorListener)) {
+      setRumorListener('');
+    }
+  }, [localRumorListeners, rumorListener]);
+
+  async function createRumor(event: React.FormEvent) {
+    event.preventDefault();
+    if (!rumorSubject || !rumorListener || !rumorText.trim() || sending) return;
+    stateGeneration.current++;
+    setSending(true);
+    setDeceptionResult(null);
+    try {
+      const result = await plantRumor({
+        subjectAgentKey: rumorSubject,
+        listenerAgentKey: rumorListener,
+        text: rumorText.trim(),
+      });
+      setRumorText('');
+      setDeceptionResult(result.response);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function repeatRumor(rumor: PlayerRumor) {
+    if (!rumorListener || sending) return;
+    stateGeneration.current++;
+    setSending(true);
+    setDeceptionResult(null);
+    try {
+      const result = await plantRumor({
+        claimKey: rumor.claimKey,
+        listenerAgentKey: rumorListener,
+        ...(rumor.evidenceId ? { evidenceId: rumor.evidenceId } : {}),
+      });
+      setDeceptionResult(result.response);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function forgeRumorEvidence(rumor: PlayerRumor) {
+    if (sending) return;
+    stateGeneration.current++;
+    setSending(true);
+    setDeceptionResult(null);
+    try {
+      const result = await manufactureEvidence(rumor.claimKey);
+      setDeceptionResult(result.response);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSending(false);
+    }
+  }
 
   async function beginConversation(agentKey: string) {
     if (sending || game?.player.pendingMove) return;
@@ -558,10 +628,34 @@ export function DebugClient({
 
     {panel === 'chronicle' && <Panel title="Chronicle" onClose={() => setPanel(null)}>{chronicle.map((entry) => <article className={`chronicle kind-${entry.kind}`} key={`${entry.tick}-${entry.seq}`}><time>t{entry.tick}</time><div><b>{entry.kind}</b><p>{entry.description}</p><small>{entry.actorKey ?? 'world'} · {entry.locationKey ?? 'town-wide'}</small></div></article>)}</Panel>}
     {panel === 'graph' && <Panel title="Social graph" onClose={() => setPanel(null)} wide>{graph ? <SocialGraphView graph={graph} /> : <p className="empty">Loading relationships…</p>}</Panel>}
-    {panel === 'evidence' && <Panel title="Evidence ledger" onClose={() => setPanel(null)}>
+    {panel === 'evidence' && <Panel title="Evidence ledger" onClose={() => setPanel(null)} wide>
       {!game.capabilities.evidence && <p className="notice">The instigator engine tables are not installed in this worktree yet. This panel will activate after integration.</p>}
-      <div className="evidence-counts">{(['provenance', 'contradiction', 'record'] as const).map((kind) => <div key={kind}><strong>{game.evidence.filter((item) => item.kind === kind).length}</strong><span>{kind}</span></div>)}</div>
-      {game.evidence.map((item) => <div className="evidence-card" key={item.evidenceId}><b>{item.kind}</b><span>found t{item.foundTick}</span><p>{item.accusedKey ?? 'no named suspect'}{item.claimKey ? ` · ${item.claimKey}` : ''}</p></div>)}
+      <div className="evidence-counts">{[
+        { label: 'provenance', count: game.evidence.filter((item) => item.kind === 'provenance').length },
+        { label: 'contradiction', count: game.evidence.filter((item) => item.kind === 'contradiction').length },
+        { label: 'records', count: game.evidence.filter((item) => item.kind === 'record' && !item.manufactured).length },
+        { label: 'manufactured', count: game.evidence.filter((item) => item.manufactured).length },
+      ].map((item) => <div key={item.label}><strong>{item.count}</strong><span>{item.label}</span></div>)}</div>
+      {game.evidence.map((item) => <div className="evidence-card" key={item.evidenceId}><b>{item.manufactured ? 'manufactured record' : item.kind}</b><span>found t{item.foundTick}</span><p>{item.accusedKey ?? 'no named suspect'}{item.claimKey ? ` · ${item.claimKey}` : ''}{item.manufactured ? ` · ${Math.round(item.credibility / 100)}% convincing` : ''}</p></div>)}
+      <section className="deception-workbench">
+        <div><span className="eyebrow">Misinformation</span><h3>Plant a false story</h3><p>You choose the lie. The listener chooses whether to believe it from their credulity, faction loyalties, trust in you, your reputation, and any record you show them.</p></div>
+        <form onSubmit={createRumor}>
+          <label>Subject<select value={rumorSubject} onChange={(event) => setRumorSubject(event.target.value)}><option value="">Choose a person</option>{game.agents.filter((item) => item.status === 'alive').map((item) => <option key={item.agentKey} value={item.agentKey}>{item.name}</option>)}</select></label>
+          <label>First listener<select value={rumorListener} onChange={(event) => setRumorListener(event.target.value)}><option value="">Someone nearby</option>{localRumorListeners.map((item) => <option key={item.agentKey} value={item.agentKey}>{item.name}</option>)}</select></label>
+          <label className="deception-story">The story<textarea maxLength={240} value={rumorText} onChange={(event) => setRumorText(event.target.value)} placeholder="I saw… / Someone has been…" /></label>
+          <button disabled={sending || !rumorSubject || !rumorListener || !rumorText.trim() || rumorSubject === rumorListener}>{sending ? 'Working…' : 'Plant rumor'}</button>
+        </form>
+        {deceptionResult && <p className="notice">{deceptionResult}</p>}
+      </section>
+      {game.playerRumors.length > 0 && <section className="player-rumors"><h3>Your stories</h3>{game.playerRumors.map((rumor) => <article key={rumor.claimKey} className={rumor.status === 'discredited' ? 'discredited' : ''}>
+        <header><b>{rumor.subjectKey}</b><span>{rumor.reach} heard · heat {Math.round(rumor.heat / 100)}%</span></header>
+        <p>{rumor.text}</p>
+        {rumor.fabricationOutcome ? <small>{rumor.fabricationOutcome === 'created' ? `Forged record · ${Math.round((rumor.evidenceCredibility ?? 0) / 100)}% convincing` : `Forgery ${rumor.fabricationOutcome}`}</small> : <small>{rumor.reach < 3 ? `${3 - rumor.reach} more listener${3 - rumor.reach === 1 ? '' : 's'} needed before a record can look plausible` : 'One difficult attempt is available to forge a supporting record'}</small>}
+        <div>
+          <button disabled={sending || rumor.status !== 'active' || !rumorListener || rumorListener === rumor.subjectKey} onClick={() => void repeatRumor(rumor)}>Tell nearby listener{rumor.evidenceId ? ' with record' : ''}</button>
+          <button disabled={sending || rumor.status !== 'active' || rumor.reach < 3 || Boolean(rumor.fabricationOutcome)} onClick={() => void forgeRumorEvidence(rumor)}>Forge record</button>
+        </div>
+      </article>)}</section>}
       <hr /><button className="warning-button" onClick={() => setTruthWarning(true)}>Reveal Engine Truth</button>
     </Panel>}
     {panel === 'hearings' && <Panel title="Hearings" onClose={() => setPanel(null)}>

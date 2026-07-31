@@ -9,6 +9,9 @@ export {
   startConversation, takeConversationTurn,
 } from '../../../engine/player/conversation.ts';
 export { chooseRomanceMoment, getRomanceArcs } from '../../../engine/player/romance.ts';
+export {
+  getPlayerRumors, manufacturePlayerEvidence, plantPlayerRumor,
+} from '../../../engine/player/deception.ts';
 export { query, withSerializable } from '../../../engine/database/db.ts';
 export { createInferenceClient } from '../../../engine/inference/index.ts';
 export { inferenceForWorld } from '../../../engine/inference/world.ts';

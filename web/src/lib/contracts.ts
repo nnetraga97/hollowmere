@@ -33,7 +33,23 @@ export interface EvidenceView {
   accusedKey: string | null;
   claimKey: string | null;
   foundTick: number;
+  manufactured: boolean;
+  credibility: number;
+  discoveredTick: number | null;
   genuine?: boolean;
+}
+
+export interface PlayerRumor {
+  claimKey: string;
+  text: string;
+  subjectKey: string;
+  createdTick: number;
+  status: 'active' | 'discredited';
+  heat: number;
+  reach: number;
+  evidenceId: string | null;
+  evidenceCredibility: number | null;
+  fabricationOutcome: 'created' | 'failed' | 'exposed' | null;
 }
 
 export interface HearingView {
@@ -87,6 +103,7 @@ export interface GameSnapshot {
     heat: number; believers: number; deniers: number; averageConfidence: number; reached: number;
   }[];
   evidence: EvidenceView[];
+  playerRumors: PlayerRumor[];
   hearings: HearingView[];
   cognition: {
     tick: number; agentKey: string; modelId: string; promptVersion: string;
