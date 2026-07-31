@@ -612,6 +612,8 @@ export class HollowmereRuntimeStack extends Stack {
       AZURE_OPENAI_EMBEDDING_DIM: "1024",
       AZURE_OPENAI_REASONING_DEPLOYMENT:
         parameters.azureReasoningDeployment.valueAsString,
+      AZURE_OPENAI_SOL_DEPLOYMENT:
+        parameters.azureReasoningDeployment.valueAsString,
       AZURE_OPENAI_TERRA_DEPLOYMENT:
         parameters.azureTerraDeployment.valueAsString,
       BEDROCK_ENABLED: "false",

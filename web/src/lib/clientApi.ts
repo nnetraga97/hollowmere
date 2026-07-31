@@ -23,15 +23,37 @@ export interface PlayerEntry {
   playerName?: string;
   background?: string;
   sympathyFactionKey?: 'aldreth' | 'corvane' | 'unaligned' | null;
-  inferenceProfile?: 'azure_terra' | 'bedrock_sonnet';
+  inferenceProfile?: 'azure_sol' | 'azure_terra';
   seed?: number;
 }
 
-export async function startSession(entry: PlayerEntry = {}): Promise<Bootstrap> {
+export interface WorldChoice {
+  worldId: string;
+  status: string;
+  ending: string | null;
+  currentTick: number;
+  day: number;
+  stage: string;
+  seed: number;
+  inferenceProfile: 'stub' | 'azure_sol' | 'azure_terra' | 'bedrock_sonnet';
+  createdAt: string;
+}
+
+export async function listWorlds(): Promise<WorldChoice[]> {
+  const result = await decode<{ worlds: WorldChoice[] }>(await fetch('/api/session', {
+    cache: 'no-store',
+  }));
+  return result.worlds;
+}
+
+export async function startSession(
+  entry: PlayerEntry = {},
+  options: { newWorld?: boolean; worldId?: string } = {},
+): Promise<Bootstrap> {
   return decode(await fetch('/api/session', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(entry),
+    body: JSON.stringify({ ...entry, ...options }),
   }));
 }
 

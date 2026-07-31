@@ -85,7 +85,8 @@ export interface GameSnapshot {
   world: {
     worldId: string; status: string; ending: string | null; currentTick: number;
     day: number; phase: string; stage: string; globalTension: number;
-    peaceStreak: number; seed: number; inferenceProfile: 'stub' | 'azure_terra' | 'bedrock_sonnet';
+    peaceStreak: number; seed: number;
+    inferenceProfile: 'stub' | 'azure_sol' | 'azure_terra' | 'bedrock_sonnet';
     timeScale: number; timeDebtTicks: number; agentsAlive: number;
     inferenceCalls: number; estCostMicros: number;
   };

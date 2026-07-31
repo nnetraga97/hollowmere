@@ -32,22 +32,23 @@ test('only live provider inference is billable', () => {
 });
 
 test('world inference choices are a closed server allowlist', () => {
+  assert.equal(isSelectableInferenceProfile('azure_sol'), true);
   assert.equal(isSelectableInferenceProfile('azure_terra'), true);
-  assert.equal(isSelectableInferenceProfile('bedrock_sonnet'), true);
+  assert.equal(isSelectableInferenceProfile('bedrock_sonnet'), false);
   assert.equal(isSelectableInferenceProfile('stub'), false);
   assert.equal(isSelectableInferenceProfile('arbitrary-model-id'), false);
 });
 
-test('Azure is available by default and one environment flag enables Bedrock', () => {
-  assert.deepEqual(enabledInferenceProfiles(''), ['azure_terra']);
-  assert.deepEqual(enabledInferenceProfiles('false'), ['azure_terra']);
-  assert.deepEqual(enabledInferenceProfiles('true'), ['azure_terra', 'bedrock_sonnet']);
+test('the public selector exposes both Azure GPT-5.6 profiles', () => {
+  assert.deepEqual(enabledInferenceProfiles(), ['azure_terra', 'azure_sol']);
+  assert.equal(isInferenceProfileEnabled('azure_sol', ''), true);
   assert.equal(isInferenceProfileEnabled('azure_terra', ''), true);
   assert.equal(isInferenceProfileEnabled('bedrock_sonnet', ''), false);
   assert.equal(isInferenceProfileEnabled('bedrock_sonnet', 'TRUE'), true);
 });
 
 test('per-world routing is live only after explicit deployment opt-in', () => {
+  assert.equal(effectiveWorldInferenceProfile('azure_sol', 'world'), 'azure_sol');
   assert.equal(effectiveWorldInferenceProfile('azure_terra', 'world'), 'azure_terra');
   assert.equal(effectiveWorldInferenceProfile('bedrock_sonnet', 'world'), 'bedrock_sonnet');
   assert.equal(effectiveWorldInferenceProfile('azure_terra', 'stub'), 'stub');

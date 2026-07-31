@@ -39,10 +39,8 @@ permissions:
 env:
   ACR_NAME: hollowmerennt
   ACR_SERVER: hollowmerennt.azurecr.io
-  # GPT-5.6 Terra remains the target for this profile, but the subscription
-  # currently has zero Terra quota. GPT-5.4 mini is the verified compatibility
-  # deployment; changing this one value completes the upgrade after quota lands.
-  AZURE_PROFILE_DEPLOYMENT: hollowmere-gpt-5-4-mini
+  AZURE_SOL_DEPLOYMENT: gpt-5.6-sol
+  AZURE_TERRA_DEPLOYMENT: gpt-5.6-terra
   AZURE_RESOURCE_GROUP: hollowmere-prod-rg
   MIGRATION_JOB: hollowmere-migration
   SCENARIO_VERSION: hollowmere-v5
@@ -255,7 +253,8 @@ jobs:
             --set-env-vars \
               INFERENCE_MODE=world \
               BEDROCK_ENABLED=false \
-              AZURE_OPENAI_TERRA_DEPLOYMENT="$AZURE_PROFILE_DEPLOYMENT" \
+              AZURE_OPENAI_SOL_DEPLOYMENT="$AZURE_SOL_DEPLOYMENT" \
+              AZURE_OPENAI_TERRA_DEPLOYMENT="$AZURE_TERRA_DEPLOYMENT" \
               SCENARIO_VERSION="$SCENARIO_VERSION" \
             --only-show-errors \
             --output none
@@ -303,7 +302,8 @@ jobs:
             --set-env-vars \
               INFERENCE_MODE=world \
               BEDROCK_ENABLED=false \
-              AZURE_OPENAI_TERRA_DEPLOYMENT="$AZURE_PROFILE_DEPLOYMENT" \
+              AZURE_OPENAI_SOL_DEPLOYMENT="$AZURE_SOL_DEPLOYMENT" \
+              AZURE_OPENAI_TERRA_DEPLOYMENT="$AZURE_TERRA_DEPLOYMENT" \
               SCENARIO_VERSION="$SCENARIO_VERSION" \
             --only-show-errors \
             --output none

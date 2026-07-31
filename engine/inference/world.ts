@@ -29,13 +29,23 @@ export function inferenceForProfile(profile: WorldInferenceProfile): InferenceCl
   const cached = clients.get(effective);
   if (cached) return cached;
 
-  const client = effective === 'azure_terra'
+  const client = effective === 'azure_sol'
+    ? createInferenceClient({
+      mode: 'azure',
+      reasoningModelId: required(
+        process.env.AZURE_OPENAI_SOL_DEPLOYMENT,
+        'AZURE_OPENAI_SOL_DEPLOYMENT',
+      ),
+      reasoningEffort: 'none',
+    })
+    : effective === 'azure_terra'
     ? createInferenceClient({
       mode: 'azure',
       reasoningModelId: required(
         process.env.AZURE_OPENAI_TERRA_DEPLOYMENT,
         'AZURE_OPENAI_TERRA_DEPLOYMENT',
       ),
+      reasoningEffort: 'none',
     })
     : effective === 'bedrock_sonnet'
       ? createInferenceClient({

@@ -226,9 +226,7 @@ CREATE TABLE IF NOT EXISTS worlds (
   seed                INT8 NOT NULL,
   -- Immutable, server-allowlisted inference routing. The selected provider may
   -- shape language and planning, but never owns rules or world state.
-  inference_profile   STRING NOT NULL DEFAULT 'stub'
-                        CHECK (inference_profile IN
-                          ('stub', 'azure_terra', 'bedrock_sonnet')),
+  inference_profile   STRING NOT NULL DEFAULT 'stub',
   current_tick        INT8 NOT NULL DEFAULT 0,
   -- Monotonic counter assigning a total order to external commands.
   command_seq         INT8 NOT NULL DEFAULT 0,
@@ -263,8 +261,11 @@ CREATE INDEX IF NOT EXISTS worlds_schedulable_idx
 -- Existing local and deployed databases predate per-world inference routing.
 ALTER TABLE worlds ADD COLUMN IF NOT EXISTS inference_profile STRING NOT NULL DEFAULT 'stub';
 ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_inference_profile;
-ALTER TABLE worlds ADD CONSTRAINT check_inference_profile
-  CHECK (inference_profile IN ('stub', 'azure_terra', 'bedrock_sonnet'));
+ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_inference_profile_v2;
+ALTER TABLE worlds DROP CONSTRAINT IF EXISTS worlds_inference_profile_check;
+ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_inference_profile_v3;
+ALTER TABLE worlds ADD CONSTRAINT check_inference_profile_v3
+  CHECK (inference_profile IN ('stub', 'azure_sol', 'azure_terra', 'bedrock_sonnet'));
 
 ALTER TABLE worlds
   ADD COLUMN IF NOT EXISTS time_debt_ticks INT8 NOT NULL DEFAULT 0;

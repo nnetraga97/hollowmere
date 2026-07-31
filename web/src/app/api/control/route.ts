@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
       const { value: started } = await withSerializable(async (client) => {
         const rows = await client.query<{
           status: string; scenario_version_id: string; player_name: string;
-          inference_profile: 'stub' | 'azure_terra' | 'bedrock_sonnet';
+          inference_profile: 'stub' | 'azure_sol' | 'azure_terra' | 'bedrock_sonnet';
           profile: { background?: string; sympathyFactionKey?: string | null };
           successor_world_id: string | null; successor_seed: number | null;
         }>(

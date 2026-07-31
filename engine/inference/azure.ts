@@ -12,13 +12,16 @@ import {
   type StreamUsage,
 } from './types.ts';
 
-const DEFAULT_REASONING_DEPLOYMENT = 'hollowmere-gpt-5-4-mini';
+const DEFAULT_REASONING_DEPLOYMENT = 'gpt-5.6-terra';
 const DEFAULT_EMBEDDING_DEPLOYMENT = 'hollowmere-embedding-3-small';
+
+export type AzureReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface AzureOpenAIOptions {
   endpoint?: string;
   apiKey?: string;
   reasoningModelId?: string;
+  reasoningEffort?: AzureReasoningEffort;
   embeddingModelId?: string;
   dimensions?: number;
   timeoutMs?: number;
@@ -37,7 +40,11 @@ function required(value: string | undefined, name: string): string {
   return value;
 }
 
-function requestBody(request: CompletionRequest, model: string) {
+function requestBody(
+  request: CompletionRequest,
+  model: string,
+  reasoningEffort: AzureReasoningEffort,
+) {
   return {
     model,
     messages: [
@@ -45,9 +52,9 @@ function requestBody(request: CompletionRequest, model: string) {
       { role: 'user' as const, content: request.user },
     ],
     max_completion_tokens: request.maxTokens,
-    // GPT-5 reasoning tokens count against max_completion_tokens. Minimal keeps
-    // short engine decisions from spending their whole allowance internally.
-    reasoning_effort: 'minimal' as const,
+    // Hollowmere's short structured decisions do not benefit from hidden
+    // reasoning tokens. Both GPT-5.6 Sol and Terra support `none`.
+    reasoning_effort: reasoningEffort,
   };
 }
 
@@ -64,6 +71,9 @@ export function createAzureOpenAIClient(
   );
   const reasoningModelId = options.reasoningModelId ??
     process.env.AZURE_OPENAI_REASONING_DEPLOYMENT ?? DEFAULT_REASONING_DEPLOYMENT;
+  const reasoningEffort = options.reasoningEffort
+    ?? (process.env.AZURE_OPENAI_REASONING_EFFORT as AzureReasoningEffort | undefined)
+    ?? 'none';
   const embeddingModelId = options.embeddingModelId ??
     process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT ?? DEFAULT_EMBEDDING_DEPLOYMENT;
   const dimensions = options.dimensions ??
@@ -89,7 +99,9 @@ export function createAzureOpenAIClient(
     async complete(request: CompletionRequest): Promise<CompletionResponse> {
       const startedAt = Date.now();
       try {
-        const response = await client.chat.completions.create(requestBody(request, reasoningModelId));
+        const response = await client.chat.completions.create(
+          requestBody(request, reasoningModelId, reasoningEffort),
+        );
         const text = response.choices[0]?.message.content ?? '';
         if (!text) throw new InferenceError(request.task, 'model returned no text content');
         return {
@@ -110,7 +122,7 @@ export function createAzureOpenAIClient(
       let response;
       try {
         response = await client.chat.completions.create({
-          ...requestBody(request, reasoningModelId),
+          ...requestBody(request, reasoningModelId, reasoningEffort),
           stream: true,
           stream_options: { include_usage: true },
         });

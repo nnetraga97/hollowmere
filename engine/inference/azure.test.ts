@@ -84,6 +84,7 @@ test('Azure adapter completes, streams, and embeds through the v1 API', async ()
     assert.equal(requests.length, 3);
     assert.ok(requests.every((item) => item.authorization === 'Bearer test-key'));
     assert.match(JSON.stringify(requests[0]?.body), /Choose only from these known values/);
+    assert.equal(requests[0]?.body.reasoning_effort, 'none');
     assert.deepEqual(requests[2]?.body.dimensions, 4);
   } finally {
     server.close();

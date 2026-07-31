@@ -10,8 +10,8 @@ import type {
   RomanceChoiceResult, SocialGraph,
 } from '@/lib/contracts';
 import {
-  ApiError, chooseRomance, closeConversation, control, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, manufactureEvidence, movePlayer,
-  plantRumor, startConversation, startSession, streamConversationTurn, type PlayerEntry,
+  ApiError, chooseRomance, closeConversation, control, listWorlds, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, manufactureEvidence, movePlayer,
+  plantRumor, startConversation, startSession, streamConversationTurn, type PlayerEntry, type WorldChoice,
 } from '@/lib/clientApi';
 import { PhaserGame } from './PhaserGame';
 import { LocationScene } from './LocationScene';
@@ -19,6 +19,7 @@ import { Panel } from './Panel';
 import { SocialGraphView } from './Charts';
 import { LandingScreen } from './LandingScreen';
 import { MemoryTrace } from './MemoryTrace';
+import { WorldSelectionScreen } from './WorldSelectionScreen';
 
 type PanelName = 'overview' | 'chronicle' | 'graph' | 'evidence' | 'hearings' | 'profile' | 'agent' | null;
 
@@ -52,6 +53,8 @@ export function DebugClient({
   const [truthWarning, setTruthWarning] = useState(false);
   const [endWorldWarning, setEndWorldWarning] = useState(false);
   const [entering, setEntering] = useState(false);
+  const [playerEntry, setPlayerEntry] = useState<PlayerEntry | null>(null);
+  const [worlds, setWorlds] = useState<WorldChoice[]>([]);
   const [controlling, setControlling] = useState(false);
   const [sceneLocationKey, setSceneLocationKey] = useState<string | null>(null);
   const [journey, setJourney] = useState<{ from: string; to: string } | null>(null);
@@ -144,7 +147,21 @@ export function DebugClient({
     setEntering(true);
     setError(null);
     try {
-      const created = await startSession(entry);
+      setWorlds(await listWorlds());
+      setPlayerEntry(entry);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEntering(false);
+    }
+  }
+
+  async function openWorld(options: { newWorld?: boolean; worldId?: string }) {
+    if (!playerEntry) return;
+    setEntering(true);
+    setError(null);
+    try {
+      const created = await startSession(playerEntry, options);
       stateGeneration.current++;
       setBootstrap(created);
       gameRef.current = created.game;
@@ -168,6 +185,7 @@ export function DebugClient({
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+      setWorlds(await listWorlds().catch(() => worlds));
     } finally {
       setEntering(false);
     }
@@ -549,6 +567,21 @@ export function DebugClient({
   }
 
   if (!bootstrap || !game) {
+    if (playerEntry) {
+      return <WorldSelectionScreen
+        player={playerEntry}
+        worlds={worlds}
+        busy={entering}
+        error={error}
+        onOpen={(worldId) => openWorld({ worldId })}
+        onCreate={() => openWorld({ newWorld: true })}
+        onBack={() => {
+          setPlayerEntry(null);
+          setWorlds([]);
+          setError(null);
+        }}
+      />;
+    }
     return <LandingScreen
       onEnter={enterTown}
       busy={entering}

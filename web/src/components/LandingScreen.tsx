@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  ArrowRight, BookOpenText, CircleHelp, Feather, Gauge, Shield, ShieldHalf,
+  ArrowRight, CircleHelp, Feather, Gauge, Shield, ShieldHalf,
 } from 'lucide-react';
 
 import type { PlayerEntry } from '@/lib/clientApi';
@@ -30,6 +30,21 @@ const FACTIONS: {
   { key: 'unaligned', name: 'Independent', description: 'No house oath. The town must earn your trust.', Icon: CircleHelp },
 ];
 
+const AZURE_MODELS: Record<InferenceProfile, { name: string; description: string }> = {
+  azure_sol: {
+    name: 'GPT-5.6 Sol',
+    description: 'Faster responses for conversations, rumours, and town decisions.',
+  },
+  azure_terra: {
+    name: 'GPT-5.6 Terra',
+    description: 'Deeper character reasoning for dialogue and long-running investigations.',
+  },
+};
+
+function defaultInferenceProfile(profiles: readonly InferenceProfile[]): InferenceProfile | null {
+  return profiles.includes('azure_terra') ? 'azure_terra' : profiles[0] ?? null;
+}
+
 export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles }: {
   onEnter(entry: PlayerEntry): Promise<void>;
   busy: boolean;
@@ -40,10 +55,9 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
   const [background, setBackground] = useState('');
   const [sympathy, setSympathy] = useState<Sympathy | null>(null);
   const [inferenceProfile, setInferenceProfile] = useState<InferenceProfile | null>(
-    availableInferenceProfiles.length === 1 ? availableInferenceProfiles[0] ?? null : null,
+    defaultInferenceProfile(availableInferenceProfiles),
   );
   const [saved, setSaved] = useState<SavedProfile | null>(null);
-  const bedrockEnabled = availableInferenceProfiles.includes('bedrock_sonnet');
 
   useEffect(() => {
     try {
@@ -56,13 +70,11 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
         background: typeof profile.background === 'string' ? profile.background.slice(0, 360) : '',
         sympathyFactionKey: FACTIONS.some(({ key }) => key === profile.sympathyFactionKey)
           ? profile.sympathyFactionKey as Sympathy : null,
-        inferenceProfile: (profile.inferenceProfile === 'azure_terra'
-          || profile.inferenceProfile === 'bedrock_sonnet')
-          && availableInferenceProfiles.includes(profile.inferenceProfile)
+        inferenceProfile: (profile.inferenceProfile === 'azure_sol'
+          || profile.inferenceProfile === 'azure_terra')
+          && availableInferenceProfiles.includes(profile.inferenceProfile as InferenceProfile)
           ? profile.inferenceProfile
-          : availableInferenceProfiles.length === 1
-            ? availableInferenceProfiles[0] ?? null
-            : null,
+          : defaultInferenceProfile(availableInferenceProfiles),
       };
       setSaved(restored);
       setName(restored.playerName);
@@ -137,22 +149,15 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
       </fieldset>
 
       <fieldset className="inference-field">
-        <legend>{bedrockEnabled ? 'Choose how Hollowmere thinks' : 'How Hollowmere thinks'}</legend>
-        <p className="inference-intro">{bedrockEnabled
-          ? 'Select an inference profile for your private world, balancing fast responses with richer NPC dialogue and planning.'
-          : 'Hollowmere currently uses Azure Foundry for fast, grounded conversations, rumours, and agent decisions.'}</p>
-        <div className={`inference-grid${bedrockEnabled ? '' : ' inference-grid-single'}`}>
-          <button type="button" className="inference-card" aria-pressed={inferenceProfile === 'azure_terra'} onClick={() => setInferenceProfile('azure_terra')}>
-            <Gauge size={22} strokeWidth={1.45} aria-hidden="true" />
-            <span><strong>Azure Foundry</strong><b>GPT-5.4 mini · Terra pending</b></span>
-            <small>Strong, efficient reasoning across conversations, rumours, and agent decisions.</small>
-          </button>
-          {bedrockEnabled && <button type="button" className="inference-card" aria-pressed={inferenceProfile === 'bedrock_sonnet'} onClick={() => setInferenceProfile('bedrock_sonnet')}>
-            <BookOpenText size={22} strokeWidth={1.45} aria-hidden="true" />
-            <span><strong>Amazon Bedrock</strong><b>Claude Sonnet 5</b></span>
-            <small>Especially nuanced character dialogue and long-running investigations.</small>
-          </button>}
-        </div>
+        <legend>How Hollowmere thinks</legend>
+        <p className="inference-intro">Choose the Azure Foundry model that will voice and plan for your private town.</p>
+        <label className="inference-select">
+          <Gauge size={22} strokeWidth={1.45} aria-hidden="true" />
+          <span><strong>Azure Foundry</strong><small>{inferenceProfile ? AZURE_MODELS[inferenceProfile].description : 'Choose a model.'}</small></span>
+          <select value={inferenceProfile ?? ''} onChange={(event) => setInferenceProfile(event.target.value as InferenceProfile)} required>
+            {availableInferenceProfiles.map((profile) => <option key={profile} value={profile}>{AZURE_MODELS[profile].name}</option>)}
+          </select>
+        </label>
         <p className="inference-rule">Your choice changes the voice and responsiveness of the town—not its rules. Evidence, memories, belief updates, and outcomes remain grounded and replayable in CockroachDB.</p>
       </fieldset>
 
