@@ -45,6 +45,7 @@ env:
   AZURE_PROFILE_DEPLOYMENT: hollowmere-gpt-5-4-mini
   AZURE_RESOURCE_GROUP: hollowmere-prod-rg
   MIGRATION_JOB: hollowmere-migration
+  SCENARIO_VERSION: hollowmere-v4
   WEB_APP: hollowmere-web
   SCHEDULER_APP: hollowmere-scheduler
   PRODUCTION_URL: https://hollowmere-web.victorioussand-d8121435.eastus.azurecontainerapps.io
@@ -250,10 +251,12 @@ jobs:
             --name "$SCHEDULER_APP" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image "$ACR_SERVER/hollowmere-scheduler:$GITHUB_SHA" \
+            --min-replicas 1 \
             --set-env-vars \
               INFERENCE_MODE=world \
               BEDROCK_ENABLED=false \
               AZURE_OPENAI_TERRA_DEPLOYMENT="$AZURE_PROFILE_DEPLOYMENT" \
+              SCENARIO_VERSION="$SCENARIO_VERSION" \
             --only-show-errors \
             --output none
 
@@ -301,6 +304,7 @@ jobs:
               INFERENCE_MODE=world \
               BEDROCK_ENABLED=false \
               AZURE_OPENAI_TERRA_DEPLOYMENT="$AZURE_PROFILE_DEPLOYMENT" \
+              SCENARIO_VERSION="$SCENARIO_VERSION" \
             --only-show-errors \
             --output none
 

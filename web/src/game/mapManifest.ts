@@ -1,6 +1,6 @@
 import type { AgentView, TownMap } from '@/lib/contracts';
 
-export const MAP_VERSION = 'hollowmere-v2';
+export const MAP_VERSION = 'hollowmere-v4';
 export const MAP_SCALE = 16;
 export const MAP_PADDING = 150;
 export const WORLD_WIDTH = 1_400;

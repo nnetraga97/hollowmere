@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import type { AgentView, TownMap } from '../lib/contracts.ts';
 import {
-  areAdjacent, interpolateRoute, LOCATION_KEYS, npcOffset, shouldSuppressGameInput,
+  areAdjacent, interpolateRoute, LOCATION_KEYS, MAP_VERSION, npcOffset, shouldSuppressGameInput,
   validateTownMap, withinInteractionRange,
 } from './mapManifest.ts';
 
@@ -15,7 +16,7 @@ const routes = [
 ] as const;
 
 const map: TownMap = {
-  scenarioVersion: 'hollowmere-v2',
+  scenarioVersion: 'hollowmere-v4',
   locations: LOCATION_KEYS.map((key, index) => ({
     key, name: key, districtKey: 'test', x: index, y: index,
     gossipBonus: 0, controllingFactionKey: null,
@@ -32,6 +33,13 @@ test('the Hollowmere map manifest covers the published location graph', () => {
   assert.deepEqual(validateTownMap(map), []);
   assert.equal(areAdjacent(map, 'plaza', 'chapel'), true);
   assert.equal(areAdjacent(map, 'chapel', 'fields'), false);
+});
+
+test('the map supports the authored scenario version', async () => {
+  const scenario = JSON.parse(
+    await readFile(new URL('../../../scenario/hollowmere-v2.json', import.meta.url), 'utf8'),
+  ) as { version: string };
+  assert.equal(MAP_VERSION, scenario.version);
 });
 
 test('NPC offsets are deterministic regardless of API row order', () => {

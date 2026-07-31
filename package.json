@@ -19,6 +19,8 @@
     "db:down": "docker compose -f infra/docker-compose.yml down",
     "db:sql": "docker exec -it hollowmere-crdb1 ./cockroach sql --insecure",
     "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
+    "scenario:publish": "node --env-file-if-exists=.env scripts/publish-scenario.ts",
+    "deploy:migrate": "npm run db:migrate && npm run scenario:publish",
     "db:roles": "node --env-file-if-exists=.env scripts/provision-db-roles.ts",
     "db:reset": "node --env-file-if-exists=.env scripts/reset-local-db.ts",
     "typecheck": "tsc --noEmit",

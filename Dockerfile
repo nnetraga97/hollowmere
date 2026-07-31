@@ -22,10 +22,12 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY --chown=node:node db ./db
-COPY --chown=node:node scripts/migrate.ts ./scripts/migrate.ts
+COPY --chown=node:node engine ./engine
+COPY --chown=node:node scenario ./scenario
+COPY --chown=node:node scripts/migrate.ts scripts/publish-scenario.ts ./scripts/
 
 USER node
-CMD ["npm", "run", "db:migrate"]
+CMD ["npm", "run", "deploy:migrate"]
 
 FROM source AS web-build
 ENV NODE_ENV=production \
