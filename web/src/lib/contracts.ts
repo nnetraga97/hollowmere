@@ -30,6 +30,8 @@ export interface AgentView {
 export interface EvidenceView {
   evidenceId: string;
   kind: 'provenance' | 'contradiction' | 'record';
+  role: 'tamper_sign' | 'tamper_comparator' | 'culprit_access'
+    | 'murder_opportunity' | 'escalation_provenance' | null;
   accusedKey: string | null;
   claimKey: string | null;
   foundTick: number;
@@ -171,7 +173,7 @@ export interface AgentDetail {
   agent: AgentView;
   summary: string;
   traits: string[];
-  beliefs: { claimKey: string; confidence: number; updatedTick: number }[];
+  beliefs: { claimKey: string; text: string; confidence: number; updatedTick: number }[];
   relationships: { agentKey: string; sentiment: number; trust: number }[];
   cognition: GameSnapshot['cognition'];
   recentDialogue: { tick: number; text: string }[];
@@ -190,7 +192,10 @@ export interface AgentDetail {
 
 export interface DebugTruth {
   available: boolean;
-  culprit: { agentKey: string; motiveKey: string; exposedTick: number | null } | null;
+  culprit: {
+    agentKey: string; motiveKey: string; exposedTick: number | null;
+    caseState: Record<string, string | null>;
+  } | null;
   scheme: {
     posture: string; currentTactic: string | null; targetAgentKey: string | null;
     claimKey: string | null; nextStrategyTick: number;

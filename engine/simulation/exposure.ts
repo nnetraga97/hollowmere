@@ -1,56 +1,38 @@
-import { BELIEF, EVIDENCE } from '../core/config.ts';
+import { BELIEF } from '../core/config.ts';
 import type { Client } from '../database/db.ts';
 import { suspendGoals } from '../agents/goals.ts';
 import { endWorld } from './peace.ts';
 import type { Seq } from '../core/seq.ts';
 
+const REQUIRED_ROLES = [
+  'tamper_sign',
+  'tamper_comparator',
+  'culprit_access',
+  'murder_opportunity',
+  'escalation_provenance',
+] as const;
+
 export async function maybeUnlockExposure(
   client: Client,
   input: { worldId: string; playerId: string; tick: number; seq: Seq },
 ): Promise<boolean> {
-  const culprit = await client.query<{ agent_id: string }>(
-    `SELECT agent_id FROM world_culprit WHERE world_id = $1`,
-    [input.worldId],
+  const proof = await client.query<{ roles: number }>(
+    `SELECT count(DISTINCT definition.role)::INT8 AS roles
+       FROM world_case_evidence definition
+       JOIN world_player_evidence evidence
+         ON evidence.world_id = definition.world_id
+        AND evidence.player_id = $2 AND evidence.role = definition.role
+        AND evidence.genuine AND NOT evidence.manufactured
+      WHERE definition.world_id = $1 AND definition.role = ANY($3::STRING[])`,
+    [input.worldId, input.playerId, [...REQUIRED_ROLES]],
   );
-  const culpritId = culprit.rows[0]?.agent_id;
-  if (!culpritId) return false;
-
-  const proof = await client.query<{
-    links: number;
-    claims: number;
-    contradictions: number;
-    records: number;
-  }>(
-    `SELECT
-       count(DISTINCT telling.telling_id) FILTER
-         (WHERE e.kind = 'provenance' AND telling.from_agent_id = $3
-            AND telling.claim_id = e.claim_id)::INT8 AS links,
-       count(DISTINCT telling.claim_id) FILTER
-         (WHERE e.kind = 'provenance' AND telling.from_agent_id = $3
-            AND telling.claim_id = e.claim_id)::INT8 AS claims,
-       count(DISTINCT event.event_id) FILTER
-         (WHERE e.kind = 'contradiction' AND e.genuine)::INT8 AS contradictions,
-       count(DISTINCT event.event_id) FILTER
-         (WHERE e.kind = 'record' AND e.genuine)::INT8 AS records
-      FROM world_player_evidence e
-      LEFT JOIN world_rumor_tellings telling
-        ON telling.world_id = e.world_id AND telling.telling_id = e.telling_id
-      LEFT JOIN world_events event
-        ON event.world_id = e.world_id AND event.event_id = e.event_id
-     WHERE e.world_id = $1 AND e.player_id = $2`,
-    [input.worldId, input.playerId, culpritId],
-  );
-  const row = proof.rows[0] ?? { links: 0, claims: 0, contradictions: 0, records: 0 };
-  if (
-    row.links < EVIDENCE.provenanceRequired ||
-    row.claims < EVIDENCE.distinctClaimsRequired ||
-    row.contradictions < EVIDENCE.contradictionRequired ||
-    row.records < EVIDENCE.recordRequired
-  ) return false;
+  if ((proof.rows[0]?.roles ?? 0) !== REQUIRED_ROLES.length) return false;
 
   const unlocked = await client.query(
     `UPDATE world_claims SET locked = false
-      WHERE world_id = $1 AND claim_key = 'instigator_exposed' AND locked
+      WHERE world_id = $1
+        AND claim_key IN ('instigator_altered_notebook', 'instigator_murdered_for_war')
+        AND locked
       RETURNING claim_id`,
     [input.worldId],
   );
@@ -59,53 +41,87 @@ export async function maybeUnlockExposure(
   await client.query(
     `INSERT INTO world_events (world_id, tick, seq, kind, payload, description)
      VALUES ($1, $2, $3, 'trigger', '{"evidenceComplete":true}',
-             'The evidence now forms one accusation: someone engineered the feud.')`,
+             'The five breadcrumbs now form a complete case: murder, alteration, and deliberate escalation.')`,
     [input.worldId, input.tick, input.seq.next()],
   );
   return true;
 }
 
-/** End the world only when the two House leaders and Magistrate Thule believe the case. */
+const AUTHORITY_ORDER = {
+  aldreth: ['maren_aldreth', 'sella_dorn', 'rusk_baelen'],
+  corvane: ['alric_corvane', 'rowan_corvane', 'hollis_barrow'],
+} as const;
+
+/** End only when the full verdict is legitimized by the magistrate and both Houses. */
 export async function evaluateExposureEnding(
   client: Client,
   input: { worldId: string; tick: number; seq: Seq },
-): Promise<boolean> {
-  const result = await client.query<{ believers: number; culprit_id: string }>(
-    `SELECT count(*) FILTER (WHERE b.confidence >= $2)::INT8 AS believers,
-            wc.agent_id AS culprit_id
-       FROM world_culprit wc
-       JOIN world_claims c
-         ON c.world_id = wc.world_id AND c.claim_key = 'instigator_exposed' AND NOT c.locked
-       JOIN world_agents required
-         ON required.world_id = wc.world_id
-        AND required.agent_key IN ('maren_aldreth', 'alric_corvane', 'veranne_thule')
-       LEFT JOIN agent_beliefs b
-         ON b.world_id = required.world_id AND b.agent_id = required.agent_id
-        AND b.claim_id = c.claim_id
-      WHERE wc.world_id = $1
-      GROUP BY wc.agent_id`,
-    [input.worldId, BELIEF.actionableConfidence],
+): Promise<'exposed' | 'war' | null> {
+  const state = await client.query<{
+    culprit_id: string; agent_id: string; agent_key: string; status: string;
+  }>(
+    `SELECT culprit.agent_id AS culprit_id, agent.agent_id, agent.agent_key, agent.status
+       FROM world_culprit culprit
+       JOIN world_agents agent ON agent.world_id = culprit.world_id
+      WHERE culprit.world_id = $1
+        AND agent.agent_key IN
+          ('veranne_thule', 'maren_aldreth', 'sella_dorn', 'rusk_baelen',
+           'alric_corvane', 'rowan_corvane', 'hollis_barrow')
+      ORDER BY agent.agent_key`,
+    [input.worldId],
   );
-  const row = result.rows[0];
-  if (!row || row.believers !== 3) return false;
+  if (state.rows.length === 0) return null;
+  const culpritId = state.rows[0]!.culprit_id;
+  const available = new Map(state.rows
+    .filter((row) => row.agent_id !== culpritId && ['alive', 'injured'].includes(row.status))
+    .map((row) => [row.agent_key, row.agent_id]));
+  const validators = [
+    available.get('veranne_thule'),
+    AUTHORITY_ORDER.aldreth.map((key) => available.get(key)).find(Boolean),
+    AUTHORITY_ORDER.corvane.map((key) => available.get(key)).find(Boolean),
+  ].filter((id): id is string => Boolean(id));
+
+  if (validators.length !== 3) {
+    await client.query(
+      `INSERT INTO world_events (world_id, tick, seq, kind, payload, description)
+       VALUES ($1, $2, $3, 'trigger', '{"authorityFailed":true}',
+               'With no neutral and recognized House authorities left to judge the evidence, the rival Houses mobilize.')`,
+      [input.worldId, input.tick, input.seq.next()],
+    );
+    return 'war';
+  }
+
+  const belief = await client.query<{ believers: number }>(
+    `SELECT count(*) FILTER (WHERE belief.confidence >= $3)::INT8 AS believers
+       FROM world_claims claim
+       CROSS JOIN unnest($2::UUID[]) AS required(agent_id)
+       LEFT JOIN agent_beliefs belief
+         ON belief.world_id = claim.world_id AND belief.agent_id = required.agent_id
+        AND belief.claim_id = claim.claim_id
+      WHERE claim.world_id = $1 AND claim.claim_key = 'instigator_murdered_for_war'
+        AND NOT claim.locked`,
+    [input.worldId, validators, BELIEF.actionableConfidence],
+  );
+  if ((belief.rows[0]?.believers ?? 0) !== 3) return null;
 
   await client.query(
     `UPDATE world_agents SET status = 'detained', updated_tick = $3
       WHERE world_id = $1 AND agent_id = $2`,
-    [input.worldId, row.culprit_id, input.tick],
+    [input.worldId, culpritId, input.tick],
   );
   await client.query(
     `UPDATE world_culprit SET exposed_tick = $2 WHERE world_id = $1`,
     [input.worldId, input.tick],
   );
-  await suspendGoals(client, input.worldId, row.culprit_id, input.tick);
+  await suspendGoals(client, input.worldId, culpritId, input.tick);
   await client.query(
-    `UPDATE world_rumors r SET heat = 0, updated_tick = $3
-      WHERE r.world_id = $1 AND EXISTS (
-        SELECT 1 FROM world_rumor_tellings t
-         WHERE t.world_id = r.world_id AND t.rumor_id = r.rumor_id AND t.from_agent_id = $2
+    `UPDATE world_rumors rumor SET heat = 0, updated_tick = $3
+      WHERE rumor.world_id = $1 AND EXISTS (
+        SELECT 1 FROM world_rumor_tellings telling
+         WHERE telling.world_id = rumor.world_id AND telling.rumor_id = rumor.rumor_id
+           AND telling.from_agent_id = $2
       )`,
-    [input.worldId, row.culprit_id, input.tick],
+    [input.worldId, culpritId, input.tick],
   );
-  return endWorld(client, { ...input, ending: 'exposed' });
+  return await endWorld(client, { ...input, ending: 'exposed' }) ? 'exposed' : null;
 }

@@ -256,6 +256,7 @@ export interface ClaimView {
   truth: string;
   severity: Fixed;
   subjectKey: string;
+  kind: 'fact' | 'interpretation' | 'accusation';
   heat: Fixed;
   believers: number;
   deniers: number;
@@ -273,10 +274,11 @@ export interface ClaimView {
 export async function getClaims(worldId: string): Promise<ClaimView[]> {
   const rows = await query<{
     claim_key: string; text: string; truth: string; severity: number;
+    kind: ClaimView['kind'];
     subject_key: string; heat: number; believers: number; deniers: number;
     average_confidence: number; reached: number;
   }>(
-    `SELECT c.claim_key, c.text, c.truth, c.severity, s.agent_key AS subject_key,
+    `SELECT c.claim_key, c.text, c.truth, c.severity, c.kind, s.agent_key AS subject_key,
             COALESCE(r.heat, 0) AS heat,
             count(*) FILTER (WHERE b.confidence >= 4500)::INT8 AS believers,
             count(*) FILTER (WHERE b.confidence < 0)::INT8 AS deniers,
@@ -287,7 +289,7 @@ export async function getClaims(worldId: string): Promise<ClaimView[]> {
        LEFT JOIN world_rumors r ON r.world_id = c.world_id AND r.claim_id = c.claim_id
        LEFT JOIN agent_beliefs b ON b.world_id = c.world_id AND b.claim_id = c.claim_id
       WHERE c.world_id = $1 AND NOT c.locked
-      GROUP BY c.claim_key, c.text, c.truth, c.severity, s.agent_key, r.heat
+      GROUP BY c.claim_key, c.text, c.truth, c.severity, c.kind, s.agent_key, r.heat
       ORDER BY believers DESC, c.claim_key`,
     [worldId],
   );
@@ -298,6 +300,7 @@ export async function getClaims(worldId: string): Promise<ClaimView[]> {
     truth: row.truth,
     severity: row.severity,
     subjectKey: row.subject_key,
+    kind: row.kind,
     heat: row.heat,
     believers: row.believers,
     deniers: row.deniers,

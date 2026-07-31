@@ -442,7 +442,7 @@ describe('escalation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL not 
 
     // Convince the whole town of a claim against the other House.
     const claim = await query<{ claim_id: string }>(
-      `SELECT claim_id FROM world_claims WHERE world_id = $1 AND claim_key = 'corvane_ordered_death'`,
+      `SELECT claim_id FROM world_claims WHERE world_id = $1 AND claim_key = 'target_murdered_edryc'`,
       [worldId]);
     const claimId = claim[0]!.claim_id;
 
@@ -484,7 +484,7 @@ describe('escalation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL not 
     const worldId = await freshWorld(109);
 
     const claim = await query<{ claim_id: string }>(
-      `SELECT claim_id FROM world_claims WHERE world_id = $1 AND claim_key = 'physician_was_paid'`,
+      `SELECT claim_id FROM world_claims WHERE world_id = $1 AND claim_key = 'target_house_ordered_murder'`,
       [worldId]);
     const claimId = claim[0]!.claim_id;
     const accuser = await query<{ agent_id: string }>(
@@ -496,7 +496,7 @@ describe('escalation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL not 
         worldId, tick: 0, seq: createSeq(0), claimId,
         originAgentId: accuser[0]!.agent_id,
         heat: fromPercent(20), valence: -fromPercent(60),
-        text: 'The physician was paid.',
+        text: 'The accused House ordered Edryc\'s murder.',
       });
       await client.query(
         `INSERT INTO agent_beliefs (world_id, agent_id, claim_id, confidence, updated_tick)

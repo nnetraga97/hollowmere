@@ -149,6 +149,13 @@ CREATE TABLE IF NOT EXISTS claim_templates (
     REFERENCES agent_templates (scenario_version_id, agent_key)
 );
 
+ALTER TABLE claim_templates
+  ADD COLUMN IF NOT EXISTS kind STRING NOT NULL DEFAULT 'accusation';
+ALTER TABLE claim_templates
+  ADD COLUMN IF NOT EXISTS subject_slot STRING NULL;
+ALTER TABLE claim_templates
+  ADD COLUMN IF NOT EXISTS initially_locked BOOL NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS trigger_templates (
   scenario_version_id UUID NOT NULL REFERENCES scenario_versions (scenario_version_id),
   trigger_key         STRING NOT NULL,
@@ -175,6 +182,9 @@ CREATE TABLE IF NOT EXISTS culprit_templates (
   FOREIGN KEY (scenario_version_id, record_claim_key)
     REFERENCES claim_templates (scenario_version_id, claim_key)
 );
+
+ALTER TABLE culprit_templates
+  ADD COLUMN IF NOT EXISTS case_profile JSONB NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS agent_goal_templates (
   scenario_version_id UUID NOT NULL REFERENCES scenario_versions (scenario_version_id),
@@ -419,6 +429,10 @@ CREATE TABLE IF NOT EXISTS world_claims (
 
 ALTER TABLE world_claims
   ADD COLUMN IF NOT EXISTS locked BOOL NOT NULL DEFAULT false;
+ALTER TABLE world_claims
+  ADD COLUMN IF NOT EXISTS kind STRING NOT NULL DEFAULT 'accusation';
+ALTER TABLE world_claims
+  ADD COLUMN IF NOT EXISTS initially_locked BOOL NOT NULL DEFAULT false;
 
 -- What each agent currently believes. Projection of belief_updates.
 CREATE TABLE IF NOT EXISTS agent_beliefs (
@@ -594,6 +608,26 @@ CREATE TABLE IF NOT EXISTS world_culprit (
   exposed_tick INT8 NULL,
   PRIMARY KEY (world_id),
   FOREIGN KEY (world_id, agent_id) REFERENCES world_agents (world_id, agent_id)
+);
+
+ALTER TABLE world_culprit
+  ADD COLUMN IF NOT EXISTS case_state JSONB NOT NULL DEFAULT '{}';
+
+-- Selected-case definitions are immutable world truth. They identify who can
+-- reveal each breadcrumb without pinning a rewindable event/telling UUID.
+CREATE TABLE IF NOT EXISTS world_case_evidence (
+  world_id       UUID NOT NULL REFERENCES worlds (world_id) ON DELETE CASCADE,
+  role           STRING NOT NULL CHECK (role IN
+                   ('tamper_sign', 'tamper_comparator', 'culprit_access',
+                    'murder_opportunity', 'escalation_provenance')),
+  holder_agent_id UUID NULL,
+  claim_id       UUID NOT NULL,
+  kind           STRING NOT NULL CHECK (kind IN ('provenance', 'contradiction', 'record')),
+  accused_id     UUID NULL,
+  PRIMARY KEY (world_id, role),
+  FOREIGN KEY (world_id, holder_agent_id) REFERENCES world_agents (world_id, agent_id),
+  FOREIGN KEY (world_id, claim_id) REFERENCES world_claims (world_id, claim_id),
+  FOREIGN KEY (world_id, accused_id) REFERENCES world_agents (world_id, agent_id)
 );
 
 CREATE TABLE IF NOT EXISTS world_agent_goals (
@@ -995,6 +1029,12 @@ CREATE TABLE IF NOT EXISTS world_player_evidence (
   FOREIGN KEY (world_id, accused_id) REFERENCES world_agents (world_id, agent_id),
   CONSTRAINT check_evidence_credibility CHECK (credibility BETWEEN 0 AND 10000)
 );
+
+ALTER TABLE world_player_evidence
+  ADD COLUMN IF NOT EXISTS role STRING NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS world_player_evidence_case_role_uq
+  ON world_player_evidence (world_id, player_id, role)
+  WHERE role IS NOT NULL;
 
 ALTER TABLE world_player_evidence
   ADD COLUMN IF NOT EXISTS manufactured BOOL NOT NULL DEFAULT false;

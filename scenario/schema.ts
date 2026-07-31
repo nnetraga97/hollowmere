@@ -21,6 +21,15 @@ export type Phase = 'morning' | 'midday' | 'evening' | 'night';
 export const PHASES: readonly Phase[] = ['morning', 'midday', 'evening', 'night'];
 
 export type Truth = 'true' | 'false' | 'unknown';
+export type ClaimKind = 'fact' | 'interpretation' | 'accusation';
+export type ClaimSubjectSlot =
+  | 'target'
+  | 'targetHouseLeader'
+  | 'instigator'
+  | 'comparatorHolder'
+  | 'accessWitness'
+  | 'opportunityWitness'
+  | 'firstRecipient';
 
 export type EscalationStage =
   | 'calm'
@@ -98,16 +107,39 @@ export interface ClaimDef {
   key: string;
   text: string;
   subject: string;
+  kind?: ClaimKind;
+  subjectSlot?: ClaimSubjectSlot;
   truth: Truth;
   severity: number;
+  initiallyLocked?: boolean;
+}
+
+export type CaseEvidenceRole =
+  | 'tamper_sign'
+  | 'tamper_comparator'
+  | 'culprit_access'
+  | 'murder_opportunity'
+  | 'escalation_provenance';
+
+export interface CaseEvidenceDef {
+  role: CaseEvidenceRole;
+  holder?: string;
+  claim: string;
+  kind: 'provenance' | 'contradiction' | 'record';
 }
 
 export interface CulpritDef {
   key: string;
   motive: string;
-  profitClaim: string;
-  recordClaim: string;
-  claimTruth: Readonly<Record<string, Truth>>;
+  profitClaim?: string;
+  recordClaim?: string;
+  claimTruth?: Readonly<Record<string, Truth>>;
+  targetFactions?: readonly string[];
+  targetsByFaction?: Readonly<Record<string, readonly string[]>>;
+  notebookMethod?: 'reordered' | 'removed' | 'changed';
+  murderLocation?: string;
+  tamperTiming?: 'at_murder_site' | 'after_staging';
+  evidence?: readonly CaseEvidenceDef[];
 }
 
 export interface AgentGoalDef {
@@ -198,6 +230,12 @@ export interface OpeningEventDef {
   location: string;
   description: string;
   seedRumors: readonly { claim: string; heat: number; valence: number }[];
+  relationshipOverrides?: readonly {
+    src: string;
+    dst: string;
+    sentiment: number;
+    trust: number;
+  }[];
 }
 
 export interface Scenario {
@@ -258,6 +296,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function inUnitRange(value: unknown): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= SCALE;
+}
+
+function inSignedUnitRange(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= -SCALE && value <= SCALE;
 }
 
 /**
@@ -389,16 +431,25 @@ export function validateScenario(input: unknown): Scenario {
       fail(`claim ${c.key}: truth must be true, false, or unknown`);
     }
     if (!inUnitRange(c.severity)) fail(`claim ${c.key}: severity out of range`);
+    if (c.kind != null && !['fact', 'interpretation', 'accusation'].includes(c.kind)) {
+      fail(`claim ${c.key}: invalid kind "${String(c.kind)}"`);
+    }
+    if (c.subjectSlot != null && ![
+      'target', 'targetHouseLeader', 'instigator', 'comparatorHolder',
+      'accessWitness', 'opportunityWitness', 'firstRecipient',
+    ].includes(c.subjectSlot)) {
+      fail(`claim ${c.key}: invalid subject slot "${String(c.subjectSlot)}"`);
+    }
   }
 
   // --- culprit candidates, goals, and authored scheme fallback
   for (const culprit of culprits) {
     if (!agentKeys.has(culprit.key)) fail(`culprit ${culprit.key}: unknown agent`);
     if (!culprit.motive) fail(`culprit ${culprit.key}: motive is required`);
-    if (!claimKeys.has(culprit.profitClaim)) {
+    if (culprit.profitClaim && !claimKeys.has(culprit.profitClaim)) {
       fail(`culprit ${culprit.key}: unknown profit claim "${culprit.profitClaim}"`);
     }
-    if (!claimKeys.has(culprit.recordClaim)) {
+    if (culprit.recordClaim && !claimKeys.has(culprit.recordClaim)) {
       fail(`culprit ${culprit.key}: unknown record claim "${culprit.recordClaim}"`);
     }
     for (const [claimKey, truth] of Object.entries(culprit.claimTruth ?? {})) {
@@ -406,6 +457,36 @@ export function validateScenario(input: unknown): Scenario {
       if (truth !== 'true' && truth !== 'false' && truth !== 'unknown') {
         fail(`culprit ${culprit.key}: invalid truth for "${claimKey}"`);
       }
+    }
+    if (culprit.evidence) {
+      const roles = culprit.evidence.map((item) => item.role);
+      requireUnique(`culprit ${culprit.key} evidence role`, roles);
+      for (const role of [
+        'tamper_sign', 'tamper_comparator', 'culprit_access',
+        'murder_opportunity', 'escalation_provenance',
+      ] as const) {
+        if (!roles.includes(role)) fail(`culprit ${culprit.key}: missing evidence role "${role}"`);
+      }
+      for (const item of culprit.evidence) {
+        if (!claimKeys.has(item.claim)) {
+          fail(`culprit ${culprit.key}: unknown evidence claim "${item.claim}"`);
+        }
+        if (item.role !== 'tamper_sign' && (!item.holder || !agentKeys.has(item.holder))) {
+          fail(`culprit ${culprit.key}: ${item.role} requires a known holder`);
+        }
+      }
+    }
+    for (const faction of culprit.targetFactions ?? []) {
+      if (!factionKeys.has(faction)) fail(`culprit ${culprit.key}: unknown target faction "${faction}"`);
+      const targets = culprit.targetsByFaction?.[faction] ?? [];
+      if (targets.length === 0) fail(`culprit ${culprit.key}: target faction "${faction}" has no targets`);
+      for (const target of targets) {
+        if (!agentKeys.has(target)) fail(`culprit ${culprit.key}: unknown target "${target}"`);
+        if (target === culprit.key) fail(`culprit ${culprit.key}: cannot target itself`);
+      }
+    }
+    if (culprit.murderLocation && !locationKeys.has(culprit.murderLocation)) {
+      fail(`culprit ${culprit.key}: unknown murder location "${culprit.murderLocation}"`);
     }
   }
   for (const goal of goals) {
@@ -453,6 +534,14 @@ export function validateScenario(input: unknown): Scenario {
     for (const seed of opening.seedRumors ?? []) {
       if (!claimKeys.has(seed.claim)) fail(`opening: unknown claim "${seed.claim}"`);
       if (!inUnitRange(seed.heat)) fail(`opening: rumor heat out of range for "${seed.claim}"`);
+    }
+    for (const edge of opening.relationshipOverrides ?? []) {
+      if (!agentKeys.has(edge.src) || !agentKeys.has(edge.dst) || edge.src === edge.dst) {
+        fail(`opening relationship override: invalid edge "${edge.src}" -> "${edge.dst}"`);
+      }
+      if (!inSignedUnitRange(edge.sentiment) || !inUnitRange(edge.trust)) {
+        fail(`opening relationship override ${edge.src}->${edge.dst}: values out of range`);
+      }
     }
   }
 

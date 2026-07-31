@@ -41,6 +41,7 @@ GRANT INSERT, UPDATE, DELETE ON TABLE
   player_romance_events,
   world_agent_reflection_state,
   world_culprit,
+  world_case_evidence,
   world_agent_goals,
   world_scheme_state,
   world_budget,

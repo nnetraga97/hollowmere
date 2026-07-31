@@ -378,7 +378,9 @@ async function heatOnCulprit(client: Client, worldId: string, culpritId: string)
        COALESCE((SELECT avg(b.confidence)::INT8
                    FROM agent_beliefs b
                    JOIN world_claims c ON c.world_id = b.world_id AND c.claim_id = b.claim_id
-                  WHERE b.world_id = $1 AND c.claim_key = 'instigator_exposed'), 0)
+                  WHERE b.world_id = $1
+                    AND c.claim_key IN
+                      ('instigator_altered_notebook', 'instigator_murdered_for_war')), 0)
      )::INT8 AS heat`,
     [worldId, culpritId],
   );

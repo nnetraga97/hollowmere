@@ -24,11 +24,11 @@ describe('player conversation output parsing', () => {
     assert.deepEqual(parseTurn(JSON.stringify({
       reply: 'I have heard enough.', speechAct: 'inquire',
       disclosure: 'deflect', hearingResponse: null,
-      referencedClaimKeys: ['rowan_at_the_quay'],
-    }), new Set(['rowan_at_the_quay'])), {
+      referencedClaimKeys: ['rowan_at_quay'],
+    }), new Set(['rowan_at_quay'])), {
       reply: 'I have heard enough.', speechAct: 'inquire',
       disclosure: 'deflect', hearingResponse: null,
-      referencedClaimKeys: ['rowan_at_the_quay'],
+      referencedClaimKeys: ['rowan_at_quay'],
     });
     assert.deepEqual(parseTurn(JSON.stringify({
       reply: 'Come to the square.', speechAct: 'summon',

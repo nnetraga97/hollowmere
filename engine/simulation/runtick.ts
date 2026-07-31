@@ -318,9 +318,9 @@ export async function runTick(options: RunTickOptions): Promise<TickReport> {
     if (escalation.stage === 'war') ending = 'war';
     else if (peace.declared) ending = 'peace';
     else if (triggers.ending) ending = triggers.ending;
-    else if (await evaluateExposureEnding(client, {
+    else ending = await evaluateExposureEnding(client, {
       worldId: options.worldId, tick, seq,
-    })) ending = 'exposed';
+    });
     if (ending && ending !== 'exposed') {
       const first = await endWorld(client, { worldId: options.worldId, tick, seq, ending });
       if (!first) ending = null;

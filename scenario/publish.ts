@@ -171,9 +171,11 @@ async function insertTemplates(
   for (const c of scenario.claims) {
     await client.query(
       `INSERT INTO claim_templates
-         (scenario_version_id, claim_key, text, subject_agent_key, truth, severity)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [scenarioVersionId, c.key, c.text, c.subject, c.truth, c.severity],
+         (scenario_version_id, claim_key, text, subject_agent_key, truth, severity,
+          kind, subject_slot, initially_locked)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [scenarioVersionId, c.key, c.text, c.subject, c.truth, c.severity,
+       c.kind ?? 'accusation', c.subjectSlot ?? null, c.initiallyLocked ?? false],
     );
   }
 
@@ -181,15 +183,23 @@ async function insertTemplates(
     await client.query(
       `INSERT INTO culprit_templates
          (scenario_version_id, culprit_key, motive_key, profit_claim_key,
-          record_claim_key, claim_truth)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+          record_claim_key, claim_truth, case_profile)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         scenarioVersionId,
         culprit.key,
         culprit.motive,
-        culprit.profitClaim,
-        culprit.recordClaim,
-        JSON.stringify(culprit.claimTruth),
+        culprit.profitClaim ?? 'notebook_comparator',
+        culprit.recordClaim ?? 'notebook_comparator',
+        JSON.stringify(culprit.claimTruth ?? {}),
+        JSON.stringify({
+          targetFactions: culprit.targetFactions ?? [],
+          targetsByFaction: culprit.targetsByFaction ?? {},
+          notebookMethod: culprit.notebookMethod ?? null,
+          murderLocation: culprit.murderLocation ?? null,
+          tamperTiming: culprit.tamperTiming ?? null,
+          evidence: culprit.evidence ?? [],
+        }),
       ],
     );
   }

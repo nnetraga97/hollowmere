@@ -50,25 +50,25 @@ describe('speech act parsing', () => {
 describe('claim resolution', () => {
   const candidates = [
     {
-      claimId: 'c1', claimKey: 'corvane_ordered_death',
-      text: "House Corvane ordered the prince's killing to stop his audit of the granary.",
+      claimId: 'c1', claimKey: 'target_murdered_edryc',
+      text: 'Rowan Corvane murdered Prince Edryc.',
       severity: 9500, subjectAgentId: 'a1', subjectKey: 'alric_corvane', subjectFactionId: 'f1',
     },
     {
-      claimId: 'c2', claimKey: 'physician_was_paid',
-      text: 'The physician was paid to leave the wound out of his record.',
-      severity: 8500, subjectAgentId: 'a2', subjectKey: 'ambrose_kyte', subjectFactionId: 'f2',
+      claimId: 'c2', claimKey: 'target_house_ordered_murder',
+      text: 'House Corvane ordered Edryc\'s murder.',
+      severity: 8500, subjectAgentId: 'a2', subjectKey: 'alric_corvane', subjectFactionId: 'f2',
     },
   ];
 
   test('matches the claim the player is plainly talking about', () => {
-    const match = resolveClaim('the physician was paid to hide the wound', candidates);
-    assert.equal(match?.claimKey, 'physician_was_paid');
+    const match = resolveClaim('House Corvane ordered Edryc\'s murder', candidates);
+    assert.equal(match?.claimKey, 'target_house_ordered_murder');
   });
 
   test('counts naming the person as evidence', () => {
     const match = resolveClaim('corvane ordered it', candidates);
-    assert.equal(match?.claimKey, 'corvane_ordered_death');
+    assert.equal(match?.claimKey, 'target_house_ordered_murder');
   });
 
   test('resolves to nothing rather than to the nearest thing', () => {
@@ -264,12 +264,12 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
 
     const result = await converse({
       worldId, sessionId, agentKey: 'tobias_reeve',
-      text: 'The physician was paid to leave the wound out of his record. He is guilty.',
+      text: 'The accused House ordered Edryc\'s murder. Its leaders are guilty.',
       idempotencyKey: 'accuse-1', inference,
     });
 
     assert.equal(result.act, 'accuse');
-    assert.equal(result.claimKey, 'physician_was_paid');
+    assert.equal(result.claimKey, 'target_house_ordered_murder');
     assert.equal(result.effects.rumorSeeded, true);
     assert.ok(result.effects.tensionDelta > 0, 'an accusation raises tension');
 
@@ -278,7 +278,7 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
          JOIN world_agents a ON a.world_id = s.world_id AND a.agent_id = s.agent_id
          JOIN world_rumors r ON r.world_id = s.world_id AND r.rumor_id = s.rumor_id
          JOIN world_claims c ON c.world_id = r.world_id AND c.claim_id = r.claim_id
-        WHERE s.world_id = $1 AND c.claim_key = 'physician_was_paid'
+        WHERE s.world_id = $1 AND c.claim_key = 'target_house_ordered_murder'
         ORDER BY a.agent_key`, [worldId]);
     assert.ok(
       held.some((row) => row.agent_key === 'tobias_reeve'),
@@ -294,7 +294,7 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
       `SELECT count(*)::INT8 AS count FROM world_rumor_spread s
          JOIN world_rumors r ON r.world_id = s.world_id AND r.rumor_id = s.rumor_id
          JOIN world_claims c ON c.world_id = r.world_id AND c.claim_id = r.claim_id
-        WHERE s.world_id = $1 AND c.claim_key = 'physician_was_paid'`, [worldId]);
+        WHERE s.world_id = $1 AND c.claim_key = 'target_house_ordered_murder'`, [worldId]);
     assert.ok(spread[0]!.count > 1, 'the accusation should have travelled');
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
@@ -312,7 +312,7 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
         idempotencyKey: `dispute-${i}`, inference,
       });
       assert.equal(result.act, 'dispute');
-      assert.equal(result.claimKey, 'corvane_ordered_death');
+      assert.equal(result.claimKey, 'target_house_ordered_murder');
       confidence = result.effects.beliefAfter ?? confidence;
     }
 
@@ -323,7 +323,7 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
          JOIN world_agents a ON a.world_id = b.world_id AND a.agent_id = b.agent_id
          JOIN world_claims c ON c.world_id = b.world_id AND c.claim_id = b.claim_id
         WHERE b.world_id = $1 AND a.agent_key = 'tobias_reeve'
-          AND c.claim_key = 'corvane_ordered_death'`, [worldId]);
+          AND c.claim_key = 'target_house_ordered_murder'`, [worldId]);
     assert.equal(stored[0]!.confidence, confidence);
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
@@ -479,7 +479,7 @@ describe('conversation against CockroachDB', { skip: !HAS_DB && 'DATABASE_URL no
     // "one wins" but "all of them land, in some valid order".
     const utterances = Array.from({ length: 8 }, (_, index) => converse({
       worldId, sessionId, agentKey: 'tobias_reeve',
-      text: 'The physician was paid to leave the wound out of the record. He is guilty.',
+      text: 'The accused House ordered Edryc\'s murder. Its leaders are guilty.',
       idempotencyKey: `contend-${index}`, inference,
     }));
     const [tickReport, ...results] = await Promise.all([

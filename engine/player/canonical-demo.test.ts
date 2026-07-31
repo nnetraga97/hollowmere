@@ -113,7 +113,7 @@ describe('canonical public memory demo', { skip: !HAS_DB && 'DATABASE_URL not se
     const result = await takeConversationTurn({
       ...ref,
       conversationId: conversation.conversationId,
-      text: 'The physician was paid to leave the wound out of his record. He is guilty.',
+      text: 'The accused House ordered Edryc\'s murder. Its leaders are guilty.',
       idempotencyKey: `${keyPrefix}-turn`,
       inference,
     });
@@ -132,7 +132,7 @@ describe('canonical public memory demo', { skip: !HAS_DB && 'DATABASE_URL not se
     assert.ok(path.length > 0, 'the public movement command path should reach Tobias');
 
     const firstTurn = await createClaimMemory(ref, 'canonical-first');
-    assert.ok(firstTurn.referencedClaimKeys.includes('physician_was_paid'));
+    assert.ok(firstTurn.referencedClaimKeys.includes('target_house_ordered_murder'));
 
     const immediate = await query<{ rumor_id: string; claim_id: string; agent_id: string }>(
       `SELECT rumor.rumor_id, rumor.claim_id, spread.agent_id
@@ -143,7 +143,7 @@ describe('canonical public memory demo', { skip: !HAS_DB && 'DATABASE_URL not se
            ON spread.world_id = rumor.world_id AND spread.rumor_id = rumor.rumor_id
          JOIN world_agents agent
            ON agent.world_id = spread.world_id AND agent.agent_id = spread.agent_id
-        WHERE rumor.world_id = $1 AND claim.claim_key = 'physician_was_paid'
+        WHERE rumor.world_id = $1 AND claim.claim_key = 'target_house_ordered_murder'
           AND agent.agent_key = 'tobias_reeve'
         ORDER BY rumor.created_tick, rumor.rumor_id LIMIT 1`,
       [ref.worldId],
@@ -154,7 +154,7 @@ describe('canonical public memory demo', { skip: !HAS_DB && 'DATABASE_URL not se
       `SELECT source.memory_id, source.claim_key, source.source_id AS source_turn_id
          FROM archivist_memory_sources source
         WHERE source.world_id = $1 AND source.agent_key = 'tobias_reeve'
-          AND source.claim_key = 'physician_was_paid' AND source.source_kind = 'turn'
+          AND source.claim_key = 'target_house_ordered_murder' AND source.source_kind = 'turn'
         ORDER BY source.memory_tick, source.memory_id, source.edge_id`,
       [ref.worldId],
     );
@@ -176,7 +176,7 @@ describe('canonical public memory demo', { skip: !HAS_DB && 'DATABASE_URL not se
     const later = await takeConversationTurn({
       ...ref,
       conversationId: laterConversation.conversationId,
-      text: 'Do you remember what I said about the physician being paid to hide the wound?',
+      text: 'Do you remember what I said about the accused House ordering Edryc\'s murder?',
       idempotencyKey: 'canonical-later-turn',
       inference,
     });
@@ -243,7 +243,7 @@ describe('canonical public memory demo', { skip: !HAS_DB && 'DATABASE_URL not se
     await createClaimMemory(other, 'canonical-other');
     const scoped = await query<{ world_id: string }>(
       `SELECT world_id FROM archivist_memory_sources
-        WHERE world_id = $1 AND claim_key = 'physician_was_paid'`,
+        WHERE world_id = $1 AND claim_key = 'target_house_ordered_murder'`,
       [ref.worldId],
     );
     assert.ok(scoped.length > 0);

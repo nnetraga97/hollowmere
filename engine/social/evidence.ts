@@ -17,6 +17,71 @@ export function parseDisclosure(text: string): Disclosure {
   return 'deflect';
 }
 
+/** Discover the next authored breadcrumb held by the NPC being questioned. */
+export async function recordCaseEvidenceForInquiry(
+  client: Client,
+  input: {
+    worldId: string;
+    playerId: string;
+    agentId: string;
+    eventId: string;
+    tick: number;
+  },
+): Promise<string | null> {
+  const definition = await client.query<{
+    role: string; kind: 'provenance' | 'contradiction' | 'record';
+    claim_id: string; accused_id: string | null;
+  }>(
+    `SELECT definition.role, definition.kind, definition.claim_id, definition.accused_id
+       FROM world_case_evidence definition
+      WHERE definition.world_id = $1 AND definition.holder_agent_id = $3
+        AND NOT EXISTS (
+          SELECT 1 FROM world_player_evidence evidence
+           WHERE evidence.world_id = definition.world_id
+             AND evidence.player_id = $2 AND evidence.role = definition.role
+        )
+      ORDER BY CASE definition.role
+        WHEN 'tamper_comparator' THEN 1 WHEN 'culprit_access' THEN 2
+        WHEN 'murder_opportunity' THEN 3 ELSE 4 END
+      LIMIT 1`,
+    [input.worldId, input.playerId, input.agentId],
+  );
+  const row = definition.rows[0];
+  if (!row) return null;
+
+  let tellingId: string | null = null;
+  if (row.role === 'escalation_provenance') {
+    const telling = await client.query<{ telling_id: string }>(
+      `SELECT telling.telling_id
+         FROM world_rumor_tellings telling
+         JOIN world_culprit culprit
+           ON culprit.world_id = telling.world_id AND culprit.agent_id = telling.from_agent_id
+        WHERE telling.world_id = $1 AND telling.to_agent_id = $2
+          AND telling.claim_id = $3
+        ORDER BY telling.tick, telling.seq LIMIT 1`,
+      [input.worldId, input.agentId, row.claim_id],
+    );
+    tellingId = telling.rows[0]?.telling_id ?? null;
+    if (!tellingId) return null;
+  }
+
+  await client.query(
+    `INSERT INTO world_player_evidence
+       (world_id, player_id, kind, role, telling_id, event_id, claim_id,
+        accused_id, genuine, found_tick)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)
+     ON CONFLICT DO NOTHING`,
+    [input.worldId, input.playerId, row.kind, row.role, tellingId,
+     tellingId ? null : input.eventId, row.claim_id, row.accused_id, input.tick],
+  );
+  await client.query(
+    `UPDATE world_claims SET locked = false
+      WHERE world_id = $1 AND claim_id = $2`,
+    [input.worldId, row.claim_id],
+  );
+  return row.role;
+}
+
 export async function recordInquiryEvidence(
   client: Client,
   input: {
@@ -77,45 +142,6 @@ export async function recordInquiryEvidence(
     ],
   );
   return { accusedId, genuine };
-}
-
-const RECORD_WITNESSES: Readonly<Record<string, string>> = {
-  tobias_reeve: 'shipwrights_smuggle_arms',
-  ambrose_kyte: 'physician_was_paid',
-  cuthbert_ash: 'granary_books_false',
-};
-
-export async function recordAuthoredRecord(
-  client: Client,
-  input: {
-    worldId: string;
-    playerId: string;
-    agentId: string;
-    agentKey: string;
-    eventId: string;
-    tick: number;
-  },
-): Promise<boolean> {
-  const claimKey = RECORD_WITNESSES[input.agentKey];
-  if (!claimKey) return false;
-  const row = await client.query<{ claim_id: string }>(
-    `SELECT c.claim_id
-       FROM world_claims c
-       JOIN world_agents a ON a.world_id = c.world_id AND a.agent_id = $3
-       JOIN world_players p ON p.world_id = c.world_id AND p.player_id = $2
-      WHERE c.world_id = $1 AND c.claim_key = $4 AND p.location_id = a.location_id`,
-    [input.worldId, input.playerId, input.agentId, claimKey],
-  );
-  const claimId = row.rows[0]?.claim_id;
-  if (!claimId) return false;
-  await client.query(
-    `INSERT INTO world_player_evidence
-       (world_id, player_id, kind, event_id, claim_id, genuine, found_tick)
-     VALUES ($1, $2, 'record', $3, $4, true, $5)
-     ON CONFLICT DO NOTHING`,
-    [input.worldId, input.playerId, input.eventId, claimId, input.tick],
-  );
-  return true;
 }
 
 export async function recordWitnessedContradiction(

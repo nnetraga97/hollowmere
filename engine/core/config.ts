@@ -232,13 +232,6 @@ export const HEARING = {
   holdTicks: 6,
 } as const;
 
-export const EVIDENCE = {
-  provenanceRequired: 3,
-  distinctClaimsRequired: 2,
-  contradictionRequired: 1,
-  recordRequired: 1,
-} as const;
-
 export const TIME = {
   /** Ticks per in-world phase. Four phases × 24 = 96 ticks per in-world day. */
   ticksPerPhase: 24,

@@ -265,11 +265,12 @@ export async function runHearings(
     due_tick: number;
     reveal_claim_id: string;
     claim_key: string;
+    claim_kind: string;
     severity: number;
     subject_faction_id: string;
   }>(
     `SELECT h.hearing_id, h.convener_id, h.location_id, h.due_tick,
-            h.reveal_claim_id, c.claim_key, c.severity,
+            h.reveal_claim_id, c.claim_key, c.kind AS claim_kind, c.severity,
             subject.faction_id AS subject_faction_id
        FROM world_hearings h
        JOIN world_claims c
@@ -310,7 +311,10 @@ export async function runHearings(
     );
     for (const listener of listeners.rows) {
       const persuasion = persuasionStrength(listener.reputation, listener.trust);
-      const direction = listener.faction_id === hearing.subject_faction_id ? 7_000 : SCALE;
+      const resolution = hearing.claim_key === 'instigator_altered_notebook'
+        || hearing.claim_key === 'instigator_murdered_for_war';
+      const direction = resolution || listener.faction_id !== hearing.subject_faction_id
+        ? SCALE : 7_000;
       const delta = fpMul(persuasion, direction);
       const confidence = clampSigned((listener.confidence ?? 0) + delta);
       await recordBelief(client, {
@@ -322,7 +326,9 @@ export async function runHearings(
         confidence,
       });
       result.beliefUpdates++;
-      result.tensionDelta += fpMul(TENSION.publicAccusation, hearing.severity);
+      if (!resolution && hearing.claim_kind === 'accusation') {
+        result.tensionDelta += fpMul(TENSION.publicAccusation, hearing.severity);
+      }
     }
     await client.query(
       `UPDATE world_agent_commitments commitment

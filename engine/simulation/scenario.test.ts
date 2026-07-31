@@ -13,10 +13,14 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { closePool, query } from '../database/db.ts';
+import { closePool, query, withSerializable } from '../database/db.ts';
 import { ScenarioError, resolveRoutine, validateScenario } from '../../scenario/schema.ts';
 import { checksumOf, loadScenarioFile, publishScenario } from '../../scenario/publish.ts';
-import { instantiateWorld, selectCulprit } from '../../scenario/instantiate.ts';
+import { instantiateWorld, selectCase, selectCulprit } from '../../scenario/instantiate.ts';
+import { createSeq } from '../core/seq.ts';
+import { maybeUnlockExposure, evaluateExposureEnding } from './exposure.ts';
+import { accuseByClaimKey } from '../agents/accusations.ts';
+import { recordCaseEvidenceForInquiry } from '../social/evidence.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SCENARIO_PATH = join(here, '..', '..', 'scenario', 'hollowmere-v2.json');
@@ -126,6 +130,18 @@ describe('scenario validation', () => {
     });
   });
 
+  test('rejects opening relationship overrides outside the authored town', () => {
+    const s = baseScenario();
+    (s.opening as { relationshipOverrides?: unknown[] }).relationshipOverrides = [
+      { src: 'ghost', dst: 'a1', sentiment: 5000, trust: 5000 },
+    ];
+    assert.throws(() => validateScenario(s), (error: unknown) => {
+      assert.ok(error instanceof ScenarioError);
+      assert.match(error.issues.join('\n'), /invalid edge "ghost"/);
+      return true;
+    });
+  });
+
   describe('trigger DSL is a closed grammar', () => {
     test('rejects an unknown condition fact', async () => {
       const s = baseScenario();
@@ -169,10 +185,15 @@ describe('scenario validation', () => {
 });
 
 describe('culprit selection', () => {
+  const profile = {
+    targetFactions: ['other'], targetsByFaction: { other: ['target'] },
+    notebookMethod: 'removed' as const, murderLocation: 'l',
+    tamperTiming: 'after_staging' as const, evidence: [],
+  };
   const candidates = [
-    { culprit_key: 'c', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {} },
-    { culprit_key: 'a', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {} },
-    { culprit_key: 'b', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {} },
+    { culprit_key: 'c', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {}, case_profile: profile },
+    { culprit_key: 'a', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {}, case_profile: profile },
+    { culprit_key: 'b', motive_key: 'm', profit_claim_key: 'p', record_claim_key: 'r', claim_truth: {}, case_profile: profile },
   ];
 
   test('depends on seed and scenario version, not authored array order', () => {
@@ -181,6 +202,12 @@ describe('culprit selection', () => {
     assert.equal(first, reversed);
     assert.ok(new Set(Array.from({ length: 20 }, (_, seed) =>
       selectCulprit(seed, 'scenario-id', candidates)?.culprit_key)).size > 1);
+  });
+
+  test('case selection depends on stable scenario version, not a database UUID', () => {
+    const first = selectCase(42, 'hollowmere-v4', candidates);
+    const repeated = selectCase(42, 'hollowmere-v4', [...candidates].reverse());
+    assert.deepEqual(first, repeated);
   });
 });
 
@@ -218,11 +245,20 @@ const dbSuite = HAS_DB ? describe : describe.skip;
 
 dbSuite('publish and instantiate', () => {
   let scenarioVersionId: string;
+  let stableScenarioVersion: string;
+  let candidates: Parameters<typeof selectCase>[2];
 
   before(async () => {
     const scenario = await loadScenarioFile(SCENARIO_PATH);
+    stableScenarioVersion = scenario.version;
     const published = await publishScenario(scenario);
     scenarioVersionId = published.scenarioVersionId;
+    candidates = await query<Parameters<typeof selectCase>[2][number]>(
+      `SELECT culprit_key, motive_key, profit_claim_key, record_claim_key,
+              claim_truth, case_profile
+         FROM culprit_templates WHERE scenario_version_id = $1 ORDER BY culprit_key`,
+      [scenarioVersionId],
+    );
   });
 
   after(async () => {
@@ -253,7 +289,8 @@ dbSuite('publish and instantiate', () => {
 
     const [counts] = await query<{
       agents: number; relationships: number; factions: number;
-      claims: number; rumors: number; faction_state: number; inference_profile: string;
+      claims: number; rumors: number; belief_updates: number; faction_state: number;
+      case_evidence: number; opening_evidence: number; inference_profile: string;
     }>(
       `SELECT
          (SELECT count(*)::INT8 FROM world_agents WHERE world_id = $1) AS agents,
@@ -261,6 +298,10 @@ dbSuite('publish and instantiate', () => {
          (SELECT count(*)::INT8 FROM world_factions WHERE world_id = $1) AS factions,
          (SELECT count(*)::INT8 FROM world_claims WHERE world_id = $1) AS claims,
          (SELECT count(*)::INT8 FROM world_rumors WHERE world_id = $1) AS rumors,
+         (SELECT count(*)::INT8 FROM belief_updates WHERE world_id = $1) AS belief_updates,
+         (SELECT count(*)::INT8 FROM world_case_evidence WHERE world_id = $1) AS case_evidence,
+         (SELECT count(*)::INT8 FROM world_player_evidence
+           WHERE world_id = $1 AND role = 'tamper_sign') AS opening_evidence,
          (SELECT count(*)::INT8 FROM world_faction_state WHERE world_id = $1) AS faction_state,
          (SELECT inference_profile FROM worlds WHERE world_id = $1) AS inference_profile`,
       [world.worldId],
@@ -270,8 +311,11 @@ dbSuite('publish and instantiate', () => {
     assert.equal(counts?.factions, 3);
     // Every ordered pair, so gossip weighting always has a defined edge.
     assert.equal(counts?.relationships, 30 * 29);
-    assert.equal(counts?.claims, 11);
-    assert.equal(counts?.rumors, 3);
+    assert.equal(counts?.claims, 22);
+    assert.equal(counts?.rumors, 1);
+    assert.ok((counts?.belief_updates ?? 0) >= 10);
+    assert.equal(counts?.case_evidence, 5);
+    assert.equal(counts?.opening_evidence, 1);
     assert.equal(counts?.faction_state, 3);
     assert.equal(counts?.inference_profile, 'azure_terra');
 
@@ -351,6 +395,140 @@ dbSuite('publish and instantiate', () => {
     assert.equal(shared?.count, 0, 'agent ids must not be shared across worlds');
 
     await query(`DELETE FROM worlds WHERE world_id IN ($1, $2)`, [a.worldId, b.worldId]);
+  });
+
+  test('all six selected cases resolve coherent world truth and five breadcrumbs', async () => {
+    const seedByCulprit = new Map<string, number>();
+    for (let seed = 0; seed < 500 && seedByCulprit.size < 6; seed++) {
+      const selected = selectCase(seed, stableScenarioVersion, candidates);
+      if (selected) seedByCulprit.set(selected.culprit.culprit_key, seed);
+    }
+    assert.deepEqual([...seedByCulprit.keys()].sort(), [
+      'alric_corvane', 'ambrose_kyte', 'father_ansel',
+      'hollis_barrow', 'rusk_baelen', 'sella_dorn',
+    ]);
+
+    for (const [culpritKey, seed] of seedByCulprit) {
+      const world = await instantiateWorld({
+        scenarioVersionId, seed, sessionId: `case-${culpritKey}-${Date.now()}`,
+      });
+      const rows = await query<{
+        culprit_key: string; culprit_faction: string; target_faction: string;
+        evidence_count: number; unresolved_text: number; victim_faction: string;
+      }>(
+        `SELECT culprit.agent_key AS culprit_key, faction.faction_key AS culprit_faction,
+                marker.case_state->>'targetFactionKey' AS target_faction,
+                (SELECT count(*)::INT8 FROM world_case_evidence
+                  WHERE world_id = $1) AS evidence_count,
+                (SELECT count(*)::INT8 FROM world_claims
+                  WHERE world_id = $1 AND text LIKE '%{%') AS unresolved_text,
+                (SELECT victim_faction.faction_key FROM world_agents victim
+                   JOIN world_factions victim_faction
+                     ON victim_faction.world_id = victim.world_id
+                    AND victim_faction.faction_id = victim.faction_id
+                  WHERE victim.world_id = $1 AND victim.agent_key = 'edryc_aldreth') AS victim_faction
+           FROM world_culprit marker
+           JOIN world_agents culprit
+             ON culprit.world_id = marker.world_id AND culprit.agent_id = marker.agent_id
+           JOIN world_factions faction
+             ON faction.world_id = culprit.world_id AND faction.faction_id = culprit.faction_id
+          WHERE marker.world_id = $1`,
+        [world.worldId],
+      );
+      const row = rows[0]!;
+      assert.equal(row.culprit_key, culpritKey);
+      assert.equal(row.evidence_count, 5);
+      assert.equal(row.unresolved_text, 0);
+      assert.equal(row.victim_faction, 'unaligned');
+      if (row.culprit_faction === 'aldreth') assert.equal(row.target_faction, 'corvane');
+      if (row.culprit_faction === 'corvane') assert.equal(row.target_faction, 'aldreth');
+      await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
+    }
+  });
+
+  test('five genuine roles unlock both verdicts, including an unaligned culprit', async () => {
+    const seed = Array.from({ length: 500 }, (_, value) => value).find((value) =>
+      selectCase(value, stableScenarioVersion, candidates)?.culprit.culprit_key === 'father_ansel');
+    assert.notEqual(seed, undefined);
+    const world = await instantiateWorld({
+      scenarioVersionId, seed: seed!, sessionId: `case-proof-${Date.now()}`,
+    });
+    const [player] = await query<{ player_id: string }>(
+      `SELECT player_id FROM world_players WHERE world_id = $1`, [world.worldId],
+    );
+    const definitions = await query<{ role: string; holder_agent_id: string }>(
+      `SELECT role, holder_agent_id FROM world_case_evidence
+        WHERE world_id = $1 AND role IN ('tamper_comparator', 'escalation_provenance')`,
+      [world.worldId],
+    );
+    const [openingEvent] = await query<{ event_id: string }>(
+      `SELECT event_id FROM world_events WHERE world_id = $1 ORDER BY tick, seq LIMIT 1`,
+      [world.worldId],
+    );
+    const comparator = definitions.find((row) => row.role === 'tamper_comparator')!;
+    const discovered = await withSerializable((client) => recordCaseEvidenceForInquiry(client, {
+      worldId: world.worldId, playerId: player!.player_id,
+      agentId: comparator.holder_agent_id, eventId: openingEvent!.event_id, tick: 1,
+    }));
+    assert.equal(discovered.value, 'tamper_comparator');
+    await query(
+      `INSERT INTO world_player_evidence
+         (world_id, player_id, kind, role, claim_id, accused_id, genuine, found_tick)
+       SELECT definition.world_id, $2, definition.kind, definition.role,
+              definition.claim_id, definition.accused_id, true, 1
+         FROM world_case_evidence definition
+        WHERE definition.world_id = $1
+          AND definition.role NOT IN ('tamper_sign', 'tamper_comparator', 'escalation_provenance')
+       ON CONFLICT DO NOTHING`,
+      [world.worldId, player!.player_id],
+    );
+    const incomplete = await withSerializable((client) => maybeUnlockExposure(client, {
+      worldId: world.worldId, playerId: player!.player_id, tick: 1, seq: createSeq(1),
+    }));
+    assert.equal(incomplete.value, false, 'one missing role must keep the verdicts locked');
+    const escalation = definitions.find((row) => row.role === 'escalation_provenance')!;
+    const provenance = await withSerializable((client) => recordCaseEvidenceForInquiry(client, {
+      worldId: world.worldId, playerId: player!.player_id,
+      agentId: escalation.holder_agent_id, eventId: openingEvent!.event_id, tick: 1,
+    }));
+    assert.equal(provenance.value, 'escalation_provenance');
+    const unlocked = await withSerializable((client) => maybeUnlockExposure(client, {
+      worldId: world.worldId, playerId: player!.player_id, tick: 1, seq: createSeq(1),
+    }));
+    assert.equal(unlocked.value, true);
+    const verdicts = await query<{ claim_key: string; locked: boolean }>(
+      `SELECT claim_key, locked FROM world_claims WHERE world_id = $1
+        AND claim_key IN ('instigator_altered_notebook', 'instigator_murdered_for_war')
+        ORDER BY claim_key`, [world.worldId],
+    );
+    assert.equal(verdicts.length, 2);
+    assert.ok(verdicts.every((claim) => !claim.locked));
+
+    const [speaker] = await query<{ agent_id: string }>(
+      `SELECT agent_id FROM world_agents WHERE world_id = $1 AND agent_key = 'alric_corvane'`,
+      [world.worldId],
+    );
+    const accusation = await withSerializable((client) => accuseByClaimKey(client, {
+      worldId: world.worldId, tick: 1, seq: createSeq(100),
+      accuserId: speaker!.agent_id, claimKey: 'instigator_murdered_for_war',
+    }));
+    assert.equal(accusation.value?.rise, 0, 'resolution may spread without House tension');
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
+  });
+
+  test('an unavailable neutral authority selects the explicit war fallback', async () => {
+    const world = await instantiateWorld({
+      scenarioVersionId, seed: 77, sessionId: `case-fallback-${Date.now()}`,
+    });
+    await query(
+      `UPDATE world_agents SET status = 'missing'
+        WHERE world_id = $1 AND agent_key = 'veranne_thule'`, [world.worldId],
+    );
+    const result = await withSerializable((client) => evaluateExposureEnding(client, {
+      worldId: world.worldId, tick: 1, seq: createSeq(1),
+    }));
+    assert.equal(result.value, 'war');
+    await query(`DELETE FROM worlds WHERE world_id = $1`, [world.worldId]);
   });
 });
 

@@ -76,6 +76,7 @@ interface RumorRow {
   severity: number;
   subject_agent_id: string;
   subject_faction_id: string;
+  kind: 'fact' | 'interpretation' | 'accusation';
 }
 
 interface HolderRow {
@@ -167,7 +168,9 @@ export async function runGossip(
           distortions++;
         }
 
-        const alignment = alignmentOf(listener.faction_id, rumor.subject_faction_id);
+        const alignment = rumor.kind === 'fact'
+          ? 'rival'
+          : alignmentOf(listener.faction_id, rumor.subject_faction_id);
         const confidenceBefore = listener.confidence ?? 0;
         const confidenceAfter = shiftConfidence({
           current: confidenceBefore,
@@ -210,27 +213,29 @@ export async function runGossip(
 
         // Believing something bad about someone sours the listener toward them,
         // but only in proportion to how far they actually believe it.
-        await applySentimentShift(client, {
-          worldId: ctx.worldId,
-          tick: ctx.tick,
-          srcAgentId: listener.agent_id,
-          dstAgentId: rumor.subject_agent_id,
-          currentSentiment: listener.sentiment,
-          valence: rumor.valence,
-          confidence: confidenceAfter,
-        });
+        if (rumor.kind === 'accusation') {
+          await applySentimentShift(client, {
+            worldId: ctx.worldId,
+            tick: ctx.tick,
+            srcAgentId: listener.agent_id,
+            dstAgentId: rumor.subject_agent_id,
+            currentSentiment: listener.sentiment,
+            valence: rumor.valence,
+            confidence: confidenceAfter,
+          });
+        }
 
         const crossFaction =
           alignment === 'rival' && listener.faction_id !== rumor.subject_faction_id;
 
         // Tension comes from a hostile claim crossing the line between the two
         // houses, and again when a listener's belief first becomes actionable.
-        if (crossFaction && rumor.valence < 0) {
+        if (rumor.kind === 'accusation' && crossFaction && rumor.valence < 0) {
           const rise = fpMul(TENSION.crossFactionAccusation, rumor.severity);
           tensionDelta += rise;
           attribute(rumor.subject_faction_id, rise);
         }
-        if (
+        if (rumor.kind === 'accusation' &&
           confidenceBefore < BELIEF.actionableConfidence &&
           confidenceAfter >= BELIEF.actionableConfidence
         ) {
@@ -385,7 +390,7 @@ async function applySentimentShift(
 async function loadHotRumors(client: Client, worldId: string): Promise<RumorRow[]> {
   const result = await client.query<RumorRow>(
     `SELECT r.rumor_id, r.claim_id, r.heat, r.valence, r.updated_tick,
-            c.text AS claim_text, c.severity, c.subject_agent_id,
+            c.text AS claim_text, c.severity, c.subject_agent_id, c.kind,
             s.faction_id AS subject_faction_id
        FROM world_rumors r
        JOIN world_claims c ON c.world_id = r.world_id AND c.claim_id = r.claim_id

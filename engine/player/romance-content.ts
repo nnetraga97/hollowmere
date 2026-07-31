@@ -146,7 +146,7 @@ const MAREN: RomanceCandidateDef = {
           crisisResponse: 'Her answer comes slowly. “He cheated at cards and confessed before anyone noticed. Imagine that—a man constitutionally incapable of enjoying his own crime.” Her eyes shine. “I needed to remember that before they turn him into a banner.”',
           aftermath: 'Edryc becomes a person between you, not merely evidence or a title Maren inherited.',
           impression: 'The outsider asked Maren to remember Edryc as a brother, not a corpse.',
-          effects: { trust: 350, affinity: 450, respect: 250, revealClaimKeys: ['maren_welcomed_it'], rumorHeat: { claimKey: 'maren_welcomed_it', amount: -500 } },
+          effects: { trust: 350, affinity: 450, respect: 250, revealClaimKeys: ['edryc_investigated_fairly'], rumorHeat: { claimKey: 'edryc_investigated_fairly', amount: 500 } },
         },
         {
           key: 'promise_aldreth', label: '“You should not have to carry your house alone.”',
@@ -162,7 +162,7 @@ const MAREN: RomanceCandidateDef = {
     {
       key: 'maren_ledger_margin', chapter: 2, title: 'In the Ledger Margin',
       kicker: 'What Edryc left unfinished', minimum: { trust: 5200, affinity: 250, respect: 100 },
-      narration: 'Maren draws a folded scrap from inside her sleeve. The paper is covered in Edryc\'s narrow hand: grain totals, tide marks, and one line written twice—trust the margin, not the sum.',
+      narration: 'Maren draws a folded scrap from inside her sleeve. The paper is covered in Edryc\'s narrow hand: cargo marks, tide times, and one line written twice—trust the margin, not the sum.',
       crisisNarration: 'Maren has carried the scrap through two searches and one attempted arrest. The edges are soft with handling. Whatever is written there has become dangerous enough to kill for twice.',
       opening: '“I can give this to the magistrate, bury it, or use it to force half the council to kneel.” She meets your eyes. “I know what the heir should do. I am asking what you believe I should do.”',
       crisisOpening: '“If this goes public tonight, my house may fracture by morning. If it does not, someone innocent may hang.” Her voice remains level. Her hands do not. “Tell me the truth, not what will keep me fond of you.”',
@@ -178,7 +178,7 @@ const MAREN: RomanceCandidateDef = {
           crisisResponse: '“Then we divide the risk.” Her fingers close around yours for one brief, fierce moment. “If the law fails, at least it will not take the truth with it.”',
           aftermath: 'The audit trail enters the investigation while Maren retains proof against anyone who would suppress it.',
           impression: 'The outsider helped Maren choose accountable truth over control.',
-          effects: { trust: 500, affinity: 300, respect: 600, globalTension: -250, factionTension: -200, revealClaimKeys: ['granary_books_false'], rumorHeat: { claimKey: 'granary_books_false', amount: 650 } },
+          effects: { trust: 500, affinity: 300, respect: 600, globalTension: -250, factionTension: -200, revealClaimKeys: ['rusk_omitted_cargo'], rumorHeat: { claimKey: 'rusk_omitted_cargo', amount: 650 } },
         },
         {
           key: 'keep_between_us', label: '“Keep it tonight. Decide when the town is less hungry for blood.”',
@@ -187,7 +187,7 @@ const MAREN: RomanceCandidateDef = {
           crisisResponse: 'She leans close enough that her forehead nearly touches yours. “One night. Not forever.” Relief and shame cross her face together. “Do not let tenderness turn either of us into a coward.”',
           aftermath: 'The evidence remains safe and private. Maren feels protected, but the public truth waits.',
           impression: 'The outsider protected Maren and Edryc’s note, while promising not to confuse delay with innocence.',
-          effects: { trust: 400, affinity: 550, respect: 100, reputation: 250, globalTension: 100, revealClaimKeys: ['granary_books_false'] },
+          effects: { trust: 400, affinity: 550, respect: 100, reputation: 250, globalTension: 100, revealClaimKeys: ['rusk_omitted_cargo'] },
         },
         {
           key: 'use_as_leverage', label: '“Use it. Make both houses answer to you.”',
@@ -196,7 +196,7 @@ const MAREN: RomanceCandidateDef = {
           crisisResponse: '“There it is.” Her voice goes very quiet. “The answer everyone gives when they decide power is the only language I speak.” She takes the paper back. “I may use it. I will not thank you for making it easier.”',
           aftermath: 'Maren gains leverage over the council, while trust between you becomes more transactional.',
           impression: 'The outsider urged Maren to weaponize Edryc’s evidence; she respected the ruthlessness and mistrusted the intimacy.',
-          effects: { trust: -250, affinity: -200, respect: 500, fear: 100, reputation: 500, globalTension: 300, status: 'strained', revealClaimKeys: ['granary_books_false'] },
+          effects: { trust: -250, affinity: -200, respect: 500, fear: 100, reputation: 500, globalTension: 300, status: 'strained', revealClaimKeys: ['rusk_omitted_cargo'] },
         },
       ],
     },
@@ -246,7 +246,7 @@ const MAREN: RomanceCandidateDef = {
       kicker: 'Love under public consequence', minimum: { trust: 5600, affinity: 900, respect: 450 },
       narration: 'Maren has drafted two speeches. One admits that Aldreth ships carried weapons. The other condemns the allegation as Corvane theater. Both could save lives. Both could cost them.',
       crisisNarration: 'Smoke lies over the roofs. Maren has drafted no speech at all—only two sentences, one truthful and one useful, while the harbour crowd pounds on the doors below.',
-      opening: '“If I confess what my house has done, I may stop the lie about poisoned grain. I may also put shipwrights on the scaffold.” She pushes both pages toward you. “What would you ask of me if you did not care whether I forgave you?”',
+      opening: '“If I confess what my house has done, I may weaken the murder lie. I may also put shipwrights on the scaffold.” She pushes both pages toward you. “What would you ask of me if you did not care whether I forgave you?”',
       crisisOpening: '“Choose with me,” she says. “Not for me. If we are to become anything to one another, I need to know whether you can share the blame for an imperfect mercy.”',
       callbacks: [
         { flag: 'maren_chose_accountable_truth', text: 'The copy of Edryc\'s note already sits with the magistrate. This decision will determine whether that act becomes a beginning or an exception.' },
@@ -260,7 +260,7 @@ const MAREN: RomanceCandidateDef = {
           crisisResponse: 'She writes the workers\' names before her own. “If they come for someone, they come through me first.” Her gaze catches yours. “Through us, if you still mean to stand there.”',
           aftermath: 'Aldreth admits the arms landings while separating commanders from laborers, cooling the feud and strengthening the true investigation.',
           impression: 'The outsider helped Maren tell a dangerous truth without sacrificing powerless people to it.',
-          effects: { trust: 650, affinity: 600, respect: 800, reputation: -200, globalTension: -650, factionTension: -550, rumorHeat: { claimKey: 'shipwrights_smuggle_arms', amount: 1000 }, revealClaimKeys: ['shipwrights_smuggle_arms'], negotiation: true, status: 'growing' },
+          effects: { trust: 650, affinity: 600, respect: 800, reputation: -200, globalTension: -650, factionTension: -550, rumorHeat: { claimKey: 'aldreth_arms_landing', amount: 1000 }, revealClaimKeys: ['aldreth_arms_landing'], negotiation: true, status: 'growing' },
         },
         {
           key: 'protect_harbour', label: '“Deny it until the town is safe enough to hear it.”',
@@ -269,7 +269,7 @@ const MAREN: RomanceCandidateDef = {
           crisisResponse: 'Maren burns the confession over the candle. “Then this sin is ours, not yours offered as a gift to me.” She takes your hand as the paper curls. The intimacy is real; so is the smoke.',
           aftermath: 'The harbour closes ranks. Aldreth trusts you more, but a true thread of the investigation is weakened.',
           impression: 'The outsider shared responsibility for Maren’s protective lie about the harbour.',
-          effects: { trust: 500, affinity: 750, respect: -200, reputation: 700, globalTension: 200, factionTension: -150, rumorHeat: { claimKey: 'shipwrights_smuggle_arms', amount: -850 }, revealClaimKeys: ['shipwrights_smuggle_arms'], status: 'complicated' },
+          effects: { trust: 500, affinity: 750, respect: -200, reputation: 700, globalTension: 200, factionTension: -150, rumorHeat: { claimKey: 'aldreth_arms_landing', amount: -850 }, revealClaimKeys: ['aldreth_arms_landing'], status: 'complicated' },
         },
         {
           key: 'refuse_choice', label: '“This must be your decision. I will not carry it for you.”',
@@ -446,7 +446,7 @@ const ROWAN: RomanceCandidateDef = {
           crisisResponse: '“It is hurting more people than me now.” He looks toward the square. “I know. I have known since the first arrest.” The admission is quiet and costly. “Thank you for leaving the door open instead of dragging me through it.”',
           aftermath: 'Rowan begins separating his right to privacy from the consequences of protective silence.',
           impression: 'The outsider challenged Rowan’s silence without treating his trust as something owed.',
-          effects: { trust: 350, affinity: 300, respect: 550, rumorHeat: { claimKey: 'rowan_at_the_quay', amount: -250 } },
+          effects: { trust: 350, affinity: 300, respect: 550, rumorHeat: { claimKey: 'rowan_at_quay', amount: -250 } },
         },
         {
           key: 'demand_alibi', label: '“If you are innocent, prove it.”',
@@ -455,7 +455,7 @@ const ROWAN: RomanceCandidateDef = {
           crisisResponse: '“And there it is.” He rises, anger held on a very short rein. “The town\'s favorite bargain: give us someone smaller, and we may stop calling you guilty.”',
           aftermath: 'Rowan withdraws. He may forgive direct suspicion, but not the assumption that another person is acceptable collateral.',
           impression: 'The outsider demanded Rowan buy credibility with a secret he believed protected someone vulnerable.',
-          effects: { trust: -550, affinity: -400, respect: -150, fear: 100, rumorHeat: { claimKey: 'rowan_at_the_quay', amount: 250 }, status: 'strained' },
+          effects: { trust: -550, affinity: -400, respect: -150, fear: 100, rumorHeat: { claimKey: 'rowan_at_quay', amount: 250 }, status: 'strained' },
         },
       ],
     },
@@ -478,7 +478,7 @@ const ROWAN: RomanceCandidateDef = {
           crisisResponse: '“I know a cellar beneath the old net loft.” He is already planning. Then he catches your wrist, not hard. “Come with me. I trust my judgment more when yours is near enough to argue.”',
           aftermath: 'Caleb\'s role in the murder night becomes part of the investigation without making him an undefended target.',
           impression: 'The outsider helped Rowan protect Caleb in order to preserve, not suppress, the truth.',
-          effects: { trust: 600, affinity: 400, respect: 650, globalTension: -300, rumorHeat: { claimKey: 'ferryman_saw_it', amount: 750 }, revealClaimKeys: ['rowan_at_the_quay', 'ferryman_saw_it'] },
+          effects: { trust: 600, affinity: 400, respect: 650, globalTension: -300, rumorHeat: { claimKey: 'caleb_enabled_passage', amount: 750 }, revealClaimKeys: ['rowan_at_quay', 'caleb_enabled_passage'] },
         },
         {
           key: 'trust_rowan_timing', label: 'Give the token back. “You decide when he is safe enough.”',
@@ -487,7 +487,7 @@ const ROWAN: RomanceCandidateDef = {
           crisisResponse: '“One night,” he says. “If I cannot make him safe by dawn, we go to Veranne anyway.” His forehead touches yours, a promise made without spectacle. “Hold me to that.”',
           aftermath: 'Rowan keeps control of the witness plan. Your trust deepens the bond, while public suspicion persists longer.',
           impression: 'The outsider trusted Rowan to choose the moment that would keep Caleb alive.',
-          effects: { trust: 650, affinity: 650, respect: 250, globalTension: 100, revealClaimKeys: ['rowan_at_the_quay', 'ferryman_saw_it'] },
+          effects: { trust: 650, affinity: 650, respect: 250, globalTension: 100, revealClaimKeys: ['rowan_at_quay', 'caleb_enabled_passage'] },
         },
         {
           key: 'clear_name_now', label: '“Use Caleb now. Your name cannot survive another day of this.”',
@@ -496,7 +496,7 @@ const ROWAN: RomanceCandidateDef = {
           crisisResponse: 'Rowan\'s expression empties. “If I become innocent by making him a target, then your innocence and mine are different things.”',
           aftermath: 'Rowan refuses. The rumor remains hot, and he questions whether your care is for him or for the version of him the town might approve.',
           impression: 'The outsider valued clearing Rowan’s name above the safety of the witness who could clear it.',
-          effects: { trust: -450, affinity: -350, respect: -300, reputation: 150, rumorHeat: { claimKey: 'rowan_at_the_quay', amount: 350 }, revealClaimKeys: ['rowan_at_the_quay', 'ferryman_saw_it'], status: 'strained' },
+          effects: { trust: -450, affinity: -350, respect: -300, reputation: 150, rumorHeat: { claimKey: 'rowan_at_quay', amount: 350 }, revealClaimKeys: ['rowan_at_quay', 'caleb_enabled_passage'], status: 'strained' },
         },
       ],
     },
@@ -560,7 +560,7 @@ const ROWAN: RomanceCandidateDef = {
           crisisResponse: 'He signs against the gatepost. “Then whatever remains is the part of me that chose.” He presses the statement into your hand and calls for Caleb\'s escort. The riders begin to unsaddle.',
           aftermath: 'Rowan\'s protected testimony cools Corvane retaliation and strengthens the true witness thread.',
           impression: 'The outsider stood beside Rowan as he chose public truth without sacrificing Caleb to it.',
-          effects: { trust: 750, affinity: 600, respect: 850, reputation: -150, globalTension: -600, factionTension: -650, rumorHeat: { claimKey: 'rowan_at_the_quay', amount: -1000 }, revealClaimKeys: ['rowan_at_the_quay', 'ferryman_saw_it'], negotiation: true, status: 'growing' },
+          effects: { trust: 750, affinity: 600, respect: 850, reputation: -150, globalTension: -600, factionTension: -650, rumorHeat: { claimKey: 'rowan_at_quay', amount: -1000 }, revealClaimKeys: ['rowan_at_quay', 'caleb_enabled_passage'], negotiation: true, status: 'growing' },
         },
         {
           key: 'send_caleb_away', label: '“Send Caleb away. Take the suspicion and deny them their witness.”',
@@ -569,7 +569,7 @@ const ROWAN: RomanceCandidateDef = {
           crisisResponse: 'Rowan tears the statement in half. “Then he lives, and I carry the rest.” He turns to you with exhausted honesty. “Do not admire me for this. Help me find a better answer after tonight.”',
           aftermath: 'Caleb is protected, but the investigation loses immediate testimony and suspicion around Rowan intensifies.',
           impression: 'The outsider helped Rowan protect Caleb at grave cost, while refusing to romanticize martyrdom.',
-          effects: { trust: 650, affinity: 750, respect: 350, reputation: -450, globalTension: 300, rumorHeat: { claimKey: 'rowan_at_the_quay', amount: 700 }, revealClaimKeys: ['rowan_at_the_quay', 'ferryman_saw_it'], status: 'complicated' },
+          effects: { trust: 650, affinity: 750, respect: 350, reputation: -450, globalTension: 300, rumorHeat: { claimKey: 'rowan_at_quay', amount: 700 }, revealClaimKeys: ['rowan_at_quay', 'caleb_enabled_passage'], status: 'complicated' },
         },
         {
           key: 'obey_alric', label: '“Stay. Your father and your house need you more than the truth does.”',

@@ -202,7 +202,7 @@ dbSuite('gossip against CockroachDB', () => {
     const worldId = await freshWorld(11);
     await gatherTown(worldId);
 
-    const claimId = await claimIdOf(worldId, 'corvane_ordered_death');
+    const claimId = await claimIdOf(worldId, 'target_murdered_edryc');
     const origin = await agentIdOf(worldId, 'widow_sable');
 
     await withSerializable(async (client) => {
@@ -232,15 +232,16 @@ dbSuite('gossip against CockroachDB', () => {
     const worldId = await freshWorld(12);
     await gatherTown(worldId);
 
-    // A claim against a Corvane. Aldreth should believe it more than Corvane does.
-    const claimId = await claimIdOf(worldId, 'corvane_ordered_death');
+    // The rival House should believe the selected accusation more readily than
+    // the selected target's own House.
+    const claimId = await claimIdOf(worldId, 'target_murdered_edryc');
     const origin = await agentIdOf(worldId, 'widow_sable');
 
     await withSerializable(async (client) => {
       await seedRumor(client, {
         worldId, tick: 0, seq: createSeq(0), claimId, originAgentId: origin,
         heat: fromPercent(95), valence: -fromPercent(85),
-        text: 'House Corvane ordered the prince killed.',
+        text: 'The selected target murdered Prince Edryc.',
       });
     });
 
@@ -258,13 +259,19 @@ dbSuite('gossip against CockroachDB', () => {
       [worldId, claimId],
     );
 
-    const aldreth = byFaction.find((r) => r.faction_key === 'aldreth');
-    const corvane = byFaction.find((r) => r.faction_key === 'corvane');
+    const selected = await query<{ target_faction: string }>(
+      `SELECT case_state->>'targetFactionKey' AS target_faction
+         FROM world_culprit WHERE world_id = $1`, [worldId],
+    );
+    const targetFaction = selected[0]!.target_faction;
+    const target = byFaction.find((row) => row.faction_key === targetFaction);
+    const rival = byFaction.find((row) => row.faction_key !== targetFaction
+      && row.faction_key !== 'unaligned');
 
-    assert.ok(aldreth && corvane, `both houses should have heard it: ${JSON.stringify(byFaction)}`);
+    assert.ok(target && rival, `both houses should have heard it: ${JSON.stringify(byFaction)}`);
     assert.ok(
-      aldreth.avg_confidence > corvane.avg_confidence,
-      `the accused house should resist: aldreth ${aldreth.avg_confidence} vs corvane ${corvane.avg_confidence}`,
+      rival.avg_confidence > target.avg_confidence,
+      `the accused house should resist: target ${target.avg_confidence} vs rival ${rival.avg_confidence}`,
     );
 
     await query(`DELETE FROM worlds WHERE world_id = $1`, [worldId]);
@@ -276,7 +283,7 @@ dbSuite('gossip against CockroachDB', () => {
     const worldId = await freshWorld(13);
     await gatherTown(worldId);
 
-    const claimId = await claimIdOf(worldId, 'millers_poison_grain');
+    const claimId = await claimIdOf(worldId, 'target_house_ordered_murder');
     const [truth] = await query<{ truth: string }>(
       `SELECT truth FROM world_claims WHERE world_id = $1 AND claim_id = $2`,
       [worldId, claimId],
@@ -315,7 +322,7 @@ dbSuite('gossip against CockroachDB', () => {
     const worldId = await freshWorld(14);
     await gatherTown(worldId);
 
-    const claimId = await claimIdOf(worldId, 'rowan_at_the_quay');
+    const claimId = await claimIdOf(worldId, 'rowan_at_quay');
     const origin = await agentIdOf(worldId, 'coran_pell');
 
     await withSerializable(async (client) => {
@@ -358,13 +365,13 @@ dbSuite('gossip against CockroachDB', () => {
     const worldId = await freshWorld(15);
     await gatherTown(worldId);
 
-    const claimId = await claimIdOf(worldId, 'physician_was_paid');
+    const claimId = await claimIdOf(worldId, 'target_house_protects_target');
     const origin = await agentIdOf(worldId, 'hester_lowe');
     await withSerializable(async (client) => {
       await seedRumor(client, {
         worldId, tick: 0, seq: createSeq(0), claimId, originAgentId: origin,
         heat: fromPercent(85), valence: -fromPercent(70),
-        text: 'The physician was paid to keep quiet.',
+      text: 'The accused House is protecting the suspect.',
       });
     });
     await runTicks(worldId, 8);
@@ -390,7 +397,7 @@ dbSuite('gossip against CockroachDB', () => {
     const runOnce = async (seed: number): Promise<string[]> => {
       const worldId = await freshWorld(seed);
       await gatherTown(worldId);
-      const claimId = await claimIdOf(worldId, 'granary_books_false');
+      const claimId = await claimIdOf(worldId, 'rusk_omitted_cargo');
       const origin = await agentIdOf(worldId, 'jenna_ryle');
 
       await withSerializable(async (client) => {
@@ -421,7 +428,7 @@ dbSuite('gossip against CockroachDB', () => {
     };
 
     const first = await runOnce(21);
-    const second = await runOnce(22);
+    const second = await runOnce(21);
     assert.ok(first.length > 0, 'the run should produce transmissions to compare');
     assert.deepEqual(second, first, 'identical seeds must produce identical spread');
   });
@@ -432,7 +439,7 @@ dbSuite('gossip against CockroachDB', () => {
 
     // Must be a claim the scenario does NOT seed at the opening, or seedRumor
     // will correctly reheat the existing hot rumor instead of creating a cold one.
-    const claimId = await claimIdOf(worldId, 'shipwrights_smuggle_arms');
+    const claimId = await claimIdOf(worldId, 'aldreth_arms_landing');
     const origin = await agentIdOf(worldId, 'father_ansel');
     await withSerializable(async (client) => {
       await seedRumor(client, {
@@ -453,7 +460,7 @@ dbSuite('gossip against CockroachDB', () => {
 
   test('re-seeding a claim reheats it rather than forking a second rumor', async () => {
     const worldId = await freshWorld(17);
-    const claimId = await claimIdOf(worldId, 'maren_welcomed_it');
+    const claimId = await claimIdOf(worldId, 'edryc_prejudged_target_house');
     const a = await agentIdOf(worldId, 'widow_sable');
     const b = await agentIdOf(worldId, 'coran_pell');
 
@@ -482,7 +489,7 @@ dbSuite('gossip against CockroachDB', () => {
     const worldId = await freshWorld(18);
     await gatherTown(worldId);
 
-    const claimId = await claimIdOf(worldId, 'corvane_ordered_death');
+    const claimId = await claimIdOf(worldId, 'target_murdered_edryc');
     const origin = await agentIdOf(worldId, 'wyn_thatcher');
     await withSerializable(async (client) => {
       await seedRumor(client, {

@@ -12,8 +12,11 @@ import { createHash } from 'node:crypto';
 import { withSerializable, type Client } from '../engine/database/db.ts';
 import { pickRumorOriginator, seedRumor } from '../engine/social/gossip.ts';
 import { createSeq } from '../engine/core/seq.ts';
-import type { OpeningEventDef } from './schema.ts';
+import type {
+  CaseEvidenceDef, ClaimKind, ClaimSubjectSlot, OpeningEventDef,
+} from './schema.ts';
 import type { WorldInferenceProfile } from '../engine/inference/profiles.ts';
+import { seedSelectedCaseOpening } from './case-opening.ts';
 
 /** Starting sentiment and trust, by relationship of the two agents' factions. */
 const INITIAL_SAME_FACTION = { sentiment: 3_000, trust: 6_500 };
@@ -75,14 +78,19 @@ export async function instantiateWorldOnClient(
   await insertRoutes(client, worldId, scenario.routes, locationIds);
   const agentIds = await insertAgents(client, worldId, scenario.agents, factionIds, locationIds);
   await linkFactionLeaders(client, worldId, scenario.factions, agentIds);
-  await insertRelationships(client, worldId, scenario.agents, agentIds);
-  const claimIds = await insertClaims(client, worldId, scenario.claims, agentIds);
+  await insertRelationships(
+    client, worldId, scenario.agents, agentIds, scenario.opening.relationshipOverrides ?? [],
+  );
 
-  const culprit = selectCulprit(options.seed, options.scenarioVersionId, scenario.culprits);
-  if (culprit) {
+  const selectedCase = selectCase(options.seed, scenario.version, scenario.culprits);
+  const claimIds = await insertClaims(
+    client, worldId, scenario.claims, scenario.agents, scenario.factions, agentIds, selectedCase,
+  );
+
+  if (selectedCase) {
     await insertCulpritState(client, {
       worldId,
-      culprit,
+      selectedCase,
       agentIds,
       claimIds,
       goals: scenario.goals,
@@ -140,14 +148,24 @@ interface AgentRow { agent_key: string; name: string; faction_key: string;
   persona: { status?: string; traits?: string[] };
   routine: unknown; credulity: number; talkativeness: number }
 interface ClaimRow { claim_key: string; text: string; subject_agent_key: string;
-  truth: string; severity: number }
+  subject_slot: ClaimSubjectSlot | null; kind: ClaimKind;
+  truth: string; severity: number; initially_locked: boolean }
+interface CaseProfile {
+  targetFactions: string[];
+  targetsByFaction: Record<string, string[]>;
+  notebookMethod: 'reordered' | 'removed' | 'changed' | null;
+  murderLocation: string | null;
+  tamperTiming: 'at_murder_site' | 'after_staging' | null;
+  evidence: CaseEvidenceDef[];
+}
 interface CulpritRow { culprit_key: string; motive_key: string; profit_claim_key: string;
-  record_claim_key: string; claim_truth: Record<string, 'true' | 'false' | 'unknown'> }
+  record_claim_key: string; claim_truth: Record<string, 'true' | 'false' | 'unknown'>;
+  case_profile: CaseProfile }
 interface GoalRow { agent_key: string; goal_key: string; priority: number }
 
 async function loadScenarioRows(client: Client, scenarioVersionId: string) {
-  const version = await client.query<{ opening: OpeningEventDef }>(
-    `SELECT opening FROM scenario_versions WHERE scenario_version_id = $1`,
+  const version = await client.query<{ opening: OpeningEventDef; version: string }>(
+    `SELECT opening, version FROM scenario_versions WHERE scenario_version_id = $1`,
     [scenarioVersionId],
   );
   if (!version.rows[0]) {
@@ -183,11 +201,13 @@ async function loadScenarioRows(client: Client, scenarioVersionId: string) {
        FROM agent_templates WHERE scenario_version_id = $1 ORDER BY agent_key`,
     [scenarioVersionId]);
   const claims = await client.query<ClaimRow>(
-    `SELECT claim_key, text, subject_agent_key, truth, severity
+    `SELECT claim_key, text, subject_agent_key, subject_slot, kind, truth, severity,
+            initially_locked
        FROM claim_templates WHERE scenario_version_id = $1 ORDER BY claim_key`,
     [scenarioVersionId]);
   const culprits = await client.query<CulpritRow>(
-    `SELECT culprit_key, motive_key, profit_claim_key, record_claim_key, claim_truth
+    `SELECT culprit_key, motive_key, profit_claim_key, record_claim_key, claim_truth,
+            case_profile
        FROM culprit_templates WHERE scenario_version_id = $1 ORDER BY culprit_key`,
     [scenarioVersionId]);
   const goals = await client.query<GoalRow>(
@@ -196,6 +216,7 @@ async function loadScenarioRows(client: Client, scenarioVersionId: string) {
     [scenarioVersionId]);
 
   return {
+    version: version.rows[0].version,
     opening: version.rows[0].opening,
     factions: factions.rows,
     districts: districts.rows,
@@ -335,6 +356,7 @@ async function linkFactionLeaders(
 async function insertRelationships(
   client: Client, worldId: string, agents: readonly AgentRow[],
   agentIds: ReadonlyMap<string, string>,
+  overrides: readonly { src: string; dst: string; sentiment: number; trust: number }[],
 ): Promise<void> {
   const factionOf = new Map(agents.map((a) => [a.agent_key, a.faction_key]));
 
@@ -379,19 +401,59 @@ async function insertRelationships(
       params,
     );
   }
+
+  for (const edge of overrides) {
+    await client.query(
+      `UPDATE world_relationships SET sentiment = $4, trust = $5
+        WHERE world_id = $1 AND src_agent_id = $2 AND dst_agent_id = $3`,
+      [worldId, agentIds.get(edge.src), agentIds.get(edge.dst), edge.sentiment, edge.trust],
+    );
+  }
 }
 
 async function insertClaims(
   client: Client, worldId: string, claims: readonly ClaimRow[],
+  agents: readonly AgentRow[], factions: readonly FactionRow[],
   agentIds: ReadonlyMap<string, string>,
+  selectedCase: CaseSelection | null,
 ): Promise<Map<string, string>> {
+  const agentNames = new Map(agents.map((agent) => [agent.agent_key, agent.name]));
+  const factionNames = new Map(factions.map((faction) => [faction.faction_key, faction.name]));
+  const leaderByFaction = new Map(
+    factions.map((faction) => [faction.faction_key, faction.leader_agent_key]),
+  );
+  const evidenceHolder = (role: CaseEvidenceDef['role']): string | undefined =>
+    selectedCase?.culprit.case_profile.evidence.find((item) => item.role === role)?.holder;
+  const slotKey = (claim: ClaimRow): string => {
+    if (!selectedCase || !claim.subject_slot) return claim.subject_agent_key;
+    const slots: Partial<Record<ClaimSubjectSlot, string | undefined>> = {
+      target: selectedCase.targetAgentKey,
+      targetHouseLeader: leaderByFaction.get(selectedCase.targetFactionKey),
+      instigator: selectedCase.culprit.culprit_key,
+      comparatorHolder: evidenceHolder('tamper_comparator'),
+      accessWitness: evidenceHolder('culprit_access'),
+      opportunityWitness: evidenceHolder('murder_opportunity'),
+      firstRecipient: evidenceHolder('escalation_provenance'),
+    };
+    return slots[claim.subject_slot] ?? claim.subject_agent_key;
+  };
+  const resolveText = (text: string): string => selectedCase ? text
+    .replaceAll('{target}', agentNames.get(selectedCase.targetAgentKey) ?? selectedCase.targetAgentKey)
+    .replaceAll('{targetHouse}', factionNames.get(selectedCase.targetFactionKey) ?? selectedCase.targetFactionKey)
+    .replaceAll('{instigator}', agentNames.get(selectedCase.culprit.culprit_key)
+      ?? selectedCase.culprit.culprit_key)
+    .replaceAll('{notebookMethod}', selectedCase.culprit.case_profile.notebookMethod ?? 'altered')
+    : text;
   const ids = new Map<string, string>();
   for (const c of claims) {
+    const subjectKey = slotKey(c);
     const row = await client.query<{ claim_id: string }>(
       `INSERT INTO world_claims
-         (world_id, claim_key, text, subject_agent_id, truth, severity, authored)
-       VALUES ($1, $2, $3, $4, $5, $6, true) RETURNING claim_id`,
-      [worldId, c.claim_key, c.text, agentIds.get(c.subject_agent_key), c.truth, c.severity],
+         (world_id, claim_key, text, subject_agent_id, truth, severity, authored,
+          kind, locked, initially_locked)
+       VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $8) RETURNING claim_id`,
+      [worldId, c.claim_key, resolveText(c.text), agentIds.get(subjectKey), c.truth,
+       c.severity, c.kind, c.initially_locked],
     );
     ids.set(c.claim_key, row.rows[0]!.claim_id);
   }
@@ -411,41 +473,81 @@ export function selectCulprit(
   return ordered[index] as CulpritRow;
 }
 
+export interface CaseSelection {
+  culprit: CulpritRow;
+  targetFactionKey: string;
+  targetAgentKey: string;
+}
+
+export function selectCase(
+  seed: number,
+  stableScenarioVersion: string,
+  candidates: readonly CulpritRow[],
+): CaseSelection | null {
+  const culprit = selectCulprit(seed, stableScenarioVersion, candidates);
+  if (!culprit) return null;
+  const digest = createHash('sha256').update(`${seed}:${stableScenarioVersion}:case`).digest();
+  const factions = [...(culprit.case_profile.targetFactions ?? [])].sort();
+  if (factions.length === 0) throw new Error(`culprit ${culprit.culprit_key} has no target faction`);
+  const targetFactionKey = factions[digest.readUInt32BE(4) % factions.length]!;
+  const targets = [...(culprit.case_profile.targetsByFaction[targetFactionKey] ?? [])]
+    .filter((key) => key !== culprit.culprit_key)
+    .sort();
+  if (targets.length === 0) throw new Error(`culprit ${culprit.culprit_key} has no valid target`);
+  return {
+    culprit,
+    targetFactionKey,
+    targetAgentKey: targets[digest.readUInt32BE(8) % targets.length]!,
+  };
+}
+
 async function insertCulpritState(
   client: Client,
   input: {
     worldId: string;
-    culprit: CulpritRow;
+    selectedCase: CaseSelection;
     agentIds: ReadonlyMap<string, string>;
     claimIds: Map<string, string>;
     goals: readonly GoalRow[];
   },
 ): Promise<void> {
-  const culpritId = input.agentIds.get(input.culprit.culprit_key);
-  if (!culpritId) throw new Error(`culprit agent missing: ${input.culprit.culprit_key}`);
+  const { culprit } = input.selectedCase;
+  const culpritId = input.agentIds.get(culprit.culprit_key);
+  if (!culpritId) throw new Error(`culprit agent missing: ${culprit.culprit_key}`);
 
   await client.query(
-    `INSERT INTO world_culprit (world_id, agent_id, motive_key) VALUES ($1, $2, $3)`,
-    [input.worldId, culpritId, input.culprit.motive_key],
+    `INSERT INTO world_culprit (world_id, agent_id, motive_key, case_state)
+     VALUES ($1, $2, $3, $4)`,
+    [input.worldId, culpritId, culprit.motive_key, JSON.stringify({
+      targetFactionKey: input.selectedCase.targetFactionKey,
+      targetAgentKey: input.selectedCase.targetAgentKey,
+      notebookMethod: culprit.case_profile.notebookMethod,
+      murderLocation: culprit.case_profile.murderLocation,
+      tamperTiming: culprit.case_profile.tamperTiming,
+    })],
   );
 
-  for (const [claimKey, truth] of Object.entries(input.culprit.claim_truth ?? {})) {
+  for (const [claimKey, truth] of Object.entries(culprit.claim_truth ?? {})) {
     await client.query(
       `UPDATE world_claims SET truth = $3 WHERE world_id = $1 AND claim_key = $2`,
       [input.worldId, claimKey, truth],
     );
   }
 
-  const exposed = await client.query<{ claim_id: string }>(
-    `INSERT INTO world_claims
-       (world_id, claim_key, text, subject_agent_id, truth, severity, authored, locked)
-     VALUES ($1, 'instigator_exposed', $2, $3, 'true', 10000, true, true)
-     RETURNING claim_id`,
-    [input.worldId, `${input.culprit.culprit_key.replace(/_/g, ' ')} engineered the feud and killed the prince.`, culpritId],
-  );
-  input.claimIds.set('instigator_exposed', exposed.rows[0]!.claim_id);
+  for (const evidence of culprit.case_profile.evidence) {
+    await client.query(
+      `INSERT INTO world_case_evidence
+         (world_id, role, holder_agent_id, claim_id, kind, accused_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [input.worldId, evidence.role,
+       evidence.holder ? input.agentIds.get(evidence.holder) : null,
+       input.claimIds.get(evidence.claim), evidence.kind,
+       evidence.role === 'tamper_sign' || evidence.role === 'tamper_comparator'
+         ? null : culpritId],
+    );
+  }
 
-  await insertGoals(client, input.worldId, input.goals, input.agentIds, input.culprit.culprit_key);
+  await insertGoals(client, input.worldId, input.goals, input.agentIds, culprit.culprit_key);
   await client.query(
     `INSERT INTO world_scheme_state (world_id, agent_id) VALUES ($1, $2)`,
     [input.worldId, culpritId],
@@ -461,6 +563,7 @@ async function insertGoals(
 ): Promise<void> {
   for (const goal of goals) {
     if (goal.goal_key === 'provoke_war' && goal.agent_key !== culpritKey) continue;
+    if (goal.agent_key === culpritKey && goal.goal_key.startsWith('protect_')) continue;
     const agentId = agentIds.get(goal.agent_key);
     if (!agentId) continue;
     await client.query(
@@ -541,7 +644,10 @@ async function applyOpening(
   const eventId = event.rows[0]!.event_id;
 
   const seq = createSeq(1);
+  const selected = await seedSelectedCaseOpening(client, { worldId, opening, eventId, seq });
+
   for (const [index, seed] of opening.seedRumors.entries()) {
+    if (selected && seed.claim === 'target_murdered_edryc') continue;
     const claimId = claimIds.get(seed.claim);
     if (!claimId) continue;
 

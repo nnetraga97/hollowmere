@@ -201,6 +201,17 @@ describe('NPC dialogue', { skip: !HAS_DB && 'DATABASE_URL not set' }, () => {
         ORDER BY listener.agent_key, remote.location_key LIMIT 1`,
       [world.worldId],
     );
+    await query(
+      `INSERT INTO world_rumors
+         (world_id, claim_id, heat, valence, created_tick, updated_tick)
+       SELECT $1, claim_id, 5000, -5000, 0, 0 FROM world_claims
+        WHERE world_id = $1 AND claim_key = 'target_house_protects_target'
+          AND NOT EXISTS (
+            SELECT 1 FROM world_rumors WHERE world_id = $1
+              AND claim_id = world_claims.claim_id
+          )`,
+      [world.worldId],
+    );
     const claims = await query<{ rumor_id: string; claim_id: string; text: string }>(
       `SELECT rumor.rumor_id, claim.claim_id, claim.text
          FROM world_rumors rumor

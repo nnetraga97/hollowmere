@@ -26,6 +26,7 @@
 import { withSerializable, type Client } from '../database/db.ts';
 import { pickRumorOriginator, seedRumor } from '../social/gossip.ts';
 import { createSeq } from '../core/seq.ts';
+import { seedSelectedCaseOpening } from '../../scenario/case-opening.ts';
 
 /**
  * Initial relationship values, mirroring `scenario/instantiate.ts`.
@@ -148,8 +149,8 @@ async function resetInstigatorState(client: Client, worldId: string): Promise<vo
     [worldId],
   );
   await client.query(
-    `UPDATE world_claims SET locked = true
-      WHERE world_id = $1 AND claim_key = 'instigator_exposed'`,
+    `UPDATE world_claims SET locked = initially_locked
+      WHERE world_id = $1`,
     [worldId],
   );
 }
@@ -205,6 +206,29 @@ async function resetRelationships(client: Client, worldId: string): Promise<void
       INITIAL_RIVAL_FACTION.sentiment, INITIAL_RIVAL_FACTION.trust,
     ],
   );
+
+  const version = await client.query<{
+    opening: { relationshipOverrides?: { src: string; dst: string; sentiment: number; trust: number }[] };
+  }>(
+    `SELECT version.opening FROM worlds world
+       JOIN scenario_versions version
+         ON version.scenario_version_id = world.scenario_version_id
+      WHERE world.world_id = $1`,
+    [worldId],
+  );
+  for (const edge of version.rows[0]?.opening.relationshipOverrides ?? []) {
+    await client.query(
+      `UPDATE world_relationships relationship
+          SET sentiment = $4, trust = $5, updated_tick = 0
+         FROM world_agents src, world_agents dst
+        WHERE relationship.world_id = $1
+          AND src.world_id = $1 AND src.agent_key = $2
+          AND dst.world_id = $1 AND dst.agent_key = $3
+          AND relationship.src_agent_id = src.agent_id
+          AND relationship.dst_agent_id = dst.agent_id`,
+      [worldId, edge.src, edge.dst, edge.sentiment, edge.trust],
+    );
+  }
 }
 
 /** Tension, stage, faction state, reputation, and spend all go back to zero. */
@@ -291,7 +315,9 @@ async function seedOpening(
   const eventId = event.rows[0]!.event_id;
 
   const seq = createSeq(1);
+  const selectedCase = await seedSelectedCaseOpening(client, { worldId, opening, eventId, seq });
   for (const [index, seed] of (opening.seedRumors ?? []).entries()) {
+    if (selectedCase && seed.claim === 'target_murdered_edryc') continue;
     const claim = await client.query<{ claim_id: string }>(
       `SELECT claim_id FROM world_claims WHERE world_id = $1 AND claim_key = $2`,
       [worldId, seed.claim],

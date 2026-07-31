@@ -35,7 +35,7 @@ import { seedRumor } from '../social/gossip.ts';
 import {
   DISCLOSURES,
   parseDisclosure,
-  recordAuthoredRecord,
+  recordCaseEvidenceForInquiry,
   recordInquiryEvidence,
   recordWitnessedContradiction,
   type Disclosure,
@@ -663,14 +663,15 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
   switch (input.act) {
     case 'accuse': {
       if (!claim) break;
-      if (claim.claimKey === 'instigator_exposed') {
+      if (claim.claimKey === 'instigator_altered_notebook'
+          || claim.claimKey === 'instigator_murdered_for_war') {
         effects.hearingRevealQueued = await queueHearingReveal(client, {
           worldId: input.worldId,
           playerId: agent.playerId,
           locationId: agent.locationId,
           claimId: claim.claimId,
         });
-        if (effects.hearingRevealQueued) break;
+        break;
       }
       // The player's accusation lands in this NPC's mouth: they now hold the
       // rumor and will carry it into the town's gossip on the next tick. This
@@ -745,6 +746,14 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
       break;
 
     case 'inquire': {
+      const caseRole = await recordCaseEvidenceForInquiry(client, {
+        worldId: input.worldId,
+        playerId: agent.playerId,
+        agentId: agent.agentId,
+        eventId: input.commandEventId,
+        tick: input.tick,
+      });
+      let ordinaryEvidence = false;
       if (claim && input.disclosure) {
         const provenance = await recordInquiryEvidence(client, {
           worldId: input.worldId,
@@ -754,29 +763,22 @@ async function applyEffects(client: Client, input: EffectInput): Promise<Convers
           disclosure: input.disclosure,
           tick: input.tick,
         });
-        const record = await recordAuthoredRecord(client, {
-          worldId: input.worldId,
-          playerId: agent.playerId,
-          agentId: agent.agentId,
-          agentKey: agent.agentKey,
-          eventId: input.commandEventId,
-          tick: input.tick,
-        });
         const contradiction = await recordWitnessedContradiction(client, {
           worldId: input.worldId,
           playerId: agent.playerId,
           actorId: agent.agentId,
           tick: input.tick,
         });
-        effects.disclosure = input.disclosure;
-        effects.evidenceRecorded = Boolean(provenance) || record || contradiction;
-        await maybeUnlockExposure(client, {
-          worldId: input.worldId,
-          playerId: agent.playerId,
-          tick: input.tick,
-          seq: input.seq,
-        });
+        ordinaryEvidence = Boolean(provenance) || contradiction;
       }
+      effects.disclosure = input.disclosure;
+      effects.evidenceRecorded = Boolean(caseRole) || ordinaryEvidence;
+      if (effects.evidenceRecorded) await maybeUnlockExposure(client, {
+        worldId: input.worldId,
+        playerId: agent.playerId,
+        tick: input.tick,
+        seq: input.seq,
+      });
       effects.sentimentDelta = CONVERSE.sentimentSmalltalk;
       break;
     }

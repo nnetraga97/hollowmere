@@ -62,6 +62,8 @@ export interface PlayerProfile {
 export interface EvidenceView {
   evidenceId: string;
   kind: 'provenance' | 'contradiction' | 'record';
+  role: 'tamper_sign' | 'tamper_comparator' | 'culprit_access'
+    | 'murder_opportunity' | 'escalation_provenance' | null;
   accusedKey: string | null;
   claimKey: string | null;
   foundTick: number;
@@ -123,7 +125,7 @@ export interface AgentDetailView {
   agent: AgentView;
   summary: string;
   traits: string[];
-  beliefs: { claimKey: string; confidence: number; updatedTick: number }[];
+  beliefs: { claimKey: string; text: string; confidence: number; updatedTick: number }[];
   relationships: { agentKey: string; sentiment: number; trust: number }[];
   cognition: CognitionView[];
   recentDialogue: { tick: number; text: string }[];
@@ -147,7 +149,10 @@ export interface AgentDetailView {
 
 export interface DebugTruthView {
   available: boolean;
-  culprit: { agentKey: string; motiveKey: string; exposedTick: number | null } | null;
+  culprit: {
+    agentKey: string; motiveKey: string; exposedTick: number | null;
+    caseState: Record<string, string | null>;
+  } | null;
   scheme: {
     posture: string;
     currentTactic: string | null;
@@ -417,11 +422,12 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
         `SELECT persona FROM world_agents WHERE world_id = $1 AND agent_key = $2`,
         [ref.worldId, agentKey],
       ),
-      query<{ claim_key: string; confidence: number; updated_tick: number }>(
-        `SELECT c.claim_key, b.confidence, b.updated_tick FROM agent_beliefs b
+      query<{ claim_key: string; text: string; confidence: number; updated_tick: number }>(
+        `SELECT c.claim_key, c.text, b.confidence, b.updated_tick FROM agent_beliefs b
            JOIN world_agents a ON a.world_id = b.world_id AND a.agent_id = b.agent_id
            JOIN world_claims c ON c.world_id = b.world_id AND c.claim_id = b.claim_id
           WHERE b.world_id = $1 AND a.agent_key = $2
+            AND NOT c.locked
           ORDER BY abs(b.confidence) DESC, c.claim_key LIMIT 12`,
         [ref.worldId, agentKey],
       ),
@@ -533,7 +539,7 @@ export async function getAgentDetail(ref: SessionRef, agentKey: string): Promise
     summary: personas[0]?.persona.summary ?? '',
     traits: personas[0]?.persona.traits ?? [],
     beliefs: beliefs.map((row) => ({
-      claimKey: row.claim_key, confidence: row.confidence, updatedTick: row.updated_tick,
+      claimKey: row.claim_key, text: row.text, confidence: row.confidence, updatedTick: row.updated_tick,
     })),
     relationships: relationships.map((row) => ({
       agentKey: row.agent_key, sentiment: row.sentiment, trust: row.trust,
@@ -618,8 +624,9 @@ export async function getDebugTruth(ref: SessionRef): Promise<DebugTruthView> {
   }
   const culprits = await optionalQuery<{
     agent_key: string; motive_key: string; exposed_tick: number | null;
+    case_state: Record<string, string | null>;
   }>(
-    `SELECT a.agent_key, c.motive_key, c.exposed_tick FROM world_culprit c
+    `SELECT a.agent_key, c.motive_key, c.exposed_tick, c.case_state FROM world_culprit c
        JOIN world_agents a ON a.world_id = c.world_id AND a.agent_id = c.agent_id
       WHERE c.world_id = $1`, [ref.worldId],
   );
@@ -642,6 +649,7 @@ export async function getDebugTruth(ref: SessionRef): Promise<DebugTruthView> {
       agentKey: culprits[0].agent_key,
       motiveKey: culprits[0].motive_key,
       exposedTick: culprits[0].exposed_tick,
+      caseState: culprits[0].case_state,
     } : null,
     scheme: schemes[0] ? {
       posture: schemes[0].posture,
@@ -927,11 +935,12 @@ async function readEvidence(
 ): Promise<EvidenceView[]> {
   const playerId = knownPlayerId ?? (await assertSession(ref)).playerId;
   const rows = await optionalQuery<{
-    evidence_id: string; kind: EvidenceView['kind']; accused_key: string | null;
+    evidence_id: string; kind: EvidenceView['kind']; role: EvidenceView['role'];
+    accused_key: string | null;
     claim_key: string | null; found_tick: number; genuine: boolean;
     manufactured: boolean; credibility: number; discovered_tick: number | null;
   }>(
-    `SELECT e.evidence_id, e.kind, a.agent_key AS accused_key,
+    `SELECT e.evidence_id, e.kind, e.role, a.agent_key AS accused_key,
             c.claim_key, e.found_tick, e.genuine, e.manufactured,
             e.credibility, e.discovered_tick
        FROM world_player_evidence e
@@ -945,6 +954,7 @@ async function readEvidence(
   return rows.map((row) => ({
     evidenceId: row.evidence_id,
     kind: row.kind,
+    role: row.role,
     accusedKey: row.accused_key,
     claimKey: row.claim_key,
     foundTick: row.found_tick,

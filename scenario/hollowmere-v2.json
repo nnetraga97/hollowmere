@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "hollowmere-v2",
+  "version": "hollowmere-v4",
   "name": "Hollowmere: The Prince at the Chapel Steps",
 
   "factions": [
@@ -79,9 +79,9 @@
   },
 
   "agents": [
-    { "key": "edryc_aldreth", "name": "Prince Edryc Aldreth", "faction": "aldreth", "home": "high_row", "work": "plaza", "routine": "noble", "status": "dead",
-      "summary": "The Aldreth heir, found dead at the chapel steps before dawn. He had spent his last week quietly auditing the granary accounts.",
-      "traits": ["careful", "unpopular with the millers"], "credulity": 4000, "talkativeness": 3000 },
+    { "key": "edryc_aldreth", "name": "Prince Edryc", "faction": "unaligned", "home": "high_row", "work": "plaza", "routine": "noble", "status": "dead",
+      "summary": "Hollowmere's independent prince, Aldreth-born and Maren's elder brother. He followed evidence across House lines and kept an ordinary personal notebook of his inquiries.",
+      "traits": ["careful", "fair-minded"], "credulity": 4000, "talkativeness": 3000 },
     { "key": "maren_aldreth", "name": "Lady Maren Aldreth", "faction": "aldreth", "home": "high_row", "work": "plaza", "routine": "noble",
       "summary": "Edryc's younger sister and now the heir of House Aldreth. Grieving in public, calculating in private, and unsure whether she wants justice or advantage.",
       "traits": ["composed", "ambitious", "grieving"], "credulity": 3000, "talkativeness": 6000 },
@@ -101,7 +101,7 @@
       "summary": "Fishwife with the loudest stall in the square. What she says at dawn is what the town believes by dusk.",
       "traits": ["loud", "shrewd"], "credulity": 6500, "talkativeness": 9500 },
     { "key": "caleb_mord", "name": "Caleb Mord", "faction": "aldreth", "home": "low_row", "work": "quay", "routine": "labourer",
-      "summary": "Ferryman. Was on the water the night the prince died and has not said what he saw.",
+      "summary": "Ferryman. Quietly bound to Rowan by a dangerous shared secret about forbidden night traffic between the Houses.",
       "traits": ["secretive", "uneasy"], "credulity": 4000, "talkativeness": 2000 },
     { "key": "annet_pike", "name": "Annet Pike", "faction": "aldreth", "home": "low_row", "work": "quay", "routine": "labourer",
       "summary": "Netmender. Widowed young, sharp with money, and the person others go to when they want a rumour tested.",
@@ -114,10 +114,10 @@
       "traits": ["observant", "nocturnal"], "credulity": 3500, "talkativeness": 5000 },
 
     { "key": "alric_corvane", "name": "Lord Alric Corvane", "faction": "corvane", "home": "high_row", "work": "plaza", "routine": "noble",
-      "summary": "Head of House Corvane. Old, land-proud, and genuinely uncertain whether his own son had a hand in the prince's death.",
+      "summary": "Head of House Corvane. Old, land-proud, protective of his dynasty, and accustomed to treating uncertainty as weakness.",
       "traits": ["imperious", "privately afraid"], "credulity": 3500, "talkativeness": 5500 },
     { "key": "rowan_corvane", "name": "Rowan Corvane", "faction": "corvane", "home": "high_row", "work": "mill", "routine": "noble",
-      "summary": "Alric's son. Was seen near the quay the night of the death and refuses to explain why, which he considers a matter of honour and everyone else considers guilt.",
+      "summary": "Alric's son. Proud and evasive, with more loyalty to one vulnerable harbourman than either House would forgive.",
       "traits": ["proud", "evasive"], "credulity": 3000, "talkativeness": 3000 },
     { "key": "mabel_thorn", "name": "Mabel Thorn", "faction": "corvane", "home": "low_row", "work": "mill", "routine": "tradesman",
       "summary": "Head miller. Runs the Great Mill and considers the harbour a parasite on honest grain.",
@@ -129,7 +129,7 @@
       "summary": "Farmer. Lost a brother to a harbour brawl years ago and has never let it go.",
       "traits": ["bitter", "unforgiving"], "credulity": 8000, "talkativeness": 6500 },
     { "key": "cuthbert_ash", "name": "Cuthbert Ash", "faction": "corvane", "home": "low_row", "work": "granary", "routine": "tradesman",
-      "summary": "Granary keeper. The prince was auditing his books the week he died, a fact Cuthbert would prefer stayed quiet.",
+      "summary": "Granary keeper. Meticulous with public tallies and nervous whenever either House asks to see the private ones.",
       "traits": ["nervous", "meticulous"], "credulity": 5000, "talkativeness": 3000 },
     { "key": "edda_lyle", "name": "Edda Lyle", "faction": "corvane", "home": "low_row", "work": "market_square", "routine": "marketer",
       "summary": "Baker. Everyone in Hollowmere passes her counter each morning, and she remembers what each of them said.",
@@ -138,7 +138,7 @@
       "summary": "Carter. Hauls grain to the quay daily and is therefore the main conduit of gossip between the two houses.",
       "traits": ["chatty", "neutral by trade"], "credulity": 7000, "talkativeness": 9000 },
     { "key": "bertram_croy", "name": "Bertram Croy", "faction": "corvane", "home": "low_row", "work": "market_square", "routine": "tradesman",
-      "summary": "Blacksmith. Shoes horses for both houses and has lately been asked to forge things he would rather not describe.",
+      "summary": "Blacksmith. Shoes horses for both Houses and notices which riders arrive after curfew.",
       "traits": ["taciturn", "uneasy"], "credulity": 4000, "talkativeness": 3000 },
     { "key": "hollis_barrow", "name": "Hollis Barrow", "faction": "corvane", "home": "high_row", "work": "granary", "routine": "tradesman",
       "summary": "Corvane steward. Manages the House's affairs and would burn a ledger before letting it reach the magistrate.",
@@ -154,7 +154,7 @@
       "summary": "Chapel priest. Found the body. Preaches restraint to a town that is rapidly losing interest in restraint.",
       "traits": ["gentle", "frightened"], "credulity": 5500, "talkativeness": 6000 },
     { "key": "ambrose_kyte", "name": "Ambrose Kyte", "faction": "unaligned", "home": "high_row", "work": "chapel", "routine": "homebody",
-      "summary": "Physician. Examined the prince's body and recorded a cause of death he is no longer willing to repeat aloud.",
+      "summary": "Physician. Precise, discreet, and compromised by years of treating injuries both Houses preferred left unexplained.",
       "traits": ["precise", "compromised"], "credulity": 2000, "talkativeness": 2000 },
     { "key": "hester_lowe", "name": "Hester Lowe", "faction": "unaligned", "home": "tavern", "work": "tavern", "routine": "homebody",
       "summary": "Keeps The Drowned Bell. Serves both houses, hears every version of every story, and sells none of them cheaply.",
@@ -166,7 +166,7 @@
       "summary": "Town crier. Whatever reaches him becomes official, which is a great deal of power for a man who does not check.",
       "traits": ["officious", "uncritical"], "credulity": 8000, "talkativeness": 9500 },
     { "key": "morna_dell", "name": "Morna Dell", "faction": "unaligned", "home": "low_row", "work": "market_square", "routine": "marketer",
-      "summary": "Herbalist. Sold a sleeping draught the week the prince died and has been counting her jars ever since.",
+      "summary": "Herbalist. Recognises inks, solvents, and the small physical traces respectable people overlook.",
       "traits": ["watchful", "afraid"], "credulity": 4500, "talkativeness": 3500 },
     { "key": "jenna_ryle", "name": "Jenna Ryle", "faction": "unaligned", "home": "low_row", "work": "market_square", "routine": "wanderer",
       "summary": "An orphan of eleven who goes everywhere unnoticed and consequently knows more than any adult in Hollowmere.",
@@ -174,44 +174,125 @@
   ],
 
   "claims": [
-    { "key": "corvane_ordered_death", "text": "House Corvane ordered the prince's killing to stop his audit of the granary.", "subject": "alric_corvane", "truth": "unknown", "severity": 9500 },
-    { "key": "rowan_at_the_quay", "text": "Rowan Corvane was seen near the quay the night the prince died.", "subject": "rowan_corvane", "truth": "true", "severity": 6000 },
-    { "key": "prince_died_of_sickness", "text": "The prince died of a wasting sickness, and there was never any blade at all.", "subject": "edryc_aldreth", "truth": "unknown", "severity": 2000 },
-    { "key": "maren_welcomed_it", "text": "Lady Maren welcomed her brother's death and moved on the inheritance within the day.", "subject": "maren_aldreth", "truth": "false", "severity": 8000 },
-    { "key": "physician_was_paid", "text": "The physician was paid to leave the wound out of his record.", "subject": "ambrose_kyte", "truth": "unknown", "severity": 8500 },
-    { "key": "granary_books_false", "text": "The granary books have been falsified for years, and the prince had found it.", "subject": "cuthbert_ash", "truth": "true", "severity": 7500 },
-    { "key": "millers_poison_grain", "text": "The millers have been mixing blight into the grain sold to the harbour.", "subject": "mabel_thorn", "truth": "false", "severity": 9000 },
-    { "key": "shipwrights_smuggle_arms", "text": "The shipyard has been landing arms by night for House Aldreth.", "subject": "sella_dorn", "truth": "true", "severity": 7000 },
-    { "key": "magistrate_protects_guilty", "text": "The magistrate already knows who did it and is protecting them.", "subject": "veranne_thule", "truth": "unknown", "severity": 7500 },
-    { "key": "ferryman_saw_it", "text": "The ferryman was on the water that night and saw who came down to the steps.", "subject": "caleb_mord", "truth": "true", "severity": 6500 }
+    { "key": "target_murdered_edryc", "text": "{target} murdered Prince Edryc.", "subject": "edryc_aldreth", "subjectSlot": "target", "kind": "accusation", "truth": "false", "severity": 9500 },
+    { "key": "notebook_accusation_genuine", "text": "The accusation against {target} reflects Edryc's genuine conclusion.", "subject": "edryc_aldreth", "subjectSlot": "target", "kind": "interpretation", "truth": "false", "severity": 8000 },
+    { "key": "notebook_was_altered", "text": "Someone altered Edryc's notebook to direct blame toward {target}.", "subject": "edryc_aldreth", "subjectSlot": "target", "kind": "interpretation", "truth": "true", "severity": 7500 },
+    { "key": "edryc_investigated_fairly", "text": "Edryc followed evidence regardless of which House it threatened.", "subject": "edryc_aldreth", "kind": "interpretation", "truth": "true", "severity": 4500 },
+    { "key": "edryc_prejudged_target_house", "text": "Edryc had decided {targetHouse} was guilty before gathering evidence.", "subject": "edryc_aldreth", "kind": "interpretation", "truth": "false", "severity": 6500 },
+    { "key": "notebook_shows_interference", "text": "Edryc's notebook visibly shows interference: its pages were {notebookMethod}.", "subject": "edryc_aldreth", "kind": "fact", "truth": "true", "severity": 3500 },
+    { "key": "notebook_comparator", "text": "An independent record proves the notebook's {notebookMethod} pages cannot be original.", "subject": "edryc_aldreth", "subjectSlot": "comparatorHolder", "kind": "fact", "truth": "true", "severity": 4500, "initiallyLocked": true },
+    { "key": "culprit_notebook_access", "text": "A witness places {instigator} with Edryc's notebook during the only tampering interval.", "subject": "edryc_aldreth", "subjectSlot": "instigator", "kind": "fact", "truth": "true", "severity": 7000, "initiallyLocked": true },
+    { "key": "culprit_murder_opportunity", "text": "A witness places {instigator} with Edryc after Father Ansel last saw him alive.", "subject": "edryc_aldreth", "subjectSlot": "instigator", "kind": "fact", "truth": "true", "severity": 8000, "initiallyLocked": true },
+    { "key": "instigator_started_accusation", "text": "{instigator} first directed the murder accusation toward {target}.", "subject": "edryc_aldreth", "subjectSlot": "instigator", "kind": "fact", "truth": "true", "severity": 7500, "initiallyLocked": true },
+    { "key": "target_house_protects_target", "text": "{targetHouse} is protecting {target} from the murder inquiry.", "subject": "edryc_aldreth", "subjectSlot": "targetHouseLeader", "kind": "accusation", "truth": "false", "severity": 8000 },
+    { "key": "target_house_knew_murder", "text": "{targetHouse} knew about Edryc's murder before his body was found.", "subject": "edryc_aldreth", "subjectSlot": "targetHouseLeader", "kind": "accusation", "truth": "false", "severity": 9000 },
+    { "key": "target_house_ordered_murder", "text": "{targetHouse} ordered Edryc's murder.", "subject": "edryc_aldreth", "subjectSlot": "targetHouseLeader", "kind": "accusation", "truth": "false", "severity": 10000 },
+    { "key": "aldreth_arms_landing", "text": "Arms were landed secretly at Sella Dorn's yard.", "subject": "sella_dorn", "kind": "fact", "truth": "true", "severity": 6500 },
+    { "key": "rusk_omitted_cargo", "text": "Rusk Baelen omitted the arms cargoes from the customs record.", "subject": "rusk_baelen", "kind": "fact", "truth": "true", "severity": 6500 },
+    { "key": "corvane_night_movement", "text": "Corvane retainers crossed the harbour after curfew during the truce.", "subject": "rowan_corvane", "kind": "fact", "truth": "true", "severity": 6500 },
+    { "key": "hollis_suppressed_record", "text": "Hollis Barrow suppressed the Corvane movement record.", "subject": "hollis_barrow", "kind": "fact", "truth": "true", "severity": 6500 },
+    { "key": "rowan_at_quay", "text": "Rowan Corvane was at the quay on Corvane business during the forbidden movement.", "subject": "rowan_corvane", "kind": "fact", "truth": "true", "severity": 5500 },
+    { "key": "caleb_enabled_passage", "text": "Caleb Mord enabled the forbidden passage across the harbour.", "subject": "caleb_mord", "kind": "fact", "truth": "true", "severity": 5500 },
+    { "key": "rowan_protected_caleb", "text": "Rowan concealed the night passage to protect Caleb from both Houses.", "subject": "rowan_corvane", "kind": "interpretation", "truth": "true", "severity": 5000 },
+    { "key": "instigator_altered_notebook", "text": "{instigator} altered Edryc's notebook to implicate {target}.", "subject": "edryc_aldreth", "subjectSlot": "instigator", "kind": "accusation", "truth": "true", "severity": 9000, "initiallyLocked": true },
+    { "key": "instigator_murdered_for_war", "text": "{instigator} murdered Edryc and manufactured the accusation to provoke war.", "subject": "edryc_aldreth", "subjectSlot": "instigator", "kind": "accusation", "truth": "true", "severity": 10000, "initiallyLocked": true }
   ],
 
   "culprits": [
-    { "key": "bertram_croy", "motive": "arms_trade", "profitClaim": "shipwrights_smuggle_arms", "recordClaim": "granary_books_false", "claimTruth": { "corvane_ordered_death": "true" } },
-    { "key": "cuthbert_ash", "motive": "grain_payments", "profitClaim": "granary_books_false", "recordClaim": "granary_books_false", "claimTruth": { "corvane_ordered_death": "true" } },
-    { "key": "hollis_barrow", "motive": "laundered_grain", "profitClaim": "granary_books_false", "recordClaim": "granary_books_false", "claimTruth": { "corvane_ordered_death": "true" } },
-    { "key": "rusk_baelen", "motive": "hidden_cargo", "profitClaim": "shipwrights_smuggle_arms", "recordClaim": "granary_books_false", "claimTruth": { "corvane_ordered_death": "false" } },
-    { "key": "sella_dorn", "motive": "arms_landings", "profitClaim": "shipwrights_smuggle_arms", "recordClaim": "granary_books_false", "claimTruth": { "corvane_ordered_death": "false" } }
+    {
+      "key": "sella_dorn", "motive": "save_arms_yard_through_war", "profitClaim": "aldreth_arms_landing", "recordClaim": "notebook_comparator",
+      "targetFactions": ["corvane"], "targetsByFaction": { "corvane": ["alric_corvane", "rowan_corvane", "hollis_barrow"] },
+      "notebookMethod": "reordered", "murderLocation": "shipyard", "tamperTiming": "at_murder_site",
+      "evidence": [
+        { "role": "tamper_sign", "claim": "notebook_shows_interference", "kind": "record" },
+        { "role": "tamper_comparator", "holder": "tobias_reeve", "claim": "notebook_comparator", "kind": "record" },
+        { "role": "culprit_access", "holder": "oriel_faskin", "claim": "culprit_notebook_access", "kind": "record" },
+        { "role": "murder_opportunity", "holder": "caleb_mord", "claim": "culprit_murder_opportunity", "kind": "record" },
+        { "role": "escalation_provenance", "holder": "wyn_thatcher", "claim": "target_murdered_edryc", "kind": "provenance" }
+      ]
+    },
+    {
+      "key": "rusk_baelen", "motive": "destroy_cargo_audit_through_war", "profitClaim": "rusk_omitted_cargo", "recordClaim": "notebook_comparator",
+      "targetFactions": ["corvane"], "targetsByFaction": { "corvane": ["alric_corvane", "rowan_corvane", "hollis_barrow"] },
+      "notebookMethod": "removed", "murderLocation": "quay", "tamperTiming": "after_staging",
+      "evidence": [
+        { "role": "tamper_sign", "claim": "notebook_shows_interference", "kind": "record" },
+        { "role": "tamper_comparator", "holder": "tobias_reeve", "claim": "notebook_comparator", "kind": "record" },
+        { "role": "culprit_access", "holder": "annet_pike", "claim": "culprit_notebook_access", "kind": "record" },
+        { "role": "murder_opportunity", "holder": "caleb_mord", "claim": "culprit_murder_opportunity", "kind": "record" },
+        { "role": "escalation_provenance", "holder": "ned_quilley", "claim": "target_murdered_edryc", "kind": "provenance" }
+      ]
+    },
+    {
+      "key": "alric_corvane", "motive": "preserve_corvane_dynasty_through_war", "profitClaim": "corvane_night_movement", "recordClaim": "notebook_comparator",
+      "targetFactions": ["aldreth"], "targetsByFaction": { "aldreth": ["maren_aldreth", "sella_dorn", "rusk_baelen"] },
+      "notebookMethod": "changed", "murderLocation": "high_row", "tamperTiming": "at_murder_site",
+      "evidence": [
+        { "role": "tamper_sign", "claim": "notebook_shows_interference", "kind": "record" },
+        { "role": "tamper_comparator", "holder": "veranne_thule", "claim": "notebook_comparator", "kind": "record" },
+        { "role": "culprit_access", "holder": "rowan_corvane", "claim": "culprit_notebook_access", "kind": "record" },
+        { "role": "murder_opportunity", "holder": "clem_ottery", "claim": "culprit_murder_opportunity", "kind": "record" },
+        { "role": "escalation_provenance", "holder": "edda_lyle", "claim": "target_murdered_edryc", "kind": "provenance" }
+      ]
+    },
+    {
+      "key": "hollis_barrow", "motive": "dissolve_inquiry_before_truce_exposure", "profitClaim": "hollis_suppressed_record", "recordClaim": "notebook_comparator",
+      "targetFactions": ["aldreth"], "targetsByFaction": { "aldreth": ["maren_aldreth", "sella_dorn", "rusk_baelen"] },
+      "notebookMethod": "reordered", "murderLocation": "high_row", "tamperTiming": "after_staging",
+      "evidence": [
+        { "role": "tamper_sign", "claim": "notebook_shows_interference", "kind": "record" },
+        { "role": "tamper_comparator", "holder": "mabel_thorn", "claim": "notebook_comparator", "kind": "record" },
+        { "role": "culprit_access", "holder": "silas_wren", "claim": "culprit_notebook_access", "kind": "record" },
+        { "role": "murder_opportunity", "holder": "clem_ottery", "claim": "culprit_murder_opportunity", "kind": "record" },
+        { "role": "escalation_provenance", "holder": "edda_lyle", "claim": "target_murdered_edryc", "kind": "provenance" }
+      ]
+    },
+    {
+      "key": "father_ansel", "motive": "hide_his_covert_house_handoffs", "profitClaim": "corvane_night_movement", "recordClaim": "notebook_comparator",
+      "targetFactions": ["aldreth", "corvane"],
+      "targetsByFaction": { "aldreth": ["maren_aldreth", "sella_dorn", "rusk_baelen"], "corvane": ["alric_corvane", "rowan_corvane", "hollis_barrow"] },
+      "notebookMethod": "removed", "murderLocation": "chapel", "tamperTiming": "after_staging",
+      "evidence": [
+        { "role": "tamper_sign", "claim": "notebook_shows_interference", "kind": "record" },
+        { "role": "tamper_comparator", "holder": "tobias_reeve", "claim": "notebook_comparator", "kind": "record" },
+        { "role": "culprit_access", "holder": "jenna_ryle", "claim": "culprit_notebook_access", "kind": "record" },
+        { "role": "murder_opportunity", "holder": "fen_marrow", "claim": "culprit_murder_opportunity", "kind": "record" },
+        { "role": "escalation_provenance", "holder": "coran_pell", "claim": "target_murdered_edryc", "kind": "provenance" }
+      ]
+    },
+    {
+      "key": "ambrose_kyte", "motive": "bury_falsified_truce_medical_records", "profitClaim": "corvane_night_movement", "recordClaim": "notebook_comparator",
+      "targetFactions": ["aldreth", "corvane"],
+      "targetsByFaction": { "aldreth": ["maren_aldreth", "sella_dorn", "rusk_baelen"], "corvane": ["alric_corvane", "rowan_corvane", "hollis_barrow"] },
+      "notebookMethod": "changed", "murderLocation": "high_row", "tamperTiming": "after_staging",
+      "evidence": [
+        { "role": "tamper_sign", "claim": "notebook_shows_interference", "kind": "record" },
+        { "role": "tamper_comparator", "holder": "veranne_thule", "claim": "notebook_comparator", "kind": "record" },
+        { "role": "culprit_access", "holder": "hester_lowe", "claim": "culprit_notebook_access", "kind": "record" },
+        { "role": "murder_opportunity", "holder": "clem_ottery", "claim": "culprit_murder_opportunity", "kind": "record" },
+        { "role": "escalation_provenance", "holder": "widow_sable", "claim": "target_murdered_edryc", "kind": "provenance" }
+      ]
+    }
   ],
 
   "goals": [
     { "agent": "maren_aldreth", "key": "protect_aldreth", "priority": 70 },
     { "agent": "alric_corvane", "key": "protect_corvane", "priority": 70 },
     { "agent": "veranne_thule", "key": "find_truth", "priority": 80 },
-    { "agent": "bertram_croy", "key": "provoke_war", "priority": 100 },
-    { "agent": "cuthbert_ash", "key": "provoke_war", "priority": 100 },
+    { "agent": "alric_corvane", "key": "provoke_war", "priority": 100 },
+    { "agent": "father_ansel", "key": "provoke_war", "priority": 100 },
+    { "agent": "ambrose_kyte", "key": "provoke_war", "priority": 100 },
     { "agent": "hollis_barrow", "key": "provoke_war", "priority": 100 },
     { "agent": "rusk_baelen", "key": "provoke_war", "priority": 100 },
     { "agent": "sella_dorn", "key": "provoke_war", "priority": 100 }
   ],
 
   "schemes": [
-    { "key": "open_blame", "index": 0, "tactic": "blame_shift", "audience": "aldreth", "claim": "corvane_ordered_death", "condition": { "fact": "tick", "op": "gte", "value": 6 } },
-    { "key": "harden_story", "index": 1, "tactic": "corroborate_false", "audience": "tavern", "claim": "corvane_ordered_death", "condition": { "fact": "tick", "op": "gte", "value": 18 } },
-    { "key": "use_amplifier", "index": 2, "tactic": "recruit_amplifier", "audience": "market_square", "claim": "millers_poison_grain", "condition": { "fact": "stage", "op": "neq", "value": "calm" } },
-    { "key": "appear_reasonable", "index": 3, "tactic": "feign_moderation", "audience": "plaza", "claim": "magistrate_protects_guilty", "condition": { "fact": "tick", "op": "gte", "value": 48 } },
-    { "key": "discredit_witness", "index": 4, "tactic": "poison_the_well", "audience": "plaza", "claim": "ferryman_saw_it", "condition": { "fact": "stage", "op": "neq", "value": "calm" } },
-    { "key": "redirect_heat", "index": 5, "tactic": "redirect_suspicion", "audience": "corvane", "claim": "shipwrights_smuggle_arms", "condition": { "fact": "stage", "op": "neq", "value": "calm" } }
+    { "key": "open_blame", "index": 0, "tactic": "blame_shift", "audience": "tavern", "claim": "target_murdered_edryc", "condition": { "fact": "tick", "op": "gte", "value": 6 } },
+    { "key": "harden_story", "index": 1, "tactic": "corroborate_false", "audience": "market_square", "claim": "target_house_protects_target", "condition": { "fact": "tick", "op": "gte", "value": 18 } },
+    { "key": "expand_complicity", "index": 2, "tactic": "recruit_amplifier", "audience": "plaza", "claim": "target_house_knew_murder", "condition": { "fact": "stage", "op": "neq", "value": "calm" } },
+    { "key": "claim_house_order", "index": 3, "tactic": "corroborate_false", "audience": "tavern", "claim": "target_house_ordered_murder", "condition": { "fact": "stage", "op": "neq", "value": "calm" } },
+    { "key": "defend_notebook", "index": 4, "tactic": "poison_the_well", "audience": "plaza", "claim": "notebook_accusation_genuine", "condition": { "fact": "tick", "op": "gte", "value": 48 } }
   ],
 
   "triggers": [
@@ -235,7 +316,7 @@
       },
       "effects": [
         { "verb": "emit_event", "description": "Fire takes the eastern granary before dawn. Nobody will say who was seen leaving it." },
-        { "verb": "seed_rumor", "claim": "millers_poison_grain", "heat": 7000, "valence": -7000 },
+        { "verb": "seed_rumor", "claim": "target_house_knew_murder", "heat": 7000, "valence": -7000 },
         { "verb": "add_faction_tension", "faction": "corvane", "amount": 1500 },
         { "verb": "add_global_tension", "amount": 900 }
       ],
@@ -277,11 +358,13 @@
 
   "opening": {
     "location": "plaza",
-    "description": "Prince Edryc Aldreth is found dead at the foot of the chapel steps before dawn. Father Ansel will say only that the body was cold when he reached it.",
+    "description": "Prince Edryc is found dead at the chapel steps before dawn. His ordinary personal notebook lies with the body; its disturbed binding and damaged pages make the interference plain, but not who altered it.",
     "seedRumors": [
-      { "claim": "corvane_ordered_death", "heat": 8000, "valence": -8000 },
-      { "claim": "prince_died_of_sickness", "heat": 3500, "valence": 1000 },
-      { "claim": "rowan_at_the_quay", "heat": 5000, "valence": -5000 }
+      { "claim": "target_murdered_edryc", "heat": 8500, "valence": -8500 }
+    ],
+    "relationshipOverrides": [
+      { "src": "rowan_corvane", "dst": "caleb_mord", "sentiment": 6500, "trust": 8500 },
+      { "src": "caleb_mord", "dst": "rowan_corvane", "sentiment": 6500, "trust": 8500 }
     ]
   }
 }

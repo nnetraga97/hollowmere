@@ -250,7 +250,7 @@ export async function accuseByClaimKey(
     subject_key: string; subject_faction_id: string;
     confidence: number | null; rumor_id: string | null; heat: number | null;
     accuser_belligerent: boolean; subject_belligerent: boolean;
-    same_faction: boolean;
+    same_faction: boolean; claim_kind: string;
   }>(
     `SELECT a.agent_key, a.location_id,
             c.claim_key, c.text AS claim_text, c.severity,
@@ -258,7 +258,8 @@ export async function accuseByClaimKey(
             b.confidence, r.rumor_id, r.heat,
             af.belligerent AS accuser_belligerent,
             sf.belligerent AS subject_belligerent,
-            (a.faction_id = s.faction_id) AS same_faction
+            (a.faction_id = s.faction_id) AS same_faction,
+            c.kind AS claim_kind
        FROM world_agents a
        JOIN world_claims c ON c.world_id = a.world_id AND c.claim_key = $3
        JOIN world_agents s ON s.world_id = c.world_id AND s.agent_id = c.subject_agent_id
@@ -268,6 +269,7 @@ export async function accuseByClaimKey(
               ON b.world_id = a.world_id AND b.agent_id = a.agent_id AND b.claim_id = c.claim_id
        LEFT JOIN world_rumors r ON r.world_id = c.world_id AND r.claim_id = c.claim_id
       WHERE a.world_id = $1 AND a.agent_id = $2 AND a.status = 'alive'
+        AND NOT c.locked
       ORDER BY r.rumor_id
       LIMIT 1`,
     [input.worldId, input.accuserId, input.claimKey],
@@ -275,8 +277,11 @@ export async function accuseByClaimKey(
 
   const row = result.rows[0];
   if (!row) return null;
-  if (row.same_faction) return null;
-  if (!row.accuser_belligerent || !row.subject_belligerent) return null;
+  if (row.claim_kind !== 'accusation') return null;
+  const resolution = row.claim_key === 'instigator_altered_notebook'
+    || row.claim_key === 'instigator_murdered_for_war';
+  if (!resolution && row.same_faction) return null;
+  if (!resolution && (!row.accuser_belligerent || !row.subject_belligerent)) return null;
 
   const rise = await emitAccusation(client, {
     worldId: input.worldId,
@@ -296,7 +301,7 @@ export async function accuseByClaimKey(
   });
 
   return {
-    rise,
+    rise: resolution ? 0 : rise,
     subjectFactionId: row.subject_faction_id,
     subjectKey: row.subject_key,
   };
@@ -330,6 +335,9 @@ async function loadCandidates(client: Client, worldId: string): Promise<Candidat
         AND af.belligerent AND sf.belligerent
         AND a.faction_id != s.faction_id
         AND r.valence < 0
+        AND c.kind = 'accusation'
+        AND NOT c.locked
+        AND c.claim_key NOT IN ('instigator_altered_notebook', 'instigator_murdered_for_war')
       ORDER BY b.confidence DESC, a.agent_key, c.claim_key`,
     [worldId, BELIEF.actionableConfidence],
   );
