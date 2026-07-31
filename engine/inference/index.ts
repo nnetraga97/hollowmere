@@ -11,6 +11,7 @@ import { createBedrockClient, type BedrockOptions } from './bedrock.ts';
 import { createAzureOpenAIClient, type AzureOpenAIOptions } from './azure.ts';
 import { createStubClient, type StubOptions } from './stub.ts';
 import { errorLogFields, logDebug, logError, logInfo } from '../core/log.ts';
+import { completionRequestHash, completionRequestSnapshot } from './prompts.ts';
 import type {
   CompletionRequest, InferenceClient, InferenceMode, StreamUsage,
 } from './types.ts';
@@ -82,6 +83,7 @@ function withInferenceLogging(client: InferenceClient): InferenceClient {
     async complete(request) {
       const startedAt = Date.now();
       try {
+        logLocalInferencePrompt(client, request, 'complete');
         const response = await client.complete(request);
         successLog('inference_completion_succeeded', {
           mode: client.mode,
@@ -105,6 +107,7 @@ function withInferenceLogging(client: InferenceClient): InferenceClient {
       const startedAt = Date.now();
       let chunks = 0;
       try {
+        logLocalInferencePrompt(client, request, 'stream');
         const stream = client.stream(request);
         for (;;) {
           const next = await stream.next();
@@ -159,6 +162,23 @@ function withInferenceLogging(client: InferenceClient): InferenceClient {
       }
     },
   };
+}
+
+function logLocalInferencePrompt(
+  client: InferenceClient,
+  request: CompletionRequest,
+  operation: 'complete' | 'stream',
+): void {
+  if (process.env.LOG_INFERENCE_PROMPTS !== 'true' || process.env.NODE_ENV === 'production') {
+    return;
+  }
+  logInfo('inference_prompt_sent', {
+    mode: client.mode,
+    modelId: client.reasoningModelId,
+    operation,
+    promptHash: completionRequestHash(request),
+    request: completionRequestSnapshot(request),
+  });
 }
 
 function logInferenceFailure(

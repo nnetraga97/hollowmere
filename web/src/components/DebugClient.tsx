@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, BookOpen, FileSearch, Heart, Map, Network, Pause, Play, Scale, Square, UserRound, X } from 'lucide-react';
+import { Anchor, ArrowRight, BookOpen, ChevronDown, CircleDashed, FileSearch, Heart, LogOut, Map, Network, Pause, Play, Scale, Square, UserRound, Wheat, X } from 'lucide-react';
 
 import { EventBus } from '@/game/EventBus';
 import { atlasPosition, portraitPath, relationshipLevel } from '@/game/locationScenes';
@@ -62,7 +62,6 @@ export function DebugClient({
     agentKey: string; trust: number; affinity: number; fear: number; respect: number;
   } | null>(null);
   const [rumorSubject, setRumorSubject] = useState('');
-  const [rumorListener, setRumorListener] = useState('');
   const [rumorText, setRumorText] = useState('');
   const [deceptionResult, setDeceptionResult] = useState<string | null>(null);
   const [storyNotice, setStoryNotice] = useState<ChronicleEntry | null>(null);
@@ -329,25 +328,15 @@ export function DebugClient({
   const talkingAgent = useMemo(() => game?.agents.find((item) => item.agentKey === talkingTo) ?? null, [game, talkingTo]);
   const talkingDetail = agent?.agent.agentKey === talkingTo ? agent : null;
   const talkingBond = relationshipLevel(talkingDetail?.playerRelationship);
-  const localRumorListeners = useMemo(() => game?.agents.filter((item) =>
-    item.locationKey === game.player.locationKey && ['alive', 'injured'].includes(item.status)) ?? [], [game]);
-
-  useEffect(() => {
-    if (rumorListener && !localRumorListeners.some((item) => item.agentKey === rumorListener)) {
-      setRumorListener('');
-    }
-  }, [localRumorListeners, rumorListener]);
-
-  async function createRumor(event: React.FormEvent) {
-    event.preventDefault();
-    if (!rumorSubject || !rumorListener || !rumorText.trim() || sending) return;
+  async function createRumor(listenerAgentKey: string) {
+    if (!rumorSubject || !rumorText.trim() || sending) return;
     stateGeneration.current++;
     setSending(true);
     setDeceptionResult(null);
     try {
       const result = await plantRumor({
         subjectAgentKey: rumorSubject,
-        listenerAgentKey: rumorListener,
+        listenerAgentKey,
         text: rumorText.trim(),
       });
       setRumorText('');
@@ -360,15 +349,15 @@ export function DebugClient({
     }
   }
 
-  async function repeatRumor(rumor: PlayerRumor) {
-    if (!rumorListener || sending) return;
+  async function repeatRumor(listenerAgentKey: string, rumor: PlayerRumor) {
+    if (sending) return;
     stateGeneration.current++;
     setSending(true);
     setDeceptionResult(null);
     try {
       const result = await plantRumor({
         claimKey: rumor.claimKey,
-        listenerAgentKey: rumorListener,
+        listenerAgentKey,
         ...(rumor.evidenceId ? { evidenceId: rumor.evidenceId } : {}),
       });
       setDeceptionResult(result.response);
@@ -566,6 +555,36 @@ export function DebugClient({
     }
   }
 
+  async function quitWorld() {
+    if (controlling) return;
+    stateGeneration.current++;
+    conversationGeneration.current++;
+    setControlling(true);
+    setError(null);
+    try {
+      if (gameRef.current?.world.status === 'active') await control({ action: 'pause' });
+      const choices = await listWorlds();
+      refreshController.current?.abort();
+      syncController.current?.abort();
+      agentRequestController.current?.abort();
+      gameRef.current = null;
+      hydratedTick.current = null;
+      setBootstrap(null);
+      setGame(null);
+      setWorlds(choices);
+      setConversation(null);
+      setTalkingTo(null);
+      setAgent(null);
+      setSelectedAgentKey(null);
+      setSceneLocationKey(null);
+      setJourney(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setControlling(false);
+    }
+  }
+
   if (!bootstrap || !game) {
     if (playerEntry) {
       return <WorldSelectionScreen
@@ -600,10 +619,6 @@ export function DebugClient({
   const journeyFrom = journey ? bootstrap.map.locations.find(({ key }) => key === journey.from)?.name ?? journey.from : null;
   const journeyTo = journey ? bootstrap.map.locations.find(({ key }) => key === journey.to)?.name ?? journey.to : null;
   const tickSeconds = Math.max(0.1, 5 * 10_000 / game.world.timeScale);
-  const adjacentLocations = bootstrap.map.routes
-    .filter((route) => route.from === game.player.locationKey)
-    .map((route) => bootstrap.map.locations.find((location) => location.key === route.to))
-    .filter((location): location is NonNullable<typeof location> => Boolean(location));
   const pendingDestination = game.player.pendingMove
     ? bootstrap.map.locations.find((location) => location.key === game.player.pendingMove?.locationKey)
     : null;
@@ -628,6 +643,14 @@ export function DebugClient({
       onInspect={inspectAgent}
       onTalk={(agentKey) => void beginConversation(agentKey)}
       onOpenEvidence={() => { setSceneLocationKey(null); setPanel('evidence'); }}
+      rumorSubject={rumorSubject}
+      rumorText={rumorText}
+      deceptionResult={deceptionResult}
+      onRumorSubjectChange={setRumorSubject}
+      onRumorTextChange={setRumorText}
+      onClearRumorResult={() => setDeceptionResult(null)}
+      onPlantRumor={(listenerAgentKey) => void createRumor(listenerAgentKey)}
+      onRepeatRumor={(listenerAgentKey, rumor) => void repeatRumor(listenerAgentKey, rumor)}
       onRomanceChoice={makeRomanceChoice}
     />}
     {journey && <section className="journey-cinematic" aria-live="polite">
@@ -658,32 +681,32 @@ export function DebugClient({
           {game.world.status === 'paused' ? <Play size={15} aria-hidden="true" /> : <Pause size={15} aria-hidden="true" />}
           <span>{game.world.status === 'paused' ? 'Resume' : 'Pause'}</span>
         </button>
-        <button className="end-world-button" disabled={controlling} onClick={() => setEndWorldWarning(true)}><Square size={13} aria-hidden="true" /><span>End world</span></button>
+        <details className="world-menu">
+          <summary aria-label="World menu"><Square size={13} aria-hidden="true" /><span>World</span><ChevronDown size={13} aria-hidden="true" /></summary>
+          <div role="menu">
+            <button role="menuitem" disabled={controlling} onClick={() => void quitWorld()}><span><LogOut size={13} aria-hidden="true" />Quit world</span><small>Pauses the simulation and leaves</small></button>
+            <button role="menuitem" className="end-world-menu-item" disabled={controlling} onClick={() => setEndWorldWarning(true)}><span><Square size={13} aria-hidden="true" />End world</span><small>Closes this town permanently</small></button>
+          </div>
+        </details>
       </div>
     </header>
 
     <nav className="toolrail" aria-label="Debug instruments">
       {([
         ['overview', 'Overview', Map], ['chronicle', 'Chronicle', BookOpen], ['graph', 'Graph', Network],
-        ['evidence', 'Evidence', FileSearch], ['hearings', 'Hearings', Scale],
-      ] as const).map(([name, label, Icon]) => <button key={name} aria-label={label} title={label} aria-pressed={panel === name} onClick={() => setPanel(name)}><Icon size={19} strokeWidth={1.6} aria-hidden="true" /><span>{label}</span></button>)}
+        ['evidence', 'Evidence', FileSearch], ['hearings', 'Summons', Scale],
+      ] as const).map(([name, label, Icon]) => <button key={name} aria-label={label} title={label} aria-pressed={panel === name} onClick={() => setPanel(panel === name ? null : name)}><Icon size={19} strokeWidth={1.6} aria-hidden="true" /><span>{label}</span></button>)}
       <div className="rail-spacer" />
-      <button className="profile-rail-button" aria-label="Player record" title="Player record" aria-pressed={panel === 'profile'} onClick={() => setPanel('profile')}><UserRound size={19} strokeWidth={1.6} aria-hidden="true" /><span>You</span></button>
+      <button className="profile-rail-button" aria-label="Player record" title="Player record" aria-pressed={panel === 'profile'} onClick={() => setPanel(panel === 'profile' ? null : 'profile')}><UserRound size={19} strokeWidth={1.6} aria-hidden="true" /><span>You</span></button>
     </nav>
 
     <footer className="bottom-hud">
       <div className="faction-legend" aria-label="Map legend">
-        <span><i className="legend-mark legend-you" />You</span><span><i className="legend-mark legend-aldreth" />Aldreth</span>
-        <span><i className="legend-mark legend-corvane" />Corvane</span><span><i className="legend-mark legend-independent" />Independent</span>
+        <span className="legend-you"><UserRound size={13} aria-hidden="true" />You</span><span className="legend-aldreth"><Anchor size={13} aria-hidden="true" />Aldreth</span>
+        <span className="legend-corvane"><Wheat size={13} aria-hidden="true" />Corvane</span><span className="legend-independent"><CircleDashed size={13} aria-hidden="true" />Independent</span>
       </div>
-      <div className="shortcuts"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move locally</span><span><kbd>E</kbd> approach</span></div>
+      <div className="shortcuts"><span><kbd>E</kbd> approach</span></div>
     </footer>
-    {!sceneLocationKey && <nav className="travel-nav" aria-label={`Roads from ${currentLocation}`}>
-      <button className="current-location-button" onClick={() => setSceneLocationKey(game.player.locationKey)}><b>{currentLocation}</b><small>enter location scene</small></button>
-      {adjacentLocations.map((location) => <button key={location.key}
-        disabled={Boolean(game.player.pendingMove || conversation) || game.world.status !== 'active'}
-        onClick={() => void queueMove(location.key)}>{location.name}<small>travel</small></button>)}
-    </nav>}
     {game.player.pendingMove && <div className="pending">Finishing earlier travel to {pendingDestination?.name ?? game.player.pendingMove.locationKey}</div>}
     {storyNotice && <aside className="story-notice" role="status" aria-live="polite">
       <span className="eyebrow">The town changes · tick {storyNotice.tick}</span>
@@ -703,29 +726,20 @@ export function DebugClient({
         { label: 'manufactured', count: game.evidence.filter((item) => item.manufactured).length },
       ].map((item) => <div key={item.label}><strong>{item.count}</strong><span>{item.label}</span></div>)}</div>
       {game.evidence.map((item) => <div className="evidence-card" key={item.evidenceId}><b>{item.manufactured ? 'manufactured record' : item.role?.replaceAll('_', ' ') ?? item.kind}</b><span>{item.role ? `${item.kind} · ` : ''}found t{item.foundTick}</span><p>{item.accusedKey ?? 'no named suspect'}{item.claimKey ? ` · ${item.claimKey}` : ''}{item.manufactured ? ` · ${Math.round(item.credibility / 100)}% convincing` : ''}</p></div>)}
-      <section className="deception-workbench">
-        <div><span className="eyebrow">Misinformation</span><h3>Plant a false story</h3><p>You choose the lie. The listener chooses whether to believe it from their credulity, faction loyalties, trust in you, your reputation, and any record you show them.</p></div>
-        <form onSubmit={createRumor}>
-          <label>Subject<select value={rumorSubject} onChange={(event) => setRumorSubject(event.target.value)}><option value="">Choose a person</option>{game.agents.filter((item) => item.status === 'alive').map((item) => <option key={item.agentKey} value={item.agentKey}>{item.name}</option>)}</select></label>
-          <label>First listener<select value={rumorListener} onChange={(event) => setRumorListener(event.target.value)}><option value="">Someone nearby</option>{localRumorListeners.map((item) => <option key={item.agentKey} value={item.agentKey}>{item.name}</option>)}</select></label>
-          <label className="deception-story">The story<textarea maxLength={240} value={rumorText} onChange={(event) => setRumorText(event.target.value)} placeholder="I saw… / Someone has been…" /></label>
-          <button disabled={sending || !rumorSubject || !rumorListener || !rumorText.trim() || rumorSubject === rumorListener}>{sending ? 'Working…' : 'Plant rumor'}</button>
-        </form>
-        {deceptionResult && <p className="notice">{deceptionResult}</p>}
-      </section>
+      <p className="evidence-rumor-note">Plant and repeat stories from a person’s location card. Only the listener needs to be present.</p>
+      {deceptionResult && <p className="notice">{deceptionResult}</p>}
       {game.playerRumors.length > 0 && <section className="player-rumors"><h3>Your stories</h3>{game.playerRumors.map((rumor) => <article key={rumor.claimKey} className={rumor.status === 'discredited' ? 'discredited' : ''}>
         <header><b>{rumor.subjectKey}</b><span>{rumor.reach} heard · heat {Math.round(rumor.heat / 100)}%</span></header>
         <p>{rumor.text}</p>
         {rumor.fabricationOutcome ? <small>{rumor.fabricationOutcome === 'created' ? `Forged record · ${Math.round((rumor.evidenceCredibility ?? 0) / 100)}% convincing` : `Forgery ${rumor.fabricationOutcome}`}</small> : <small>{rumor.reach < 3 ? `${3 - rumor.reach} more listener${3 - rumor.reach === 1 ? '' : 's'} needed before a record can look plausible` : 'One difficult attempt is available to forge a supporting record'}</small>}
         <div>
-          <button disabled={sending || rumor.status !== 'active' || !rumorListener || rumorListener === rumor.subjectKey} onClick={() => void repeatRumor(rumor)}>Tell nearby listener{rumor.evidenceId ? ' with record' : ''}</button>
           <button disabled={sending || rumor.status !== 'active' || rumor.reach < 3 || Boolean(rumor.fabricationOutcome)} onClick={() => void forgeRumorEvidence(rumor)}>Forge record</button>
         </div>
       </article>)}</section>}
       <hr /><button className="warning-button" onClick={() => setTruthWarning(true)}>Reveal Engine Truth</button>
     </Panel>}
-    {panel === 'hearings' && <Panel title="Hearings" onClose={() => setPanel(null)}>
-      {!game.capabilities.hearings && <p className="notice">Hearing state will appear after the instigator engine commit is integrated.</p>}
+    {panel === 'hearings' && <Panel title="Summons" onClose={() => setPanel(null)}>
+      {!game.capabilities.hearings && <p className="notice">Summons state will appear after the instigator engine commit is integrated.</p>}
       {game.hearings.map((hearing) => <section className="hearing-card" key={hearing.hearingId}><h3>{hearing.locationKey}</h3><p>{hearing.status} · due t{hearing.dueTick} · {Math.max(0, hearing.dueTick - game.world.currentTick)} ticks remaining</p><p>Reveal: {hearing.revealClaimKey ?? 'not queued'}</p>{hearing.commitments.map((commitment) => <div className="metric-row" key={commitment.agentKey}><b>{commitment.agentKey}</b><span>{commitment.response} · {commitment.status}</span></div>)}</section>)}
     </Panel>}
     {panel === 'profile' && <Panel title="Player record" onClose={() => setPanel(null)}>

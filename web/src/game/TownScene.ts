@@ -2,6 +2,7 @@ import * as Phaser from 'phaser';
 
 import type { AgentView, GameSnapshot, TownMap } from '@/lib/contracts';
 import { EventBus } from './EventBus';
+import { rankLocationAgents } from './locationScenes';
 import {
   areAdjacent, LOCATION_KEYS, LOCATION_RADIUS, MAP_SCALE, npcOffset,
   shouldSuppressGameInput, validateTownMap, withinInteractionRange,
@@ -12,12 +13,6 @@ const FACTION_TINT: Record<string, number> = {
   aldreth: 0x3b82f6,
   corvane: 0xf97316,
   unaligned: 0x94a3b8,
-};
-
-const FACTION_TEXT: Record<string, string> = {
-  aldreth: '#73a7f7',
-  corvane: '#fb9850',
-  unaligned: '#b1bfce',
 };
 
 const FEMALE_AGENT_KEYS = new Set([
@@ -31,7 +26,7 @@ const LOCAL_MOVEMENT_RADIUS = 82;
 interface LocationMarker {
   marker: Phaser.GameObjects.Arc;
   halo: Phaser.GameObjects.Arc;
-  travelLabel: Phaser.GameObjects.Text;
+  roster: Phaser.GameObjects.Text;
 }
 
 export class TownScene extends Phaser.Scene {
@@ -42,7 +37,6 @@ export class TownScene extends Phaser.Scene {
   private playerLabel?: Phaser.GameObjects.Text;
   private playerPlaced = false;
   private agents = new Map<string, Phaser.GameObjects.Container>();
-  private labels = new Map<string, Phaser.GameObjects.Text>();
   private locations = new Map<string, { x: number; y: number }>();
   private locationMarkers = new Map<string, LocationMarker>();
   private authoritativePlayerLocation: string | null = null;
@@ -56,7 +50,6 @@ export class TownScene extends Phaser.Scene {
     interact: Phaser.Input.Keyboard.Key;
   };
   private nearestAgent: string | null = null;
-  private hoveredAgent: string | null = null;
   private overlayCaptured = false;
   private domInputCaptured = false;
   private cleaned = false;
@@ -194,23 +187,16 @@ export class TownScene extends Phaser.Scene {
     ground.fillStyle(0x4a2c1e, 0.16).fillRect(940, 0, WORLD_WIDTH - 940, WORLD_HEIGHT);
 
     for (const location of map.locations) this.locations.set(location.key, worldPosition(location));
-    ground.lineStyle(18, 0x111116, 0.88);
     const seen = new Set<string>();
+    const roads: { from: { x: number; y: number }; to: { x: number; y: number } }[] = [];
     for (const route of map.routes) {
       const key = [route.from, route.to].sort().join(':');
       if (seen.has(key)) continue;
       seen.add(key);
       const from = this.locations.get(route.from), to = this.locations.get(route.to);
-      if (from && to) ground.lineBetween(from.x, from.y, to.x, to.y);
+      if (from && to) roads.push({ from, to });
     }
-    ground.lineStyle(2, 0x7b7368, 0.36);
-    for (const route of map.routes) {
-      const key = [route.from, route.to].sort().join(':edge');
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const from = this.locations.get(route.from), to = this.locations.get(route.to);
-      if (from && to) ground.lineBetween(from.x, from.y, to.x, to.y);
-    }
+    this.drawRoads(ground, roads);
 
     map.locations.forEach((location) => {
       const point = this.locations.get(location.key)!;
@@ -222,7 +208,7 @@ export class TownScene extends Phaser.Scene {
       const marker = this.add.circle(point.x, point.y, LOCATION_RADIUS, 0x111116, 0.82)
         .setStrokeStyle(2, factionColor, 0.58)
         .setDepth(1)
-        .setInteractive()
+        .setInteractive({ useHandCursor: true })
         .on('pointerdown', () => {
           if (this.state?.player.locationKey === location.key) {
             EventBus.emit('enter-location', { locationKey: location.key });
@@ -246,13 +232,42 @@ export class TownScene extends Phaser.Scene {
       this.add.text(point.x, point.y + 40, location.name.toUpperCase(), {
         fontFamily: 'Georgia, serif', fontStyle: 'bold', fontSize: '11px', color: '#e8dcc8',
         backgroundColor: '#0d0d12ee', padding: { x: 8, y: 4 }, letterSpacing: 1.2,
-      }).setOrigin(0.5).setDepth(8);
-      const travelLabel = this.add.text(point.x, point.y - 66, '', {
-        fontFamily: 'ui-monospace, monospace', fontStyle: 'bold', fontSize: '10px',
-        color: '#171208', backgroundColor: '#ffdb78', padding: { x: 6, y: 3 },
-      }).setOrigin(0.5).setDepth(31).setVisible(false);
-      this.locationMarkers.set(location.key, { marker, halo, travelLabel });
+      }).setOrigin(0.5).setDepth(32);
+      const roster = this.add.text(point.x, point.y - 72, '', {
+        align: 'center', fontFamily: 'ui-monospace, monospace', fontSize: '10px',
+        color: '#d8cebd', backgroundColor: '#0d0d12f7', padding: { x: 9, y: 7 },
+        lineSpacing: 3,
+      }).setOrigin(0.5, 1).setDepth(46).setVisible(false);
+      marker
+        .on('pointerover', () => roster.setVisible(true))
+        .on('pointerout', () => roster.setVisible(false));
+      this.locationMarkers.set(location.key, { marker, halo, roster });
     });
+  }
+
+  private drawRoads(
+    graphics: Phaser.GameObjects.Graphics,
+    roads: readonly { from: { x: number; y: number }; to: { x: number; y: number } }[],
+  ): void {
+    const drawSolid = (width: number, color: number, alpha: number) => {
+      graphics.lineStyle(width, color, alpha);
+      for (const { from, to } of roads) graphics.lineBetween(from.x, from.y, to.x, to.y);
+    };
+    drawSolid(18, 0x111116, 0.88);
+    drawSolid(13, 0x4a4136, 0.85);
+    graphics.lineStyle(8, 0x6b5c48, 0.42);
+    for (const { from, to } of roads) {
+      const length = Phaser.Math.Distance.Between(from.x, from.y, to.x, to.y);
+      for (let distance = 0; distance < length; distance += 56) {
+        const start = distance / length;
+        const end = Math.min(distance + 34, length) / length;
+        graphics.lineBetween(
+          Phaser.Math.Linear(from.x, to.x, start), Phaser.Math.Linear(from.y, to.y, start),
+          Phaser.Math.Linear(from.x, to.x, end), Phaser.Math.Linear(from.y, to.y, end),
+        );
+      }
+    }
+    drawSolid(2, 0x8c7f6b, 0.3);
   }
 
   private createPlayer(): void {
@@ -289,6 +304,7 @@ export class TownScene extends Phaser.Scene {
     }
     this.updateNavigationMarkers();
     this.syncAgents(game.agents);
+    this.updateLocationRosters(game);
     this.drawHearings(game);
   }
 
@@ -304,27 +320,14 @@ export class TownScene extends Phaser.Scene {
       let sprite = this.agents.get(agent.agentKey);
       if (!sprite) {
         const color = FACTION_TINT[agent.factionKey] ?? 0x94a3b8;
-        const portrait = this.add.image(0, 0, this.portraitFor(agent)).setDisplaySize(36, 36);
-        const frame = this.add.rectangle(0, 0, 42, 42, 0x111116, 0.92)
+        const portrait = this.add.image(0, 0, this.circularPortraitFor(agent)).setDisplaySize(36, 36);
+        const frame = this.add.circle(0, 0, 21, 0x111116, 0.92)
           .setStrokeStyle(2, color, 0.88);
-        const label = this.add.text(0, -30, '', {
-          fontFamily: 'ui-monospace, monospace', fontStyle: 'bold', fontSize: '9px',
-          color: '#ded6c8', backgroundColor: '#0d0d12f2', padding: { x: 5, y: 3 },
-        }).setOrigin(0.5).setVisible(false);
-        sprite = this.add.container(target.x, target.y, [frame, portrait, label])
-          .setSize(46, 52).setDepth(15).setInteractive({ useHandCursor: true });
+        sprite = this.add.container(target.x, target.y, [frame, portrait])
+          .setSize(46, 46).setDepth(15).setInteractive({ useHandCursor: true });
         sprite.setData('locationKey', agent.locationKey);
         sprite.on('pointerdown', () => EventBus.emit('select-agent', { agentKey: agent.agentKey }));
-        sprite.on('pointerover', () => {
-          this.hoveredAgent = agent.agentKey;
-          this.updateAgentLabel(agent, agent.agentKey === this.nearestAgent, true);
-        });
-        sprite.on('pointerout', () => {
-          if (this.hoveredAgent === agent.agentKey) this.hoveredAgent = null;
-          this.updateAgentLabel(agent, agent.agentKey === this.nearestAgent, false);
-        });
         this.agents.set(agent.agentKey, sprite);
-        this.labels.set(agent.agentKey, label);
       } else if (sprite.getData('locationKey') !== agent.locationKey) {
         sprite.setData('locationKey', agent.locationKey);
         this.tweens.add({
@@ -337,31 +340,14 @@ export class TownScene extends Phaser.Scene {
       } else {
         sprite.setPosition(target.x, target.y);
       }
-      this.updateAgentLabel(
-        agent,
-        agent.agentKey === this.nearestAgent,
-        agent.agentKey === this.hoveredAgent,
-      );
       if (agent.status === 'dead' || agent.status === 'detained') sprite.setAlpha(0.4);
       else sprite.setAlpha(1);
     }
     for (const [key, sprite] of this.agents) {
       if (active.has(key)) continue;
       sprite.destroy();
-      this.labels.get(key)?.destroy();
       this.agents.delete(key);
-      this.labels.delete(key);
     }
-  }
-
-  private updateAgentLabel(agent: AgentView, nearby: boolean, hovered = false): void {
-    const label = this.labels.get(agent.agentKey);
-    if (!label?.active || !label.scene) return;
-    const firstName = agent.name.split(' ')[0] ?? agent.name;
-    label.setText(`${nearby ? 'E · ' : ''}${firstName}`);
-    label.setColor(FACTION_TEXT[agent.factionKey] ?? '#ded6c8');
-    label.setBackgroundColor(nearby ? '#2d2718f5' : '#10110eee');
-    label.setVisible(nearby || hovered);
   }
 
   private portraitFor(agent: AgentView): string {
@@ -369,6 +355,40 @@ export class TownScene extends Phaser.Scene {
     if (agent.factionKey === 'aldreth') return `aldreth-${variant}`;
     if (agent.factionKey === 'corvane') return `corvane-${variant}`;
     return variant === 'male' ? 'independent-priest' : 'independent-woman';
+  }
+
+  private circularPortraitFor(agent: AgentView): string {
+    const sourceKey = this.portraitFor(agent);
+    const circularKey = `${sourceKey}-circle`;
+    if (this.textures.exists(circularKey)) return circularKey;
+    const texture = this.textures.createCanvas(circularKey, 36, 36);
+    if (!texture) return sourceKey;
+    const context = texture.getContext();
+    context.save();
+    context.beginPath();
+    context.arc(18, 18, 18, 0, Math.PI * 2);
+    context.clip();
+    const source = this.textures.get(sourceKey).getSourceImage() as HTMLImageElement;
+    const crop = Math.min(source.naturalWidth || source.width, source.naturalHeight || source.height);
+    const left = ((source.naturalWidth || source.width) - crop) / 2;
+    const top = ((source.naturalHeight || source.height) - crop) / 2;
+    context.drawImage(source, left, top, crop, crop, 0, 0, 36, 36);
+    context.restore();
+    texture.refresh();
+    return circularKey;
+  }
+
+  private updateLocationRosters(game: GameSnapshot): void {
+    for (const [locationKey, { roster }] of this.locationMarkers) {
+      const current = locationKey === game.player.locationKey;
+      const reachable = current || (this.mapData && areAdjacent(this.mapData, game.player.locationKey, locationKey));
+      const people = rankLocationAgents(game.agents, locationKey, game.world.seed, game.world.day);
+      roster.setText([
+        current ? 'OPEN LOCATION' : reachable ? 'CLICK TO TRAVEL' : 'BEYOND THIS ROAD',
+        people.length ? 'WHO IS HERE' : 'NO ONE HERE',
+        ...people.map((agent) => agent.name),
+      ]);
+    }
   }
 
   private drawHearings(game: GameSnapshot): void {
@@ -379,7 +399,7 @@ export class TownScene extends Phaser.Scene {
       if (!point) continue;
       const ring = this.add.circle(point.x, point.y, 72, 0xd6b65d, 0.05)
         .setStrokeStyle(3, 0xd6b65d, 0.85).setDepth(4);
-      const label = this.add.text(point.x, point.y - 78, `hearing · t${hearing.dueTick}`, {
+      const label = this.add.text(point.x, point.y - 78, `summons · t${hearing.dueTick}`, {
         fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: '#f0d888',
         backgroundColor: '#17150fcc', padding: { x: 4, y: 2 },
       }).setOrigin(0.5).setDepth(30);
@@ -400,11 +420,7 @@ export class TownScene extends Phaser.Scene {
       }
     }
     if (nearest?.key !== this.nearestAgent) {
-      const previous = this.state.agents.find((agent) => agent.agentKey === this.nearestAgent);
-      if (previous) this.updateAgentLabel(previous, false);
       this.nearestAgent = nearest?.key ?? null;
-      const current = this.state.agents.find((agent) => agent.agentKey === this.nearestAgent);
-      if (current) this.updateAgentLabel(current, true);
     }
   }
 
@@ -434,9 +450,6 @@ export class TownScene extends Phaser.Scene {
       const current = locationKey === this.state.player.locationKey;
       const adjacent = areAdjacent(this.mapData, this.state.player.locationKey, locationKey);
       const available = adjacent && !this.state.player.pendingMove && this.state.world.status === 'active';
-      objects.travelLabel
-        .setText(current ? 'ENTER SCENE' : available ? 'TRAVEL' : '')
-        .setVisible(current || available);
       objects.marker.setStrokeStyle(
         current ? 4 : available ? 3 : 2,
         current ? 0xffdb78 : available ? 0xd6b65d : 0x59616b,

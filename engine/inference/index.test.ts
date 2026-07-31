@@ -21,6 +21,9 @@ import { effectiveWorldInferenceProfile, inferenceForProfile } from './world.ts'
 import {
   deriveGroundedClaimSupport, parsePlan, parseReflectionRefs,
 } from '../agents/cognition.ts';
+import {
+  completionRequestHash, completionRequestSnapshot,
+} from './prompts.ts';
 
 const DIMS = 1024;
 
@@ -84,6 +87,35 @@ function request(overrides: Partial<CompletionRequest> = {}): CompletionRequest 
     ...overrides,
   };
 }
+
+test('completion request snapshots include effective constraints and hash all prompt inputs', () => {
+  const original = request({
+    user: '{"latestPlayerUtterance":"What happened?"}',
+    choices: { claims: ['edryc_investigated_fairly'] },
+  });
+  const snapshot = completionRequestSnapshot(original);
+  assert.match(snapshot.system, /Choose only from these known values/);
+  assert.match(snapshot.system, /edryc_investigated_fairly/);
+  assert.equal(snapshot.user, original.user);
+
+  const originalHash = completionRequestHash(original);
+  assert.equal(originalHash, completionRequestHash({ ...original }));
+  assert.notEqual(
+    originalHash,
+    completionRequestHash({
+      ...original,
+      user: '{"latestPlayerUtterance":"Who died?"}',
+    }),
+  );
+  assert.notEqual(
+    originalHash,
+    completionRequestHash({ ...original, system: 'Changed system prompt.' }),
+  );
+  assert.notEqual(
+    originalHash,
+    completionRequestHash({ ...original, choices: { claims: ['another_claim'] } }),
+  );
+});
 
 function cosine(a: readonly number[], b: readonly number[]): number {
   let dot = 0;

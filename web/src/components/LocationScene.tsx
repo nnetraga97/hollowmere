@@ -1,14 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, BookHeart, BookOpen, Heart, MessageCircle, Users } from 'lucide-react';
+import { ArrowLeft, BookHeart, BookOpen, Heart, MessageCircle, MessageCircleDashed, Users } from 'lucide-react';
 
 import {
   atlasPosition, formatAction, LOCATION_SCENES, portraitPath, rankLocationAgents, relationshipLevel,
   resolveEncounterSelection,
 } from '@/game/locationScenes';
 import type {
-  AgentDetail, Bootstrap, GameSnapshot, RomanceArc, RomanceChoiceResult,
+  AgentDetail, Bootstrap, GameSnapshot, PlayerRumor, RomanceArc, RomanceChoiceResult,
 } from '@/lib/contracts';
 import { RomanceScene } from './RomanceScene';
 
@@ -25,18 +25,29 @@ interface LocationSceneProps {
   onInspect: (agentKey: string) => void;
   onTalk: (agentKey: string) => void;
   onOpenEvidence: () => void;
+  rumorSubject: string;
+  rumorText: string;
+  deceptionResult: string | null;
+  onRumorSubjectChange: (agentKey: string) => void;
+  onRumorTextChange: (text: string) => void;
+  onClearRumorResult: () => void;
+  onPlantRumor: (listenerAgentKey: string) => void;
+  onRepeatRumor: (listenerAgentKey: string, rumor: PlayerRumor) => void;
   onRomanceChoice: (input: {
     agentKey: string; sceneKey: string; choiceKey: string; locationKey: string;
   }) => Promise<RomanceChoiceResult>;
 }
 
 export function LocationScene({
-  bootstrap, game, locationKey, selectedAgentKey, selectedAgent, bondChange, romance, busy,
-  onBack, onInspect, onTalk, onOpenEvidence, onRomanceChoice,
+    bootstrap, game, locationKey, selectedAgentKey, selectedAgent, bondChange, romance, busy,
+  onBack, onInspect, onTalk, onOpenEvidence, rumorSubject, rumorText, deceptionResult,
+  onRumorSubjectChange, onRumorTextChange, onClearRumorResult, onPlantRumor, onRepeatRumor,
+  onRomanceChoice,
 }: LocationSceneProps) {
   const returnButton = useRef<HTMLButtonElement>(null);
   const onBackRef = useRef(onBack);
   const [romanceOpen, setRomanceOpen] = useState(false);
+  const [rumorOpen, setRumorOpen] = useState(false);
   const romanceOpenRef = useRef(false);
   onBackRef.current = onBack;
   romanceOpenRef.current = romanceOpen;
@@ -61,7 +72,10 @@ export function LocationScene({
     if (activeKey && activeKey !== selectedAgentKey) onInspect(activeKey);
   }, [activeKey, onInspect, selectedAgentKey]);
 
-  useEffect(() => setRomanceOpen(false), [active?.agent.agentKey]);
+  useEffect(() => {
+    setRomanceOpen(false);
+    setRumorOpen(false);
+  }, [active?.agent.agentKey]);
 
   useEffect(() => {
     returnButton.current?.focus();
@@ -125,7 +139,7 @@ export function LocationScene({
       </div>}
     </div>
 
-    {activeEncounter && <aside className={`encounter-focus faction-${activeEncounter.factionKey}`} aria-busy={!active}>
+    {activeEncounter && <aside className={`encounter-focus faction-${activeEncounter.factionKey}${rumorOpen ? ' rumor-open' : ''}`} aria-busy={!active}>
       <div className="focus-portrait">
         <img src={portraitPath(activeEncounter)} alt={`Portrait of ${activeEncounter.name}`} />
         <span>{activeEncounter.factionKey === 'unaligned' ? 'Independent' : activeEncounter.factionKey}</span>
@@ -136,25 +150,76 @@ export function LocationScene({
         {active ? <>
         <p className="focus-summary">{active.summary}</p>
         <p className="focus-reason"><b>Why here:</b> {formatAction(active.agent.currentAction)}.</p>
-        <BondMeter relationship={active.playerRelationship} />
-        {activeRomance && <RomanceCard arc={activeRomance} onOpen={() => setRomanceOpen(true)} busy={busy} />}
-        {bondChange?.agentKey === active.agent.agentKey && <div className="bond-impact" role="status">
-          <span>Conversation remembered</span>
-          <strong>{formatSigned(bondChange.trust)} trust · {formatSigned(bondChange.affinity)} affinity</strong>
-          {(bondChange.fear !== 0 || bondChange.respect !== 0) && <small>{formatSigned(bondChange.fear)} fear · {formatSigned(bondChange.respect)} respect</small>}
-        </div>}
-        <div className="focus-actions">
-          <button className="speak-scene-button" disabled={busy} onClick={() => onTalk(active.agent.agentKey)}>
-            <MessageCircle size={16} aria-hidden="true" /> Speak with {active.agent.name.split(' ')[0]}
-          </button>
-          <span>Words alter trust, affinity, fear, and respect.</span>
-        </div>
+        {rumorOpen ? <RumorComposer
+          game={game}
+          listener={active.agent}
+          subject={rumorSubject}
+          text={rumorText}
+          result={deceptionResult}
+          busy={busy}
+          onSubjectChange={onRumorSubjectChange}
+          onTextChange={onRumorTextChange}
+          onCancel={() => setRumorOpen(false)}
+          onPlant={() => onPlantRumor(active.agent.agentKey)}
+          onRepeat={(rumor) => onRepeatRumor(active.agent.agentKey, rumor)}
+        /> : <>
+          <BondMeter relationship={active.playerRelationship} />
+          {activeRomance && <RomanceCard arc={activeRomance} onOpen={() => setRomanceOpen(true)} busy={busy} />}
+          {bondChange?.agentKey === active.agent.agentKey && <div className="bond-impact" role="status">
+            <span>Conversation remembered</span>
+            <strong>{formatSigned(bondChange.trust)} trust · {formatSigned(bondChange.affinity)} affinity</strong>
+            {(bondChange.fear !== 0 || bondChange.respect !== 0) && <small>{formatSigned(bondChange.fear)} fear · {formatSigned(bondChange.respect)} respect</small>}
+          </div>}
+          <div className="focus-actions">
+            <button className="speak-scene-button" disabled={busy} onClick={() => onTalk(active.agent.agentKey)}>
+              <MessageCircle size={16} aria-hidden="true" /> Speak with {active.agent.name.split(' ')[0]}
+            </button>
+            <button className="rumor-scene-button" disabled={busy} onClick={() => { onClearRumorResult(); setRumorOpen(true); }}>
+              <MessageCircleDashed size={16} aria-hidden="true" /> Plant rumor
+            </button>
+          </div>
+        </>}
         </> : <p className="focus-summary" role="status">Remembering what you know about {activeEncounter.name}…</p>}
       </div>
     </aside>}
 
-    <p className="scene-ambience"><span aria-hidden="true">“</span>{scene.ambience}<span aria-hidden="true">”</span></p>
+    {!rumorOpen && <p className="scene-ambience"><span aria-hidden="true">“</span>{scene.ambience}<span aria-hidden="true">”</span></p>}
     </>}
+  </section>;
+}
+
+function RumorComposer({
+  game, listener, subject, text, result, busy, onSubjectChange, onTextChange,
+  onCancel, onPlant, onRepeat,
+}: {
+  game: GameSnapshot;
+  listener: GameSnapshot['agents'][number];
+  subject: string;
+  text: string;
+  result: string | null;
+  busy: boolean;
+  onSubjectChange: (agentKey: string) => void;
+  onTextChange: (text: string) => void;
+  onCancel: () => void;
+  onPlant: () => void;
+  onRepeat: (rumor: PlayerRumor) => void;
+}) {
+  const subjects = game.agents.filter((agent) =>
+    agent.status === 'alive' && agent.agentKey !== listener.agentKey);
+  return <section className="rumor-composer" aria-label={`Plant a rumor with ${listener.name}`}>
+    <header><span><MessageCircleDashed size={13} aria-hidden="true" /> Misinformation</span><button type="button" onClick={onCancel}>Cancel</button></header>
+    <p>You choose the lie. {listener.name.split(' ')[0]} decides whether to believe it from loyalty, credulity, and trust in you.</p>
+    {game.playerRumors.some((rumor) => rumor.status === 'active' && rumor.subjectKey !== listener.agentKey) && <div className="rumor-existing">
+      <span>Tell an existing story</span>
+      {game.playerRumors.filter((rumor) => rumor.status === 'active' && rumor.subjectKey !== listener.agentKey).map((rumor) =>
+        <button type="button" disabled={busy} key={rumor.claimKey} onClick={() => onRepeat(rumor)}>{rumor.text}</button>)}
+    </div>}
+    <form onSubmit={(event) => { event.preventDefault(); onPlant(); }}>
+      <label>About whom?<select value={subject} onChange={(event) => onSubjectChange(event.target.value)}><option value="">Choose a person</option>{subjects.map((agent) => <option key={agent.agentKey} value={agent.agentKey}>{agent.name}</option>)}</select></label>
+      <textarea maxLength={240} value={text} onChange={(event) => onTextChange(event.target.value)} placeholder="I saw… / Someone has been…" />
+      <button disabled={busy || !subject || !text.trim()}>{busy ? 'Planting…' : 'Plant'}</button>
+    </form>
+    {result && <p className="rumor-result" role="status">{result}</p>}
   </section>;
 }
 

@@ -18,11 +18,17 @@ Hollowmere writes one JSON object per server-side event. Every entry includes:
 - Scheduler: claims, ticks, lease renewal failures, sweeps, and runner failures
 - Web mutations: session/world lifecycle, movement, conversation, and romance actions
 - HTTP failures: `web_request_rejected` and `web_request_failed` with route and method
-- Guardrails: `conversation_response_rejected` with the exact rejection code and detail
+- Mechanical guardrails: `conversation_response_rejected` with the exact structural or allowlist rejection code and detail. Free-form reply prose is not name-filtered.
 
 Successful live-provider calls are logged at `info`. Successful stub calls are
-logged at `debug` to keep offline/test output quiet. Provider prompts and API
-credentials are never logged.
+logged at `debug` to keep offline/test output quiet. Deployed services never
+log provider prompts or API credentials.
+
+For an actively supervised local development server only, setting
+`LOG_INFERENCE_PROMPTS=true` prints an `inference_prompt_sent` event containing
+the complete provider-neutral request and its SHA-256 fingerprint. The switch
+is ignored when `NODE_ENV=production`. Because the payload can contain player
+text and private NPC context, do not retain or forward these local logs.
 
 Rejected conversation output is the deliberate exception: the warning includes
 up to 4,000 characters of the raw provider response so a fallback can be
