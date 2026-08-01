@@ -1,0 +1,363 @@
+.root {
+  position: fixed;
+  z-index: 2147483000;
+  inset: 0;
+  pointer-events: none;
+  color: #f2ede3;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.35;
+}
+
+.root *, .root *::before, .root *::after {
+  box-sizing: border-box;
+}
+
+.launcher,
+.tray,
+.composer,
+.notice {
+  pointer-events: auto;
+}
+
+.launcher {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  min-height: 38px;
+  border: 1px solid rgba(146, 210, 255, 0.8);
+  border-radius: 8px;
+  background: #10202e;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
+  color: #edf8ff;
+  cursor: pointer;
+  font: 700 0.76rem/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  padding: 0.68rem 0.82rem;
+}
+
+.launcher:hover {
+  border-color: #c4ebff;
+  background: #153047;
+}
+
+.launcher:focus-visible,
+.tray button:focus-visible,
+.composer button:focus-visible,
+.composer textarea:focus-visible,
+.composer select:focus-visible {
+  outline: 3px solid #c4ebff;
+  outline-offset: 2px;
+}
+
+.highlight,
+.blockedHighlight {
+  position: fixed;
+  z-index: 1;
+  pointer-events: none;
+  border: 2px solid #7ed0ff;
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px rgba(126, 208, 255, 0.22), 0 8px 26px rgba(0, 0, 0, 0.3);
+}
+
+.blockedHighlight {
+  border-color: #b7a9de;
+  border-style: dashed;
+  box-shadow: 0 0 0 3px rgba(183, 169, 222, 0.18);
+}
+
+.highlight span,
+.blockedHighlight span {
+  position: absolute;
+  top: -1.9rem;
+  left: -2px;
+  max-width: min(360px, calc(100vw - 2rem));
+  overflow: hidden;
+  border-radius: 5px 5px 5px 0;
+  background: #10202e;
+  color: #f5fbff;
+  font: 650 0.69rem/1.25 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  padding: 0.36rem 0.48rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blockedHighlight span {
+  background: #28213a;
+}
+
+.tray,
+.composer {
+  position: fixed;
+  right: 1rem;
+  bottom: 4.2rem;
+  width: min(390px, calc(100vw - 2rem));
+  max-height: min(70dvh, 680px);
+  overflow: auto;
+  border: 1px solid rgba(178, 210, 232, 0.42);
+  border-radius: 11px;
+  background: rgba(10, 20, 30, 0.97);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.56);
+  color: #edf3f8;
+  padding: 0.92rem;
+}
+
+.tray header,
+.composer header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.tray h2,
+.composer h2 {
+  margin: 0.1rem 0 0;
+  color: #fff;
+  font: 700 1rem/1.2 ui-sans-serif, system-ui, sans-serif;
+}
+
+.kicker {
+  display: block;
+  color: #9fd9ff;
+  font: 700 0.61rem/1.2 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.description,
+.targetSummary {
+  margin: 0.72rem 0;
+  color: #c0cfda;
+  font-size: 0.77rem;
+}
+
+.targetSummary {
+  border-left: 2px solid #7ed0ff;
+  background: rgba(126, 208, 255, 0.09);
+  color: #e9f6ff;
+  overflow-wrap: anywhere;
+  padding: 0.56rem 0.64rem;
+}
+
+.inspectActions {
+  display: grid;
+  align-items: center;
+  grid-template-columns: auto 1fr;
+  gap: 0.6rem;
+  margin: 0.8rem 0;
+}
+
+.inspectHint {
+  color: #b5c3cf;
+  font-size: 0.68rem;
+}
+
+.primaryButton,
+.quietButton,
+.trayActions button,
+.noteActions button {
+  min-height: 32px;
+  border: 1px solid rgba(178, 210, 232, 0.34);
+  border-radius: 6px;
+  background: #152634;
+  color: #edf4f9;
+  cursor: pointer;
+  font: 650 0.69rem/1 ui-sans-serif, system-ui, sans-serif;
+  padding: 0.52rem 0.62rem;
+}
+
+.primaryButton {
+  border-color: #83d2ff;
+  background: #15506f;
+  color: #f6fcff;
+}
+
+.primaryButton:hover {
+  background: #1a678f;
+}
+
+.quietButton,
+.noteActions button {
+  background: transparent;
+  color: #b8c8d3;
+}
+
+.quietButton:hover,
+.noteActions button:hover,
+.trayActions button:hover {
+  border-color: #8eb7cf;
+  background: rgba(142, 183, 207, 0.12);
+  color: #fff;
+}
+
+.noteList {
+  display: grid;
+  gap: 0.55rem;
+  max-height: 280px;
+  overflow: auto;
+  margin-top: 0.8rem;
+}
+
+.note {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  border: 1px solid rgba(178, 210, 232, 0.2);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 0.66rem;
+}
+
+.note strong,
+.noteRoute,
+.note small {
+  display: block;
+}
+
+.noteRoute,
+.note small {
+  color: #91c6e4;
+  font-size: 0.61rem;
+  letter-spacing: 0.035em;
+}
+
+.note strong {
+  margin-top: 0.2rem;
+  color: #f4f8fb;
+  font-size: 0.73rem;
+  overflow-wrap: anywhere;
+}
+
+.note p {
+  margin: 0.42rem 0;
+  color: #c7d2da;
+  font-size: 0.71rem;
+  overflow-wrap: anywhere;
+}
+
+.noteActions {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+}
+
+.noteActions button {
+  min-height: 27px;
+  font-size: 0.62rem;
+  padding: 0.38rem 0.46rem;
+}
+
+.empty {
+  margin: 0.35rem 0;
+  color: #9fafba;
+  font-size: 0.76rem;
+}
+
+.trayActions,
+.composerActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-top: 0.86rem;
+  border-top: 1px solid rgba(178, 210, 232, 0.18);
+  padding-top: 0.76rem;
+}
+
+.dangerButton {
+  border-color: rgba(255, 151, 151, 0.52) !important;
+  color: #ffc7c7 !important;
+}
+
+.dangerButton:hover {
+  background: rgba(226, 96, 96, 0.13) !important;
+}
+
+.tray button:disabled,
+.composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.composer form {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.composer label {
+  display: grid;
+  gap: 0.36rem;
+  color: #d7e4ec;
+  font: 700 0.68rem/1.2 ui-sans-serif, system-ui, sans-serif;
+}
+
+.composer label span {
+  color: #9fafba;
+  font-weight: 500;
+}
+
+.composer textarea,
+.composer select {
+  width: 100%;
+  border: 1px solid rgba(178, 210, 232, 0.4);
+  border-radius: 6px;
+  background: #071019;
+  color: #f1f7fb;
+  font: 0.78rem/1.45 ui-sans-serif, system-ui, sans-serif;
+  padding: 0.58rem 0.64rem;
+}
+
+.composer textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.notice {
+  position: fixed;
+  right: 1rem;
+  bottom: 4.25rem;
+  width: min(360px, calc(100vw - 2rem));
+  margin: 0;
+  border: 1px solid rgba(157, 220, 176, 0.58);
+  border-radius: 7px;
+  background: rgba(15, 55, 40, 0.97);
+  color: #dff7e7;
+  font-size: 0.72rem;
+  padding: 0.58rem 0.68rem;
+}
+
+.tray + .notice,
+.composer + .notice {
+  bottom: auto;
+  top: 1rem;
+}
+
+@media (max-width: 520px) {
+  .launcher {
+    right: 0.72rem;
+    bottom: 0.72rem;
+  }
+
+  .tray,
+  .composer {
+    right: 0.72rem;
+    bottom: 3.85rem;
+    width: calc(100vw - 1.44rem);
+    max-height: min(76dvh, 680px);
+  }
+
+  .inspectActions {
+    grid-template-columns: 1fr;
+  }
+
+  .trayActions,
+  .composerActions {
+    justify-content: stretch;
+  }
+
+  .trayActions button,
+  .composerActions button {
+    flex: 1 1 120px;
+  }
+}

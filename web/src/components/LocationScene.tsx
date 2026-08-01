@@ -24,7 +24,7 @@ interface LocationSceneProps {
   onBack: () => void;
   onInspect: (agentKey: string) => void;
   onTalk: (agentKey: string) => void;
-  onOpenEvidence: () => void;
+  onOpenEvidence: (evidenceId: string) => void;
   rumorSubject: string;
   rumorText: string;
   deceptionResult: string | null;
@@ -90,7 +90,7 @@ export function LocationScene({
     if (!romanceOpen) returnButton.current?.focus();
   }, [romanceOpen]);
 
-  return <section className="location-scene" role={romanceOpen ? undefined : 'dialog'} aria-modal={romanceOpen ? undefined : 'true'} aria-label={`${location?.name ?? locationKey} scene`}>
+  return <section className="location-scene" data-tweak-id={'location-scene-' + locationKey} role={romanceOpen ? undefined : 'dialog'} aria-modal={romanceOpen ? undefined : 'true'} aria-label={`${location?.name ?? locationKey} scene`}>
     {romanceOpen && activeRomance?.moment ? <RomanceScene
       arc={activeRomance}
       locationKey={locationKey}
@@ -116,7 +116,7 @@ export function LocationScene({
         <BookOpen size={24} aria-hidden="true" />
         <p>{notebookClaim?.text ?? 'The binding and damaged pages show visible interference.'} It points to tampering, not to who did it.</p>
         <p className="case-opening-lead"><b>Begin here:</b> Father Ansel found the body. Ask what he saw, then look for a record that can be compared with these pages.</p>
-        <button onClick={onOpenEvidence}>Inspect the notebook</button>
+        <button data-tweak-id="inspect-notebook" onClick={() => onOpenEvidence(notebookEvidence.evidenceId)}>Inspect the notebook</button>
       </article>}
       <div className="encounter-heading">
         <span><Users size={14} aria-hidden="true" /> Present now</span>
@@ -214,7 +214,7 @@ function RumorComposer({
       {game.playerRumors.filter((rumor) => rumor.status === 'active' && rumor.subjectKey !== listener.agentKey).map((rumor) =>
         <button type="button" disabled={busy} key={rumor.claimKey} onClick={() => onRepeat(rumor)}>{rumor.text}</button>)}
     </div>}
-    <form onSubmit={(event) => { event.preventDefault(); onPlant(); }}>
+    <form data-tweak-id="rumor-composer-form" onSubmit={(event) => { event.preventDefault(); onPlant(); }}>
       <label>About whom?<select value={subject} onChange={(event) => onSubjectChange(event.target.value)}><option value="">Choose a person</option>{subjects.map((agent) => <option key={agent.agentKey} value={agent.agentKey}>{agent.name}</option>)}</select></label>
       <textarea maxLength={240} value={text} onChange={(event) => onTextChange(event.target.value)} placeholder="I saw… / Someone has been…" />
       <button disabled={busy || !subject || !text.trim()}>{busy ? 'Planting…' : 'Plant'}</button>

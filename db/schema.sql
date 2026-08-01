@@ -224,6 +224,9 @@ CREATE TABLE IF NOT EXISTS worlds (
   -- Together with the scenario version and the ordered command log, this seed
   -- fully determines a stub run.
   seed                INT8 NOT NULL,
+  -- Player-owned label for distinguishing otherwise identical seeded histories.
+  -- It is presentation metadata and never affects simulation determinism.
+  display_name        STRING NULL,
   -- Immutable, server-allowlisted inference routing. The selected provider may
   -- shape language and planning, but never owns rules or world state.
   inference_profile   STRING NOT NULL DEFAULT 'stub',
@@ -271,6 +274,8 @@ ALTER TABLE worlds
   ADD COLUMN IF NOT EXISTS time_debt_ticks INT8 NOT NULL DEFAULT 0;
 ALTER TABLE worlds DROP CONSTRAINT IF EXISTS check_time_debt_ticks;
 ALTER TABLE worlds ADD CONSTRAINT check_time_debt_ticks CHECK (time_debt_ticks >= 0);
+
+ALTER TABLE worlds ADD COLUMN IF NOT EXISTS display_name STRING NULL;
 
 -- A completed world may lead to exactly one successor. Keeping this link in
 -- the database makes "start another world" naturally idempotent: retries and

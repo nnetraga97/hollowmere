@@ -108,7 +108,7 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
     setInferenceProfile(saved.inferenceProfile);
   }
 
-  return <main className="entry-screen">
+  return <main className="entry-screen" data-tweak-id="landing-screen">
     <div className="entry-atmosphere" aria-hidden="true" />
     <section className="entry-briefing">
       <p className="eyebrow">A private town simulation</p>
@@ -123,7 +123,7 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
       </dl>
     </section>
 
-    <form className="entry-card" onSubmit={submit}>
+    <form className="entry-card" data-tweak-id="player-entry-form" onSubmit={submit}>
       <header><span className="entry-step">Player record · 01</span><h2>Who enters the town?</h2><p>Your identity becomes part of this private simulation.</p></header>
 
       <label className="entry-field">
@@ -133,7 +133,7 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
 
       <label className="entry-field">
         <span>Your background</span>
-        <textarea value={background} onChange={(event) => setBackground(event.target.value)} maxLength={360} rows={4} placeholder="A merchant who arrived three days before the accusations began…" />
+        <textarea value={background} onChange={(event) => setBackground(event.target.value)} maxLength={360} rows={4} placeholder="e.g., An investigator who arrived three days before the accusations began…" />
         <small>{background.length}/360</small>
       </label>
 

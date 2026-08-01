@@ -10,8 +10,8 @@ import type {
   RomanceChoiceResult, SocialGraph,
 } from '@/lib/contracts';
 import {
-  ApiError, chooseRomance, closeConversation, control, listWorlds, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, manufactureEvidence, movePlayer,
-  plantRumor, startConversation, startSession, streamConversationTurn, type PlayerEntry, type WorldChoice,
+  ApiError, chooseRomance, closeConversation, control, deleteWorld, listWorlds, loadAgent, loadChronicle, loadGame, loadGameSync, loadGraph, loadTruth, manufactureEvidence, movePlayer,
+  plantRumor, renameWorld, startConversation, startSession, streamConversationTurn, type PlayerEntry, type WorldChoice,
 } from '@/lib/clientApi';
 import { PhaserGame } from './PhaserGame';
 import { LocationScene } from './LocationScene';
@@ -30,6 +30,40 @@ const STAGE_THRESHOLDS = [
   { name: 'first blood', value: 7_800 },
   { name: 'war', value: 9_400 },
 ] as const;
+
+function evidenceMeaning(item: GameSnapshot['evidence'][number]): string {
+  if (item.manufactured) return 'This is a player-made record. It may persuade people, but it cannot prove the case.';
+  switch (item.role) {
+    case 'tamper_sign':
+      return 'The damaged notebook makes tampering a live lead. It points to interference, not to the person responsible.';
+    case 'tamper_comparator':
+      return 'This gives you something to compare with the notebook. A mismatch can strengthen the case for tampering.';
+    case 'culprit_access':
+      return 'This ties a person to relevant access. It is a lead, not proof by itself.';
+    case 'murder_opportunity':
+      return 'This places a person near a crucial moment. It narrows the investigation but does not settle guilt.';
+    case 'escalation_provenance':
+      return 'This records how the accusation escalated, so you can separate a claim’s spread from its truth.';
+    default:
+      return 'Keep this alongside other evidence before deciding what the town should believe.';
+  }
+}
+
+function EvidenceCard({
+  item, claim, focused,
+}: {
+  item: GameSnapshot['evidence'][number];
+  claim: GameSnapshot['claims'][number] | undefined;
+  focused: boolean;
+}) {
+  return <div className={`evidence-card${focused ? ' focused' : ''}`} data-tweak-id={`evidence-${item.evidenceId}`}>
+    <b>{item.manufactured ? 'manufactured record' : item.role?.replaceAll('_', ' ') ?? item.kind}</b>
+    <span>{item.role ? `${item.kind} · ` : ''}found t{item.foundTick}</span>
+    {claim && <p>{claim.text}</p>}
+    {!claim && <p>{item.accusedKey ?? 'no named suspect'}{item.claimKey ? ` · ${item.claimKey}` : ''}{item.manufactured ? ` · ${Math.round(item.credibility / 100)}% convincing` : ''}</p>}
+    {focused && <><p className="evidence-meaning"><b>What this changes:</b> {evidenceMeaning(item)}</p><p className="evidence-impact">Added to your case at tick {item.foundTick}. Use it in conversation or compare it with another record before treating it as a conclusion.</p></>}
+  </div>;
+}
 
 export function DebugClient({
   availableInferenceProfiles,
@@ -55,6 +89,7 @@ export function DebugClient({
   const [entering, setEntering] = useState(false);
   const [playerEntry, setPlayerEntry] = useState<PlayerEntry | null>(null);
   const [worlds, setWorlds] = useState<WorldChoice[]>([]);
+  const [evidenceFocusId, setEvidenceFocusId] = useState<string | null>(null);
   const [controlling, setControlling] = useState(false);
   const [sceneLocationKey, setSceneLocationKey] = useState<string | null>(null);
   const [journey, setJourney] = useState<{ from: string; to: string } | null>(null);
@@ -185,6 +220,36 @@ export function DebugClient({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setWorlds(await listWorlds().catch(() => worlds));
+    } finally {
+      setEntering(false);
+    }
+  }
+
+  async function renameSelectedWorld(worldId: string, displayName: string) {
+    setEntering(true);
+    setError(null);
+    try {
+      const saved = await renameWorld(worldId, displayName);
+      setWorlds((current) => current.map((world) => world.worldId === worldId
+        ? { ...world, displayName: saved }
+        : world));
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    } finally {
+      setEntering(false);
+    }
+  }
+
+  async function deleteSelectedWorld(worldId: string) {
+    setEntering(true);
+    setError(null);
+    try {
+      await deleteWorld(worldId);
+      setWorlds((current) => current.filter((world) => world.worldId !== worldId));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setEntering(false);
     }
@@ -594,6 +659,8 @@ export function DebugClient({
         error={error}
         onOpen={(worldId) => openWorld({ worldId })}
         onCreate={() => openWorld({ newWorld: true })}
+        onRename={renameSelectedWorld}
+        onDelete={deleteSelectedWorld}
         onBack={() => {
           setPlayerEntry(null);
           setWorlds([]);
@@ -622,7 +689,7 @@ export function DebugClient({
   const pendingDestination = game.player.pendingMove
     ? bootstrap.map.locations.find((location) => location.key === game.player.pendingMove?.locationKey)
     : null;
-  return <main className="app-shell">
+  return <main className="app-shell" data-tweak-id="town-app-shell">
     <PhaserGame key={bootstrap.session.worldId} bootstrap={bootstrap} game={game} />
     {sceneLocationKey === game.player.locationKey && <LocationScene
       key={`${sceneLocationKey}-${game.world.worldId}`}
@@ -642,7 +709,7 @@ export function DebugClient({
       }}
       onInspect={inspectAgent}
       onTalk={(agentKey) => void beginConversation(agentKey)}
-      onOpenEvidence={() => { setSceneLocationKey(null); setPanel('evidence'); }}
+      onOpenEvidence={(evidenceId) => { setSceneLocationKey(null); setEvidenceFocusId(evidenceId); setPanel('evidence'); }}
       rumorSubject={rumorSubject}
       rumorText={rumorText}
       deceptionResult={deceptionResult}
@@ -659,7 +726,7 @@ export function DebugClient({
       <div className="journey-rule" aria-hidden="true"><i /></div>
     </section>}
 
-    <header className="hud">
+    <header className="hud" data-tweak-id="town-hud">
       <div className="brand"><strong>Hollowmere</strong><span>Town instrument · {game.player.name}</span></div>
       <dl className="instrument-strip">
         <div className="instrument"><dt>tick</dt><dd>{game.world.currentTick}</dd></div>
@@ -681,7 +748,7 @@ export function DebugClient({
           {game.world.status === 'paused' ? <Play size={15} aria-hidden="true" /> : <Pause size={15} aria-hidden="true" />}
           <span>{game.world.status === 'paused' ? 'Resume' : 'Pause'}</span>
         </button>
-        <details className="world-menu">
+        <details className="world-menu" data-tweak-id="world-menu">
           <summary aria-label="World menu"><Square size={13} aria-hidden="true" /><span>World</span><ChevronDown size={13} aria-hidden="true" /></summary>
           <div role="menu">
             <button role="menuitem" disabled={controlling} onClick={() => void quitWorld()}><span><LogOut size={13} aria-hidden="true" />Quit world</span><small>Pauses the simulation and leaves</small></button>
@@ -691,7 +758,7 @@ export function DebugClient({
       </div>
     </header>
 
-    <nav className="toolrail" aria-label="Debug instruments">
+    <nav className="toolrail" data-tweak-id="town-toolrail" aria-label="Debug instruments">
       {([
         ['overview', 'Overview', Map], ['chronicle', 'Chronicle', BookOpen], ['graph', 'Graph', Network],
         ['evidence', 'Evidence', FileSearch], ['hearings', 'Summons', Scale],
@@ -717,7 +784,7 @@ export function DebugClient({
 
     {panel === 'chronicle' && <Panel title="Chronicle" onClose={() => setPanel(null)}>{chronicle.map((entry) => <article className={`chronicle kind-${entry.kind}`} key={`${entry.tick}-${entry.seq}`}><time>t{entry.tick}</time><div><b>{entry.kind}</b><p>{entry.description}</p><small>{entry.actorKey ?? 'world'} · {entry.locationKey ?? 'town-wide'}</small></div></article>)}</Panel>}
     {panel === 'graph' && <Panel title="Social graph" onClose={() => setPanel(null)} wide>{graph ? <SocialGraphView graph={graph} /> : <p className="empty">Loading relationships…</p>}</Panel>}
-    {panel === 'evidence' && <Panel title="Evidence ledger" onClose={() => setPanel(null)} wide>
+    {panel === 'evidence' && <Panel title="Evidence ledger" onClose={() => { setEvidenceFocusId(null); setPanel(null); }} wide>
       {!game.capabilities.evidence && <p className="notice">The instigator engine tables are not installed in this worktree yet. This panel will activate after integration.</p>}
       <div className="evidence-counts">{[
         { label: 'case roles', count: new Set(game.evidence.flatMap((item) => item.role ? [item.role] : [])).size },
@@ -725,7 +792,7 @@ export function DebugClient({
         { label: 'records', count: game.evidence.filter((item) => item.kind === 'record' && !item.manufactured).length },
         { label: 'manufactured', count: game.evidence.filter((item) => item.manufactured).length },
       ].map((item) => <div key={item.label}><strong>{item.count}</strong><span>{item.label}</span></div>)}</div>
-      {game.evidence.map((item) => <div className="evidence-card" key={item.evidenceId}><b>{item.manufactured ? 'manufactured record' : item.role?.replaceAll('_', ' ') ?? item.kind}</b><span>{item.role ? `${item.kind} · ` : ''}found t{item.foundTick}</span><p>{item.accusedKey ?? 'no named suspect'}{item.claimKey ? ` · ${item.claimKey}` : ''}{item.manufactured ? ` · ${Math.round(item.credibility / 100)}% convincing` : ''}</p></div>)}
+      {game.evidence.map((item) => <EvidenceCard key={item.evidenceId} item={item} claim={game.claims.find((claim) => claim.claimKey === item.claimKey)} focused={evidenceFocusId === item.evidenceId} />)}
       <p className="evidence-rumor-note">Plant and repeat stories from a person’s location card. Only the listener needs to be present.</p>
       {deceptionResult && <p className="notice">{deceptionResult}</p>}
       {game.playerRumors.length > 0 && <section className="player-rumors"><h3>Your stories</h3>{game.playerRumors.map((rumor) => <article key={rumor.claimKey} className={rumor.status === 'discredited' ? 'discredited' : ''}>
@@ -800,6 +867,6 @@ export function DebugClient({
         <span><Heart size={15} fill="currentColor" aria-hidden="true" /> {arc.routeTitle} · {arc.status}</span>
         <p>{arc.epilogue}</p>
       </article>)}
-      <button disabled={controlling} onClick={() => void applyControl({ action: 'start' })}>{controlling ? 'Starting…' : 'Start another world'}</button></div>}
+      <button disabled={controlling} onClick={() => void quitWorld()}>{controlling ? 'Opening archive…' : 'Start another world'}</button></div>}
   </main>;
 }

@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
+import { DesignTweaksOverlay } from '@/components/DesignTweaksOverlay';
+
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -9,5 +11,7 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  return <html lang="en"><head><link rel="preload" as="image" href="/assets/hollowmere/location-atlas-v1.jpg" type="image/jpeg" /></head><body>{children}</body></html>;
+  const showLocalDesignTweaks = process.env.NODE_ENV === 'development';
+
+  return <html lang="en"><head><link rel="preload" as="image" href="/assets/hollowmere/location-atlas-v1.jpg" type="image/jpeg" /></head><body>{children}{showLocalDesignTweaks && <DesignTweaksOverlay />}</body></html>;
 }

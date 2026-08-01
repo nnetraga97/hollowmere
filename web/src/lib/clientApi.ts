@@ -35,8 +35,26 @@ export interface WorldChoice {
   day: number;
   stage: string;
   seed: number;
+  displayName: string | null;
   inferenceProfile: 'stub' | 'azure_sol' | 'azure_terra' | 'bedrock_sonnet';
   createdAt: string;
+}
+
+export async function renameWorld(worldId: string, displayName: string): Promise<string | null> {
+  const result = await decode<{ displayName: string | null }>(await fetch('/api/session', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ worldId, displayName }),
+  }));
+  return result.displayName;
+}
+
+export async function deleteWorld(worldId: string): Promise<void> {
+  await decode<{ deletedWorldId: string }>(await fetch('/api/session', {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ worldId }),
+  }));
 }
 
 export async function listWorlds(): Promise<WorldChoice[]> {

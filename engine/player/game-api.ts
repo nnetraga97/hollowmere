@@ -208,6 +208,35 @@ export async function setPlayerProfile(
   if (!rows[0]) throw new SessionAccessError();
 }
 
+/** Rename a world without changing any replayable simulation state. */
+export async function renameSessionWorld(ref: SessionRef, displayName: string | null): Promise<string | null> {
+  const rows = await query<{ display_name: string | null }>(
+    `UPDATE worlds w
+        SET display_name = $3
+       FROM world_players p
+      WHERE w.world_id = $1 AND p.world_id = w.world_id AND p.session_id = $2
+      RETURNING w.display_name`,
+    [ref.worldId, ref.sessionId, displayName],
+  );
+  if (!rows[0]) throw new SessionAccessError();
+  return rows[0].display_name;
+}
+
+/** Permanently remove one world and all of its world-scoped records. */
+export async function deleteSessionWorld(ref: SessionRef): Promise<void> {
+  const rows = await query<{ world_id: string }>(
+    `DELETE FROM worlds w
+      WHERE w.world_id = $1
+        AND EXISTS (
+          SELECT 1 FROM world_players p
+           WHERE p.world_id = w.world_id AND p.session_id = $2
+        )
+      RETURNING w.world_id`,
+    [ref.worldId, ref.sessionId],
+  );
+  if (!rows[0]) throw new SessionAccessError();
+}
+
 /**
  * Adopt the player's selected live provider for worlds created before provider
  * selection existed. Live-provider worlds remain immutable after creation.
