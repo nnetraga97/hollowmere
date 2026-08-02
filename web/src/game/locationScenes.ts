@@ -127,6 +127,10 @@ export function resolveEncounterSelection(
 }
 
 export function portraitPath(agent: Pick<AgentView, 'agentKey' | 'factionKey'>): string {
+  if (CHARACTER_PORTRAIT_KEYS.has(agent.agentKey)) {
+    return `/assets/hollowmere/portraits/characters/${agent.agentKey}.jpg`;
+  }
+
   const female = FEMALE_AGENT_KEYS.has(agent.agentKey);
   if (agent.factionKey === 'aldreth') return `/assets/hollowmere/portraits/aldreth_${female ? 'female' : 'male'}.jpg`;
   if (agent.factionKey === 'corvane') return `/assets/hollowmere/portraits/corvane_${female ? 'female' : 'male'}.jpg`;
@@ -145,4 +149,13 @@ function stableHash(value: string): number {
 const FEMALE_AGENT_KEYS = new Set([
   'maren_aldreth', 'sella_dorn', 'oriel_faskin', 'annet_pike', 'mabel_thorn', 'tamsin_vye',
   'edda_lyle', 'veranne_thule', 'hester_lowe', 'widow_sable', 'morna_dell', 'jenna_ryle',
+]);
+
+const CHARACTER_PORTRAIT_KEYS = new Set([
+  'edryc_aldreth', 'maren_aldreth', 'tobias_reeve', 'sella_dorn', 'ned_quilley',
+  'oriel_faskin', 'wyn_thatcher', 'caleb_mord', 'annet_pike', 'rusk_baelen', 'fen_marrow',
+  'alric_corvane', 'rowan_corvane', 'mabel_thorn', 'osric_gale', 'tamsin_vye',
+  'cuthbert_ash', 'edda_lyle', 'silas_wren', 'bertram_croy', 'hollis_barrow', 'clem_ottery',
+  'veranne_thule', 'father_ansel', 'ambrose_kyte', 'hester_lowe', 'widow_sable',
+  'coran_pell', 'morna_dell', 'jenna_ryle',
 ]);

@@ -63,8 +63,9 @@ describe('location scene presentation helpers', () => {
   });
 
   test('selects faction and presentation variants for portraits', () => {
-    assert.equal(portraitPath({ agentKey: 'maren_aldreth', factionKey: 'aldreth' }), '/assets/hollowmere/portraits/aldreth_female.jpg');
-    assert.equal(portraitPath({ agentKey: 'rowan_corvane', factionKey: 'corvane' }), '/assets/hollowmere/portraits/corvane_male.jpg');
-    assert.equal(portraitPath({ agentKey: 'morna_dell', factionKey: 'unaligned' }), '/assets/hollowmere/portraits/independent_woman.jpg');
+    assert.equal(portraitPath({ agentKey: 'maren_aldreth', factionKey: 'aldreth' }), '/assets/hollowmere/portraits/characters/maren_aldreth.jpg');
+    assert.equal(portraitPath({ agentKey: 'rowan_corvane', factionKey: 'corvane' }), '/assets/hollowmere/portraits/characters/rowan_corvane.jpg');
+    assert.equal(portraitPath({ agentKey: 'morna_dell', factionKey: 'unaligned' }), '/assets/hollowmere/portraits/characters/morna_dell.jpg');
+    assert.equal(portraitPath({ agentKey: 'future_aldreth', factionKey: 'aldreth' }), '/assets/hollowmere/portraits/aldreth_male.jpg');
   });
 });
