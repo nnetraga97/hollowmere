@@ -46,8 +46,8 @@ Container Apps against CockroachDB Cloud, with Azure-hosted inference. GitHub
 Actions validates, builds, deploys, waits for both revisions, and smoke-tests
 the public endpoint.
 
-Next: implement the Instigator design and add CockroachDB Managed MCP as a
-read-only investigation surface.
+Next: implement the Instigator design. CockroachDB Managed MCP remains optional
+local, read-only developer tooling and is not part of the AWS deployment path.
 
 ### The town, left alone
 

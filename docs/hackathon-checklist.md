@@ -26,7 +26,6 @@ Baseline
   -> AWS container and CDK implementation
   -> CockroachDB role and migration verification
   -> AWS deployment
-  -> Managed MCP proof
   -> Release evidence
   -> Video and Devpost submission
 ```
@@ -534,11 +533,15 @@ Evidence:
 - Bedrock-mode log evidence without prompts or credentials.
 - Pass/fail record for every attempt, including failures before the final streak.
 
-## Phase 6: Prove Managed MCP usage
+## Optional developer tooling: Managed MCP investigation
 
-### H-601 — Configure the Town Archivist
+This workflow is local development tooling, not an AWS deployment or release
+gate. It can be used after the application is deployed, but it is never a
+dependency of the web or scheduler services.
 
-Dependencies: H-103, H-205, H-503
+### H-601 — Configure the Town Archivist locally
+
+Dependencies: H-103, H-205
 
 - [ ] Use the official HTTPS endpoint and the exact demo cluster ID.
 - [ ] Authenticate through OAuth.
@@ -558,7 +561,7 @@ Evidence:
 
 ### H-602 — Run and verify the canonical Archivist prompt
 
-Dependencies: H-601, H-505
+Dependencies: H-601
 
 - [ ] Use the world, agent, and claim from the public demo.
 - [ ] Ask for originating turn, memory, retrieval/access, later outcome, and
@@ -579,7 +582,7 @@ Evidence:
 
 ### H-701 — Run the complete release gate
 
-Dependencies: H-505, H-602, H-703
+Dependencies: H-505, H-703
 
 - [ ] Run `npm run check` from a clean dependency install.
 - [ ] Run CDK checks, tests, synth, and drift inspection.

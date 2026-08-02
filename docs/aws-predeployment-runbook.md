@@ -146,7 +146,8 @@ After bootstrap approval, the release order is:
 - Redacted health/readiness output, service events, alarm state, and the log
   slices used in release verification; never retain prompts or credentials.
 - Canonical world, turn, claim, memory, access, and consequence identifiers;
-  the Town Archivist response; and the final demo video.
+  and the final demo video. A Town Archivist response is optional local
+  developer evidence, not deployment evidence.
 - A logical CockroachDB export or other approved backup if the demonstrated
   world must survive teardown.
 - The selected deployed image digests or an explicit decision that the public

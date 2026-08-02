@@ -266,7 +266,8 @@ The town is the visualization; the substrate is the product.
 | Dev database | Local **3-node Docker** CockroachDB cluster |
 | Prod database | **CockroachDB Cloud** |
 | Hosting | **AWS ECS/Fargate** — web service + scheduler service |
-| CRDB tools (first-class) | **Distributed Vector Indexing**, **Managed MCP Server** (powers the read-only *Town Investigator*) |
+| CRDB tools (first-class) | **Distributed Vector Indexing** |
+| Developer tooling | CockroachDB Cloud Managed MCP for optional, local read-only investigation; it is not deployed with the application |
 | CRDB tool (third) | **`ccloud`** — repeatable provisioning + operational diagnostics |
 | Cadence | Rules tick **5 s** = 15 in-world min (96 ticks/day) · cognition every **30 s**, ≤2 NPCs (burst ≤6) · conversations immediate |
 | Canonical arc | Unattended run reaches `war` in **192–288 ticks**; hard ceiling **360 ticks** (30 min at 1×) |
@@ -311,8 +312,6 @@ Engine package (imported by both services)
    ┌────────────────────────┴────────────────────────┐
    ▼                                                 ▼
 CockroachDB Cloud                            Bedrock (Haiku + Titan)
-   ▲
-   └── Managed MCP Server → Town Investigator (read-only role)
 ```
 
 **Two services, one database.** Player writes and scheduler writes genuinely contend on shared per-world rows — that contention *is* the serializable-isolation demonstration, not a staged one.
@@ -561,7 +560,11 @@ and charges 1–3 immediate ticks. NPC↔NPC dialogue is a two-sided exchange, a
 evidence/hearing effects still pass through the engine's allowlisted rules.
 
 ### Phase 3 — Cloud + AWS
-`ccloud` provisioning · migrate to CockroachDB Cloud · **Managed MCP + Town Investigator** (read-only role) · ECS/Fargate web + scheduler · optional S3 chronicle exports.
+`ccloud` provisioning · migrate to CockroachDB Cloud · ECS/Fargate web + scheduler · optional S3 chronicle exports.
+
+The CockroachDB Managed MCP connection remains optional local developer tooling.
+It is configured outside AWS, has no Fargate dependency, and never blocks an
+application deployment.
 
 ### Phase 4 — Submission
 Node-kill resilience rehearsal · `AS OF SYSTEM TIME` commit-timestamp demo · observability dashboard · README (feature map, tool citations, attribution) · record and edit the 3-min video from a full 30-min run.
