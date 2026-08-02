@@ -3,6 +3,7 @@ import type {
   RomanceChoiceResult,
   SocialGraph, TensionPoint,
 } from './contracts';
+import type { PlayerPortraitKey } from '@/game/playerPortraits';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -22,6 +23,7 @@ async function decode<T>(response: Response): Promise<T> {
 export interface PlayerEntry {
   playerName?: string;
   background?: string;
+  portraitKey?: PlayerPortraitKey;
   sympathyFactionKey?: 'aldreth' | 'corvane' | 'unaligned' | null;
   inferenceProfile?: 'azure_sol' | 'azure_terra';
   seed?: number;

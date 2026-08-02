@@ -5,6 +5,7 @@ import { Anchor, ArrowRight, BookOpen, ChevronDown, CircleDashed, FileSearch, He
 
 import { EventBus } from '@/game/EventBus';
 import { atlasPosition, portraitPath, relationshipLevel } from '@/game/locationScenes';
+import { playerPortraitPath } from '@/game/playerPortraits';
 import type {
   AgentDetail, Bootstrap, ChronicleEntry, Conversation, DebugTruth, GameSnapshot, PlayerRumor,
   RomanceChoiceResult, SocialGraph,
@@ -811,7 +812,7 @@ export function DebugClient({
     </Panel>}
     {panel === 'profile' && <Panel title="Player record" onClose={() => setPanel(null)}>
       <section className="player-record">
-        <div className="player-monogram" aria-hidden="true">{game.player.name.charAt(0).toUpperCase()}</div>
+        <img className="player-record-portrait" src={playerPortraitPath(playerEntry?.portraitKey)} alt={`Portrait of ${game.player.name}`} />
         <div><p className="eyebrow">The outsider</p><h3>{game.player.name}</h3><p>{currentLocation}</p></div>
       </section>
       <section className="profile-section"><h3>Background</h3><p>{game.player.background || 'No history was offered at the gate.'}</p></section>

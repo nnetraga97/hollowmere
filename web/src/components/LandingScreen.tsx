@@ -6,6 +6,9 @@ import {
 } from 'lucide-react';
 
 import type { PlayerEntry } from '@/lib/clientApi';
+import {
+  DEFAULT_PLAYER_PORTRAIT_KEY, isPlayerPortraitKey, PLAYER_PORTRAITS, type PlayerPortraitKey,
+} from '@/game/playerPortraits';
 
 const PROFILE_KEY = 'hollowmere-player-profile-v1';
 
@@ -15,6 +18,7 @@ type InferenceProfile = NonNullable<PlayerEntry['inferenceProfile']>;
 interface SavedProfile {
   playerName: string;
   background: string;
+  portraitKey: PlayerPortraitKey;
   sympathyFactionKey: Sympathy | null;
   inferenceProfile: InferenceProfile | null;
 }
@@ -53,6 +57,7 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
 }) {
   const [name, setName] = useState('');
   const [background, setBackground] = useState('');
+  const [portraitKey, setPortraitKey] = useState<PlayerPortraitKey>(DEFAULT_PLAYER_PORTRAIT_KEY);
   const [sympathy, setSympathy] = useState<Sympathy | null>(null);
   const [inferenceProfile, setInferenceProfile] = useState<InferenceProfile | null>(
     defaultInferenceProfile(availableInferenceProfiles),
@@ -68,6 +73,8 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
       const restored: SavedProfile = {
         playerName: profile.playerName.slice(0, 60),
         background: typeof profile.background === 'string' ? profile.background.slice(0, 360) : '',
+        portraitKey: isPlayerPortraitKey(profile.portraitKey)
+          ? profile.portraitKey : DEFAULT_PLAYER_PORTRAIT_KEY,
         sympathyFactionKey: FACTIONS.some(({ key }) => key === profile.sympathyFactionKey)
           ? profile.sympathyFactionKey as Sympathy : null,
         inferenceProfile: (profile.inferenceProfile === 'azure_sol'
@@ -79,6 +86,7 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
       setSaved(restored);
       setName(restored.playerName);
       setBackground(restored.background);
+      setPortraitKey(restored.portraitKey);
       setSympathy(restored.sympathyFactionKey);
       setInferenceProfile(restored.inferenceProfile);
     } catch {
@@ -92,6 +100,7 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
     const profile: SavedProfile = {
       playerName: name.trim().slice(0, 60),
       background: background.trim().slice(0, 360),
+      portraitKey,
       sympathyFactionKey: sympathy,
       inferenceProfile,
     };
@@ -104,6 +113,7 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
     if (!saved) return;
     setName(saved.playerName);
     setBackground(saved.background);
+    setPortraitKey(saved.portraitKey);
     setSympathy(saved.sympathyFactionKey);
     setInferenceProfile(saved.inferenceProfile);
   }
@@ -125,6 +135,22 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
 
     <form className="entry-card" data-tweak-id="player-entry-form" onSubmit={submit}>
       <header><span className="entry-step">Player record · 01</span><h2>Who enters the town?</h2><p>Your identity becomes part of this private simulation.</p></header>
+
+      <fieldset className="portrait-field">
+        <legend>Choose your likeness</legend>
+        <div className="portrait-grid">
+          {PLAYER_PORTRAITS.map((portrait) => <button
+            key={portrait.key}
+            type="button"
+            className="portrait-card"
+            aria-label={`Choose ${portrait.name.toLowerCase()} portrait`}
+            aria-pressed={portraitKey === portrait.key}
+            onClick={() => setPortraitKey(portrait.key)}
+          >
+            <img src={portrait.path} alt="" />
+          </button>)}
+        </div>
+      </fieldset>
 
       <label className="entry-field">
         <span>Your name</span>
@@ -148,18 +174,20 @@ export function LandingScreen({ onEnter, busy, error, availableInferenceProfiles
         </div>
       </fieldset>
 
-      <fieldset className="inference-field">
-        <legend>How Hollowmere thinks</legend>
-        <p className="inference-intro">Choose the Azure Foundry model that will voice and plan for your private town.</p>
-        <label className="inference-select">
-          <Gauge size={22} strokeWidth={1.45} aria-hidden="true" />
-          <span><strong>Azure Foundry</strong><small>{inferenceProfile ? AZURE_MODELS[inferenceProfile].description : 'Choose a model.'}</small></span>
-          <select value={inferenceProfile ?? ''} onChange={(event) => setInferenceProfile(event.target.value as InferenceProfile)} required>
-            {availableInferenceProfiles.map((profile) => <option key={profile} value={profile}>{AZURE_MODELS[profile].name}</option>)}
-          </select>
-        </label>
-        <p className="inference-rule">Your choice changes the voice and responsiveness of the town—not its rules. Evidence, memories, belief updates, and outcomes remain grounded and replayable in CockroachDB.</p>
-      </fieldset>
+      <details className="inference-field" data-tweak-id="inference-settings">
+        <summary>How Hollowmere thinks</summary>
+        <div className="inference-content">
+          <p className="inference-intro">Choose the Azure Foundry model that will voice and plan for your private town.</p>
+          <label className="inference-select">
+            <Gauge size={22} strokeWidth={1.45} aria-hidden="true" />
+            <span><strong>Azure Foundry</strong><small>{inferenceProfile ? AZURE_MODELS[inferenceProfile].description : 'Choose a model.'}</small></span>
+            <select value={inferenceProfile ?? ''} onChange={(event) => setInferenceProfile(event.target.value as InferenceProfile)} required>
+              {availableInferenceProfiles.map((profile) => <option key={profile} value={profile}>{AZURE_MODELS[profile].name}</option>)}
+            </select>
+          </label>
+          <p className="inference-rule">Your choice changes the voice and responsiveness of the town—not its rules. Evidence, memories, belief updates, and outcomes remain grounded and replayable in CockroachDB.</p>
+        </div>
+      </details>
 
       {error && <p className="entry-error" role="alert">{error}</p>}
 
