@@ -1,230 +1,301 @@
 # Hollowmere
 
-**A visual stress test for persistent multi-agent memory, misinformation propagation, and transactional consistency — presented as a playable town.**
+**A playable investigation into agentic memory: what happens when an AI town can
+remember a conversation, retrieve it later, and let it change the future?**
 
-Built for the [CockroachDB AI hackathon](https://cockroachdb-ai.devpost.com/).
+[Play the current public demo](https://hollowmere-web.victorioussand-d8121435.eastus.azurecontainerapps.io/) · [Read the hackathon requirements](https://cockroachdb-ai.devpost.com/) · [Architecture diagram](hollowmere-architecture.excalidraw)
 
-[![Validate and deploy production](https://github.com/nnetraga97/hollowmere/actions/workflows/deploy-production.yml/badge.svg)](https://github.com/nnetraga97/hollowmere/actions/workflows/deploy-production.yml)
-[Play the production build](https://hollowmere-web.victorioussand-d8121435.eastus.azurecontainerapps.io/)
+Hollowmere is being prepared for the **CockroachDB × AWS Hackathon — Build with
+Agentic Memory**. A prince dies on the chapel steps. Thirty autonomous
+townspeople form beliefs, repeat rumors, choose sides, and can drive the town
+to war. The player enters as an outsider, speaks to the town, introduces or
+challenges evidence, and tries to change that outcome.
 
-A prince is found dead at the chapel steps. Two royal houses, each anchored in a
-rival trade guild, begin accusing one another. Thirty AI townspeople hear things,
-believe them to varying degrees, repeat them in their own words, and take sides.
-Left alone, the town destroys itself. You are an outsider who can talk to anyone.
+The game is the interface. The project is a concrete test of durable agent
+memory: a memory is stored in CockroachDB, retrieved later through vector and
+rule-based recall, recorded as evidence for an agent's action, and visible to
+the player as a changed belief, response, relationship, or chronicle event.
 
-The town is the visualization. The substrate is the point.
+## Why this matters
 
-## What this is actually testing
+An agent that merely stores chat history is not necessarily using memory. In a
+multi-agent system, useful memory must be durable, attributable, retrievable,
+safe under concurrent writes, and inspectable after it changes an outcome.
 
-| Concern | How it shows up here |
-|---|---|
-| **Persistent multi-agent memory** | 30 agents × isolated worlds × vector retrieval over an append-only memory stream |
-| **Misinformation propagation** | Ground truth is stored separately from belief, so a claim the engine *knows* is false can still take hold of the town — and be measured |
-| **Transactional consistency** | Player writes and scheduler writes contend on the same rows under `SERIALIZABLE`, in two separate processes |
-| **Intervention analysis** | Belief is reconstructible by simulation tick, so "did that conversation change the trajectory" is answerable |
+Hollowmere makes that chain visible:
 
-## Status
-
-**The engine, playable web client, and cloud deployment are live.**
-
-The current build includes the preflight gate; fixed-point and seeded-RNG
-conventions; a 54-table CockroachDB schema; immutable scenario publishing;
-stub, replay, Bedrock, and Azure inference modes; hybrid memory retrieval;
-gossip, belief, tension, escalation, peace, and trigger systems; the scheduler;
-durable player/NPC conversation; branching romance routes; a headless harness;
-an interactive REPL; and structured operational logging.
-
-The Next.js + Phaser client provides a playable town map, session-isolated APIs,
-durable multi-turn walk-up dialogue, location scenes, simulation controls,
-evidence and hearing gameplay, relationship and romance interactions, and
-diagnostic views. Conversation holds simulation time, remembers who heard it,
-changes the NPC's long-term impression of the player, and charges 1–3 ticks
-when it ends.
-
-Production runs the public web process and private scheduler as separate Azure
-Container Apps against CockroachDB Cloud, with Azure-hosted inference. GitHub
-Actions validates, builds, deploys, waits for both revisions, and smoke-tests
-the public endpoint.
-
-Next: implement the Instigator design. CockroachDB Managed MCP remains optional
-local, read-only developer tooling and is not part of the AWS deployment path.
-
-### The town, left alone
-
-Under the canonical seed, an unattended run reaches war at **tick 239** — inside
-the 192–288 window the plan fixes, passing through every stage in order:
-
+```text
+player conversation / world event
+        ↓
+durable, world-scoped memory in CockroachDB
+        ↓
+hybrid recall: ANN/vector + importance + recency + conversation anchor
+        ↓
+bounded agent cognition and dialogue
+        ↓
+belief, relationship, rumor, action, or town-level consequence
 ```
+
+The project deliberately keeps ground truth separate from what an agent
+believes. A claim the engine knows is false can still spread, gain credibility,
+and change behavior—exactly the failure mode a persistent-memory system needs
+to make observable.
+
+## What you can do
+
+- Start an isolated private world, choose a player identity and portrait, and
+  resume it after a browser refresh.
+- Walk the town map, meet illustrated characters, and hold durable multi-turn
+  conversations with them.
+- Inspect beliefs, relationships, evidence, hearings, romance routes, the
+  world chronicle, and simulation state.
+- Watch a town evolve on its own, or intervene before a false narrative turns
+  suspicion into accusations, trials, violence, and war.
+- Use the agent inspector's **Memory trace** to see bounded excerpts of the
+  memories available to an agent and how recalled memories entered the result
+  set: `ANN / vector`, `importance`, `recency`, or `pinned anchor`.
+
+Under the canonical deterministic seed, an unattended town reaches war at tick
+239, following this sequence:
+
+```text
 suspicion t36 · accusations t83 · trials t141 · first_blood t194 · war t239
 ```
 
-It gets there with **no model calls required** (the deterministic stub is a
-first-class runtime mode), and it ends with `millers_poison_grain` — a claim the
-engine *knows* is false — believed by a quarter of the town. That gap between
-`truth` and belief is the whole point, and it is a column in the dashboard.
+Early, sustained intervention with both house leaders can reach peace instead.
+The deterministic stub makes that scenario reproducible without requiring a
+model call.
 
-Talking to both House leaders, persistently and early, reaches peace instead.
-The same words after first blood do not: the streak never even starts.
+## The memory model
 
-## Quick start
+| Requirement | Hollowmere implementation |
+| --- | --- |
+| Durable memory | Conversations, events, beliefs, evidence, cognition outcomes, and retrieval accesses are persisted in CockroachDB. |
+| Semantic recall | Memories use `VECTOR(1024)` embeddings and a world-prefixed cosine vector index; retrieval also considers importance, recency, and a pinned conversation anchor. |
+| Causal provenance | A later turn records the recalled memory identifiers and every candidate path that supplied them, without exposing raw embeddings or hidden prompts. |
+| Transactional behavior | The browser-facing web process and independent scheduler write the same per-world state under `SERIALIZABLE` isolation. |
+| Isolation | Composite world-scoped keys and server-side session ownership prevent one world's data from being read as another's. |
+| Safe actions | Models choose only from engine-built allowlists; model output cannot name arbitrary database effects or identifiers. |
+| Reproducibility | Fixed-point rules, seeded randomness, append-only history, and replay tests make a world trajectory inspectable. |
 
-No cloud account is needed for local development. The engine defaults to a
-deterministic stub.
-
-```bash
-npm ci
-npm run db:up          # 3-node CockroachDB cluster in Docker
-cp .env.example .env
-npm run preflight      # verifies vector indexing, isolation, time travel
-npm run db:migrate -- --fresh
-npm run seed -- --seed 42
-npm run check          # engine + web typechecks, tests, and production web build
-```
-
-Then watch a town destroy itself:
-
-```bash
-npm run sim -- --ticks 360 --seed 42    # headless: tension curve, chronicle, belief
-npm run repl                            # interactive: tick, talk, belief, graph
-npm run scheduler                       # the service that advances worlds
-npm run web                             # playable Phaser instrument on :3000
-```
-
-`npm run preflight` is a gate, not a formality: it verifies that vector indexing,
-serializable isolation, and `AS OF SYSTEM TIME` behave as the engine assumes.
-Run it against every new CockroachDB Cloud cluster before deploying because
-Cloud defaults can differ from the local cluster.
+The engine distinguishes *retrieval* from merely finding a plausible answer.
+The canonical test requires the demonstrated memory to appear through the
+`ANN / vector` path; an importance, recency, or pinned-anchor match by itself
+does not count as vector-retrieval evidence.
 
 ## Architecture
 
+```text
+Browser
+  │
+  ▼
+Next.js + React + Phaser web client ──┐
+                                      ├── shared Hollowmere engine ── CockroachDB Cloud
+Lease-guarded scheduler ──────────────┘              │
+                                                     ├── durable world state
+                                                     ├── memories and cognition trail
+                                                     └── distributed vector index
+                                                            │
+                                                            ├── deterministic stub / replay
+                                                            ├── Azure-hosted inference (current public demo)
+                                                            └── Amazon Bedrock adapter (gated; see status)
 ```
-Browser ── Next.js ─┐
-                    ├── engine (shared) ── CockroachDB
-Scheduler ──────────┘                  └── inference provider
-                                            ├── deterministic stub / replay
-                                            ├── Azure OpenAI (production)
-                                            └── Amazon Bedrock
-```
 
-Two processes, one database. Player writes and scheduler writes genuinely
-contend on shared per-world rows — the serializable-isolation demonstration is
-the application working normally, not a staged one.
+There are two application processes and one source of truth. The scheduler
+acquires a database lease before advancing a world; player requests and ticks
+therefore contend on real shared rows rather than a demonstration-only mock.
 
-| Directory | Contents |
-|---|---|
-| `db/` | `schema.sql` — 54 tables, composite world-scoped keys, and read-only role SQL |
-| `scenario/` | Versioned immutable content + validating loader |
-| `engine/` | Rules, retrieval, gossip, beliefs, tension, triggers, cognition, `runTick`, `converse`, read models |
-| `scheduler/` | Lease-guarded non-overlapping loop + service entrypoint |
-| `harness/` | `sim.ts` headless runner, `repl.ts` interactive shell |
-| `web/` | Next.js + Phaser playable debug client, session APIs, and React instruments |
-| `scripts/` | Preflight, migrate, seed, provider checks, and local launchers |
-| `infra/` | Local 3-node CockroachDB cluster |
-| `.github/workflows/` | Pull-request validation and production deployment |
-| `docs/` | Design history, preflight findings, provider setup, and observability |
+| Area | Contents |
+| --- | --- |
+| `db/` | Schema, migrations, world-scoped constraints, runtime roles, and stable archivist read views. |
+| `scenario/` | Versioned town content, validation, instantiation, and publishing. |
+| `engine/` | Retrieval, beliefs, gossip, cognition, dialogue, evidence, escalation, replay, and fixed-point rules. |
+| `scheduler/` | Lease-guarded non-overlapping tick loop. |
+| `web/` | Next.js client, Phaser town map, session APIs, evidence and memory-trace views. |
+| `harness/` | Headless simulation runner and interactive REPL. |
+| `infra/` | Local three-node CockroachDB cluster and an AWS CDK deployment definition. |
+| `scripts/` | Preflight, migration, seeding, role provisioning, provider checks, and local launchers. |
+| `docs/` | Hackathon scope, Town Archivist guide, operational evidence, deployment runbooks, and design history. |
 
-Server processes emit structured JSON logs for inference, database retries,
-scheduler activity, API mutations, and failures. See
-[`docs/observability.md`](docs/observability.md) for event names and log levels.
+## Current status and hackathon readiness
 
-## Production deployment
+The local engine, web client, CockroachDB schema, vector retrieval path,
+memory-trace UI, and Azure-hosted public demo are implemented. The table below
+separates those verified facts from work that is designed or coded but not yet
+proven in the submitted environment.
 
-| Component | Production service |
-|---|---|
-| Web application | Public Azure Container App |
-| Scheduler | Private, continuously running Azure Container App |
-| Database | CockroachDB Cloud with `verify-full` TLS |
-| Inference | Azure-hosted reasoning and embedding deployments |
-| Container images | Azure Container Registry |
-| Runtime secrets | Azure Key Vault references through managed identity |
-| Continuous delivery | GitHub Actions authenticated to Azure with OIDC |
+| Hackathon requirement | Status | Evidence / limitation |
+| --- | --- | --- |
+| Persistent CockroachDB agent memory | Implemented | Durable world, conversation, cognition, belief, and event records drive live application behavior. |
+| CockroachDB Distributed Vector Indexing | Implemented and tested locally | `world_memories_embedding_idx`, retrieval-plan tests, and `npm run preflight` verify the required vector behavior on the target cluster. |
+| Second CockroachDB tool: Managed MCP | Planned, not yet submission-verified | The read-only **Town Archivist** workflow and scoped SQL views are documented, but a real Cloud Managed MCP OAuth investigation has not yet been recorded. |
+| AWS service | Designed, not yet deployed | CDK and GitHub Actions define an ECS/Fargate, ECR, ALB, Secrets Manager, and CloudWatch path; the current public demo is not running there. |
+| Amazon Bedrock inference | Adapter implemented, release-gated | The Bedrock provider and checks are present, but current production runs `BEDROCK_ENABLED=false` while access/preflight remain unresolved. |
+| Public functional demo | Available now | The linked demo is Azure Container Apps with CockroachDB Cloud and Azure-hosted inference. |
+| Open-source license | Not yet present | Add a root MIT or Apache-2.0 license before submitting; this is a Devpost requirement. |
 
-[`deploy-production.yml`](.github/workflows/deploy-production.yml) runs validation
-for pull requests and relevant pushes. A push to `main` builds the explicit
-`web` and `scheduler` Docker targets for `linux/amd64`, tags both images with the
-Git commit, and pushes them to ACR. It deploys the scheduler first, waits until
-its newest revision is ready, then deploys the web app and performs a public
-HTTP smoke test. Production deployments are serialized so two releases cannot
-race each other.
+This is intentionally candid: the repository should not be described as a
+complete CockroachDB × AWS Hackathon submission until the AWS deployment,
+Bedrock demonstration, Managed MCP workflow, and root license are complete.
+The current production architecture is Azure-based; the AWS architecture is a
+prepared deployment target, not a claim about the live demo.
 
-The deployment identity has only `Container Apps Contributor` and `AcrPush`.
-ACR's admin account is disabled; GitHub stores only the Azure client, tenant,
-and subscription identifiers needed for OIDC. Application credentials remain
-in Key Vault and are not copied into GitHub.
+## Run locally
 
-Production deployment builds a dedicated migration image and runs it with the
-DDL-capable migrator identity before either application service is updated. A
-failed migration blocks the rollout. The web and scheduler containers continue
-to use the restricted runtime database role and never receive migration credentials.
+### Prerequisites
 
-To start the same production workflow manually:
+- Node.js and npm
+- Docker Desktop
+- A local `.env`, copied from `.env.example`
+
+No cloud account is needed for the default local path. It uses deterministic
+stub inference.
 
 ```bash
-gh workflow run deploy-production.yml --ref main
-gh run watch
+npm ci
+npm run db:up
+cp .env.example .env
+npm run preflight
+npm run db:migrate -- --fresh
+npm run seed -- --seed 42
+npm run check
 ```
 
-## Design constraints
+Then choose one of the following:
 
-These are enforced, not aspirational — see `engine/schema.test.ts`.
+```bash
+npm run web                         # playable client on http://localhost:3000
+npm run scheduler                   # advances owned worlds
+npm run sim -- --ticks 360 --seed 42 # headless town run
+npm run repl                        # interactive simulation shell
+```
 
-- **No floating point in any rule.** Every simulation value is a fixed-point
-  integer on a scale of 10,000. Floats would make the simulation
-  machine-dependent, which would break replay and the determinism tests. Decay
-  tables are built by integer multiplication rather than `Math.exp`, which
-  carries no cross-platform guarantee.
-- **Every world is isolated by construction.** Composite foreign keys reference
-  `(world_id, entity_id)`, so a cross-world reference cannot be expressed. The
-  database rejects one in the test suite.
-- **Append-only history, rebuildable projections.** `agent_beliefs` is derived
-  from `belief_updates`; a test asserts a rebuild reproduces it exactly.
-- **Simulation time is always a tick.** `TIMESTAMPTZ` is operational metadata.
-  Product history survives garbage collection because it never depends on it —
-  `AS OF SYSTEM TIME` is a separate database-resilience demonstration.
-- **Scenario content is untrusted input.** The trigger DSL is a closed,
-  allowlisted grammar; scenario JSON is never evaluated as code.
-- **Model output never selects an effect.** A plan is a choice from an
-  engine-built allowlist; a speech act is one of ten known values; the claim a
-  player is talking about is resolved by the engine from its own data rather
-  than by asking a model for an identifier. An injection corpus is part of the
-  test suite.
-- **Peace is decided by rules, never announced by a model.** Conversation moves
-  the inputs — willingness, tension, rumor heat — and the tick decides what they
-  add up to. Escalation stages advance in exactly one place, which is what makes
-  "never reverses" a property of the code rather than a convention.
-- **No inference inside a transaction.** A serialization retry would re-bill the
-  model call and could duplicate streamed output, so a tick thinks first with
-  nothing open and then commits what it decided.
+`npm run preflight` is a compatibility gate, not a cosmetic check. It validates
+vector indexing, serializable isolation, and `AS OF SYSTEM TIME` behavior on
+the database you intend to use. Run it against every new CockroachDB Cloud
+cluster before deploying.
 
-## Three findings worth knowing
+For a fuller validation pass:
 
-**A correct query can silently stop using the vector index.** CockroachDB needs
-table statistics before it will choose one, the opclass must match the operator
-(`vector_cosine_ops` ↔ `<=>`), and the query vector must be a bound parameter —
-a subquery defeats it entirely. In every failing case the *results stay correct*.
-Retrieval tests therefore assert the query plan. See `docs/preflight-findings.md`.
+```bash
+npm run check:full
+```
 
-**IAM permission and Bedrock model access are independent gates.**
-`AmazonBedrockFullAccess` plus working credentials still yields
-`Operation not allowed` if the model is not authorized for the account, and
-`list-foundation-models` succeeding proves nothing about invoking them. See
-`docs/aws-setup.md`.
+Provider-specific checks are intentionally separate because they require
+credentials and/or enabled provider access:
 
-**Ordering a rule query on a random UUID is a determinism bug that passes every
-result assertion.** Three separate ones surfaced here — rumors ordered by
-`rumor_id`, agents by `agent_id`, route adjacency by `location_id`. Each gave
-correct results, and each produced a *different town* from the same seed,
-because the seeded generator is consumed in iteration order. Rule-feeding
-queries order on scenario keys, never on ids. The same class of bug bit the RNG
-itself: a draw conditioned on how many rows the approximate vector index
-returned made two runs of one seed diverge under load. See the status section of
-`docs/plan.md`.
+```bash
+npm run check:azure
+npm run check:bedrock
+```
+
+See [`docs/aws-setup.md`](docs/aws-setup.md) for Bedrock configuration and
+access troubleshooting. A failed provider check must not be represented as a
+working inference deployment.
+
+## Production deployments
+
+### Current public deployment
+
+The public demo runs the web process and scheduler as separate **Azure Container
+Apps**, with CockroachDB Cloud as the database and Azure-hosted inference. The
+production workflow builds dedicated web, scheduler, and migration images;
+runs migrations before service rollout; deploys the scheduler before the web
+service; and performs a public HTTP smoke test.
+
+Secrets are supplied through Azure Key Vault references and managed identity.
+The runtime database role is restricted; migrations use a separate DDL-capable
+identity.
+
+### Prepared AWS path — not live yet
+
+[`infra/aws/`](infra/aws/) contains the CDK definition for a public ALB, ECR
+repositories, ECS/Fargate web and scheduler services, a migration task,
+Secrets Manager injection, least-privilege task roles, CloudWatch logs and
+alarms, and GitHub OIDC delivery. The associated
+[`deploy-aws.yml`](.github/workflows/deploy-aws.yml) validates the application
+and infrastructure, then—only when deployment is explicitly enabled—would
+publish immutable images, run the migration, roll out the scheduler and web
+services, and check `/api/health`, `/api/ready`, and the landing page.
+
+It has not been deployed as the live hackathon environment. Do not use the AWS
+diagram or CDK source to imply that ECS, Bedrock, or Managed MCP are operating
+in the current public demo.
+
+## Town Archivist: the planned second CockroachDB tool
+
+The Town Archivist is a deliberately read-only investigation workflow for one
+explicitly selected world. It is designed to trace a single claim through:
+
+```text
+originating conversation or event
+  → durable memory
+  → retrieval/access record
+  → later cognition or dialogue outcome
+```
+
+The workflow uses world-scoped stable views and must retain the selected
+`world_id` in every query. It never exposes embeddings, hidden prompts, provider
+configuration, or cross-world data. The intended Cloud Managed MCP connection
+uses HTTPS and OAuth with `mcp:read` only; the repository's SQL
+`hollowmere_reader` role is not an MCP credential.
+
+Read the exact query and prompt contract in
+[`docs/town-archivist.md`](docs/town-archivist.md). Until that Cloud MCP flow is
+performed against the demo cluster, it remains a documented workflow rather
+than completed submission evidence.
+
+## Engineering constraints
+
+These are enforced in the codebase and test suite rather than left as
+conventions:
+
+- **No floating-point simulation rules.** Values are fixed-point integers on a
+  10,000 scale so runs are reproducible across machines.
+- **World isolation by construction.** Composite foreign keys bind records to
+  `(world_id, entity_id)` and reject cross-world references.
+- **Append-only history, rebuildable projections.** Beliefs derive from
+  updates, and tests check that rebuilding matches the live projection.
+- **Model output cannot select arbitrary effects.** The engine owns identifiers,
+  actions, and rule consequences; the model operates within an allowlist.
+- **No inference in a retryable transaction.** Thinking happens before the
+  database transaction, preventing duplicate model calls during serialization
+  retries.
+- **Safe degraded behavior.** Stub and replay modes are first-class paths, and
+  provider failures do not fabricate grounded evidence.
+
+## Two operational lessons this project surfaced
+
+**Correct retrieval results do not prove indexed retrieval.** CockroachDB needs
+current statistics, a matching `vector_cosine_ops` operator class, and a bound
+query vector to choose the intended vector index. A query can return the right
+rows while silently doing the wrong work. Hollowmere's preflight and retrieval
+tests therefore inspect the query plan.
+
+**Determinism requires ordered inputs, not only a seeded RNG.** Rules that
+iterate over random UUID ordering can consume seeded randomness differently and
+produce a different town from the same seed. Rule-feeding queries in the engine
+use scenario keys rather than generated IDs.
+
+More findings and their evidence are in
+[`docs/preflight-findings.md`](docs/preflight-findings.md) and
+[`docs/observability.md`](docs/observability.md).
+
+## Further reading
+
+- [Hackathon product requirements](docs/hackathon-prd.md)
+- [Hackathon specification](docs/hackathon-spec.md)
+- [Hackathon build checklist](docs/hackathon-checklist.md)
+- [AWS pre-deployment gate](docs/aws-predeployment-runbook.md)
+- [Town Archivist query guide](docs/town-archivist.md)
+- [CockroachDB and Bedrock setup](docs/aws-setup.md)
+- [Operational logging](docs/observability.md)
 
 ## Attribution
 
-The escalation dynamics — accusation, hysteria, factional hardening — are
-inspired by Arthur Miller's *The Crucible*. The town, characters, and all text
-are original; no part of Miller's work is reproduced.
+The escalation dynamics—accusation, hysteria, and factional hardening—are
+inspired by Arthur Miller's *The Crucible*. The town, characters, story, and
+text are original; no part of Miller's work is reproduced.
 
-Agent architecture (perceive → retrieve → reflect → plan) follows the pattern
-established by Park et al., *Generative Agents* (2023).
+The agent loop (perceive → retrieve → reflect → plan) follows the pattern
+described by Park et al., *Generative Agents* (2023).
