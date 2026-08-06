@@ -32,6 +32,99 @@ const STAGE_THRESHOLDS = [
   { name: 'war', value: 9_400 },
 ] as const;
 
+const CONVERSATION_PROMPTS = [
+  {
+    category: 'Read the room',
+    label: 'What changed?',
+    text: 'What has changed in Hollowmere since I arrived, and who is most worried about it?',
+  },
+  {
+    category: 'Read the room',
+    label: 'Who is afraid?',
+    text: 'Who in town is afraid to speak plainly right now, and what are they protecting?',
+  },
+  {
+    category: 'Read the room',
+    label: 'Name the fault line',
+    text: 'Where is the real division in town: between people, houses, or competing versions of the truth?',
+  },
+  {
+    category: 'Read the room',
+    label: 'What is being missed?',
+    text: 'What are people watching closely while something more important goes unnoticed?',
+  },
+  {
+    category: 'Follow a lead',
+    label: 'Start with what you saw',
+    text: 'Tell me exactly what you saw, in order. Leave out what you only heard later.',
+  },
+  {
+    category: 'Follow a lead',
+    label: 'Separate rumor from fact',
+    text: 'Which part of this story do you know for yourself, and which part came to you through someone else?',
+  },
+  {
+    category: 'Follow a lead',
+    label: 'Find the first source',
+    text: 'Who first put this story into circulation, as far as you know?',
+  },
+  {
+    category: 'Follow a lead',
+    label: 'Ask about the gap',
+    text: 'There is a missing piece in this account. What happened just before everyone started telling the same version?',
+  },
+  {
+    category: 'Follow a lead',
+    label: 'Test the evidence',
+    text: 'I found something that may matter. What would convince you it is genuine, and who would know if it was altered?',
+  },
+  {
+    category: 'Follow a lead',
+    label: 'Find a witness',
+    text: 'If I needed one person who could confirm or disprove this, who should I speak to next?',
+  },
+  {
+    category: 'Build trust',
+    label: 'Offer practical help',
+    text: 'You seem to be carrying more than you can safely say. What can I do that would actually help?',
+  },
+  {
+    category: 'Build trust',
+    label: 'Ask what they need',
+    text: 'What would need to change for you to feel safe speaking openly with me?',
+  },
+  {
+    category: 'Build trust',
+    label: 'Hear their stakes',
+    text: 'What do you stand to lose if this gets worse?',
+  },
+  {
+    category: 'Build trust',
+    label: 'Ask for counsel',
+    text: 'You know this town better than I do. If you were in my place, where would you be careful?',
+  },
+  {
+    category: 'Apply pressure',
+    label: 'Challenge the story',
+    text: 'Your account does not quite fit what I have heard elsewhere. What are you leaving out?',
+  },
+  {
+    category: 'Apply pressure',
+    label: 'Name the risk',
+    text: 'If this version of events is wrong, who benefits from the town believing it?',
+  },
+  {
+    category: 'Apply pressure',
+    label: 'Ask for a choice',
+    text: 'If you had to choose between protecting someone and telling the truth, which would you choose?',
+  },
+  {
+    category: 'Apply pressure',
+    label: 'Set a boundary',
+    text: 'I will not spread a claim I cannot support. Tell me what you can stand behind.',
+  },
+] as const;
+
 function evidenceMeaning(item: GameSnapshot['evidence'][number]): string {
   if (item.manufactured) return 'This is a player-made record. It may persuade people, but it cannot prove the case.';
   switch (item.role) {
@@ -848,12 +941,13 @@ export function DebugClient({
         </div>
         <div className={`reply ${sending ? 'reply-listening' : ''}`}>{reply || (sending ? `${conversation.agentName} considers your words…` : conversation.turns.length ? 'Their answer hangs between you.' : 'They wait to learn why you approached.')}</div>
         <div className="conversation-approaches" role="group" aria-label="Conversation approaches">
-          <span>Approach</span>
-          {[
-            ['Ask what they saw', 'What have you seen here that others might have missed?'],
-            ['Offer help', 'You seem burdened. Is there something I can help you set right?'],
-            ['Challenge a rumor', 'I have heard stories moving through town. Which one do you believe is dangerous?'],
-          ].map(([label, prompt]) => <button type="button" key={label} disabled={sending} onClick={() => setUtterance(prompt)}>{label}</button>)}
+          <span>Conversation starters</span>
+          <div className="conversation-prompt-groups">
+            {Array.from(new Set(CONVERSATION_PROMPTS.map((prompt) => prompt.category))).map((category) => <section className="conversation-prompt-group" key={category} aria-label={category}>
+              <b>{category}</b>
+              <div>{CONVERSATION_PROMPTS.filter((prompt) => prompt.category === category).map((prompt) => <button type="button" key={prompt.label} disabled={sending} onClick={() => setUtterance(prompt.text)}>{prompt.label}</button>)}</div>
+            </section>)}
+          </div>
         </div>
         <form onSubmit={sendDialogue}><textarea value={utterance} onChange={(event) => setUtterance(event.target.value)} maxLength={2000} autoFocus placeholder="Choose your words…" /><button disabled={sending || !utterance.trim()}>{sending ? 'Listening…' : 'Speak'}</button></form>
       </div>
