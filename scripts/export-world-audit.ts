@@ -20,8 +20,8 @@ const pool = new pg.Pool({
   application_name: 'hollowmere-world-audit',
 });
 
-async function rows(text: string, values: readonly unknown[]) {
-  return (await pool.query(text, values)).rows;
+async function rows<T extends pg.QueryResultRow = pg.QueryResultRow>(text: string, values: unknown[]): Promise<T[]> {
+  return (await pool.query<T>(text, values)).rows;
 }
 
 try {
