@@ -91,6 +91,14 @@ export interface HearingView {
   commitments: HearingCommitmentView[];
 }
 
+export interface InvestigationLeadView {
+  role: 'tamper_sign' | 'tamper_comparator' | 'culprit_access'
+    | 'murder_opportunity' | 'escalation_provenance';
+  holderKey: string | null;
+  holderName: string | null;
+  complete: boolean;
+}
+
 export interface GameSnapshot {
   world: WorldSummary;
   player: PlayerView;
@@ -100,6 +108,7 @@ export interface GameSnapshot {
   evidence: EvidenceView[];
   playerRumors: PlayerRumorView[];
   hearings: HearingView[];
+  investigationGuide?: InvestigationLeadView[];
   cognition: CognitionView[];
   metrics: TickMetrics[];
   conversation: ConversationView | null;
@@ -321,7 +330,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
 
   const [
     agents, factions, claims, cognition, metrics, reputations, pending, evidence,
-    hearings, romances, conversation, capabilities, playerRumors,
+    hearings, romances, conversation, capabilities, playerRumors, investigationGuide,
   ] =
     await Promise.all([
       listAgents(ref.worldId),
@@ -349,6 +358,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
       getHeldConversation(ref),
       getCapabilities(),
       getPlayerRumors(ref),
+      readInvestigationGuide(ref, session.playerId),
     ]);
 
   return {
@@ -370,6 +380,7 @@ export async function getGameSnapshot(ref: SessionRef): Promise<GameSnapshot> {
     evidence,
     playerRumors,
     hearings,
+    investigationGuide,
     cognition,
     metrics,
     conversation,
@@ -991,6 +1002,38 @@ async function readEvidence(
     credibility: row.credibility,
     discoveredTick: row.discovered_tick,
     ...(includeTruth ? { genuine: row.genuine } : {}),
+  }));
+}
+
+/** Player-facing case trail: names witnesses without exposing hidden case truth. */
+async function readInvestigationGuide(
+  ref: SessionRef,
+  playerId: string,
+): Promise<InvestigationLeadView[]> {
+  const rows = await optionalQuery<{
+    role: InvestigationLeadView['role']; holder_key: string | null; holder_name: string | null;
+    complete: boolean;
+  }>(
+    `SELECT definition.role, holder.agent_key AS holder_key, holder.name AS holder_name,
+            EXISTS (
+              SELECT 1 FROM world_player_evidence evidence
+               WHERE evidence.world_id = definition.world_id AND evidence.player_id = $2
+                 AND evidence.role = definition.role AND evidence.genuine AND NOT evidence.manufactured
+            ) AS complete
+       FROM world_case_evidence definition
+       LEFT JOIN world_agents holder
+         ON holder.world_id = definition.world_id AND holder.agent_id = definition.holder_agent_id
+      WHERE definition.world_id = $1
+      ORDER BY CASE definition.role
+        WHEN 'tamper_sign' THEN 0 WHEN 'tamper_comparator' THEN 1
+        WHEN 'culprit_access' THEN 2 WHEN 'murder_opportunity' THEN 3 ELSE 4 END`,
+    [ref.worldId, playerId],
+  );
+  return rows.map((row) => ({
+    role: row.role,
+    holderKey: row.holder_key,
+    holderName: row.holder_name,
+    complete: row.complete,
   }));
 }
 

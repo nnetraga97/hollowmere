@@ -65,6 +65,14 @@ export interface HearingView {
   commitments: { agentKey: string; response: string; status: string; dueTick: number }[];
 }
 
+export interface InvestigationLead {
+  role: 'tamper_sign' | 'tamper_comparator' | 'culprit_access'
+    | 'murder_opportunity' | 'escalation_provenance';
+  holderKey: string | null;
+  holderName: string | null;
+  complete: boolean;
+}
+
 export interface ConversationTurn {
   turnId: string; ordinal: number; playerText: string; reply: string;
   speechAct: string; referencedClaimKeys: string[];
@@ -108,6 +116,7 @@ export interface GameSnapshot {
   evidence: EvidenceView[];
   playerRumors: PlayerRumor[];
   hearings: HearingView[];
+  investigationGuide?: InvestigationLead[];
   cognition: {
     tick: number; agentKey: string; modelId: string; promptVersion: string;
     decision: Record<string, unknown>; latencyMs: number;

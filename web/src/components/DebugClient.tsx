@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Anchor, ArrowRight, BookOpen, ChevronDown, CircleDashed, FileSearch, Heart, LogOut, Map, Network, Pause, Play, Scale, Square, UserRound, Wheat, X } from 'lucide-react';
+import { Anchor, ArrowRight, BookOpen, ChevronDown, CircleDashed, FileSearch, Heart, Info, LogOut, Map, Network, Pause, Play, Scale, Square, UserRound, Wheat, X } from 'lucide-react';
 
 import { EventBus } from '@/game/EventBus';
 import { atlasPosition, portraitPath, relationshipLevel } from '@/game/locationScenes';
@@ -22,7 +22,7 @@ import { LandingScreen } from './LandingScreen';
 import { MemoryTrace } from './MemoryTrace';
 import { WorldSelectionScreen } from './WorldSelectionScreen';
 
-type PanelName = 'overview' | 'chronicle' | 'graph' | 'evidence' | 'hearings' | 'profile' | 'agent' | null;
+type PanelName = 'overview' | 'chronicle' | 'graph' | 'guide' | 'evidence' | 'hearings' | 'profile' | 'agent' | null;
 
 const STAGE_THRESHOLDS = [
   { name: 'suspicion', value: 1_500 },
@@ -142,6 +142,29 @@ function evidenceMeaning(item: GameSnapshot['evidence'][number]): string {
       return 'Keep this alongside other evidence before deciding what the town should believe.';
   }
 }
+
+const CASE_LEAD_COPY = {
+  tamper_sign: {
+    title: 'Inspect the notebook',
+    prompt: 'Study the notebook for a physical sign that its pages were changed.',
+  },
+  tamper_comparator: {
+    title: 'Find an independent comparison',
+    prompt: 'Ask what record can show whether the notebook pages are original or reordered.',
+  },
+  culprit_access: {
+    title: 'Trace access to the notebook',
+    prompt: 'Ask who had access to Edryc’s notebook during the possible tampering window.',
+  },
+  murder_opportunity: {
+    title: 'Establish the final sighting',
+    prompt: 'Ask who saw Edryc after Father Ansel last saw him alive.',
+  },
+  escalation_provenance: {
+    title: 'Trace the accusation’s first source',
+    prompt: 'Ask who first brought the murder accusation to you, and where they heard it.',
+  },
+} as const;
 
 function EvidenceCard({
   item, claim, focused,
@@ -855,7 +878,7 @@ export function DebugClient({
     <nav className="toolrail" data-tweak-id="town-toolrail" aria-label="Debug instruments">
       {([
         ['overview', 'Overview', Map], ['chronicle', 'Chronicle', BookOpen], ['graph', 'Graph', Network],
-        ['evidence', 'Evidence', FileSearch], ['hearings', 'Summons', Scale],
+        ['guide', 'Info', Info], ['evidence', 'Evidence', FileSearch], ['hearings', 'Summons', Scale],
       ] as const).map(([name, label, Icon]) => <button key={name} aria-label={label} title={label} aria-pressed={panel === name} onClick={() => setPanel(panel === name ? null : name)}><Icon size={19} strokeWidth={1.6} aria-hidden="true" /><span>{label}</span></button>)}
       <div className="rail-spacer" />
       <button className="profile-rail-button" aria-label="Player record" title="Player record" aria-pressed={panel === 'profile'} onClick={() => setPanel(panel === 'profile' ? null : 'profile')}><UserRound size={19} strokeWidth={1.6} aria-hidden="true" /><span>You</span></button>
@@ -878,6 +901,34 @@ export function DebugClient({
 
     {panel === 'chronicle' && <Panel title="Chronicle" onClose={() => setPanel(null)}>{chronicle.map((entry) => <article className={`chronicle kind-${entry.kind}`} key={`${entry.tick}-${entry.seq}`}><time>t{entry.tick}</time><div><b>{entry.kind}</b><p>{entry.description}</p><small>{entry.actorKey ?? 'world'} · {entry.locationKey ?? 'town-wide'}</small></div></article>)}</Panel>}
     {panel === 'graph' && <Panel title="Social graph" onClose={() => setPanel(null)} wide>{graph ? <SocialGraphView graph={graph} /> : <p className="empty">Loading relationships…</p>}</Panel>}
+    {panel === 'guide' && <Panel title="Investigation guide" onClose={() => setPanel(null)} wide>
+      <p className="guide-intro">Build a case before you name a culprit. Ask for observations, records, and sources; an accusation alone cannot resolve the murder.</p>
+      <section className="guide-section">
+        <span className="eyebrow">Evidence trail</span>
+        <h3>Ask the right question</h3>
+        <div className="guide-leads">
+          {(game.investigationGuide ?? []).map((lead) => {
+            const copy = CASE_LEAD_COPY[lead.role];
+            return <article className={lead.complete ? 'guide-lead complete' : 'guide-lead'} key={lead.role}>
+              <header><b>{copy.title}</b><span>{lead.complete ? 'recorded' : 'next lead'}</span></header>
+              {lead.holderName && <p><strong>Speak with {lead.holderName}.</strong> {copy.prompt}</p>}
+              {!lead.holderName && <p>{copy.prompt}</p>}
+            </article>;
+          })}
+          {!game.investigationGuide?.length && <p className="empty">Evidence leads will appear once this town’s case is prepared.</p>}
+        </div>
+      </section>
+      <section className="guide-section hearing-guide">
+        <span className="eyebrow">When the case is complete</span>
+        <h3>Bring the verdict to a hearing</h3>
+        <ol>
+          <li>Summon the magistrate and senior representatives of both Houses to the same location.</li>
+          <li>Wait until the hearing is active, then go to that location yourself.</li>
+          <li>State the complete verdict as an accusation. The hearing must show a queued reveal before it can decide the case.</li>
+        </ol>
+        <p className="notice">A hearing only affects the people who agreed to attend and arrive. Check Summons before the due tick; an abandoned hearing cannot deliver a verdict.</p>
+      </section>
+    </Panel>}
     {panel === 'evidence' && <Panel title="Evidence ledger" onClose={() => { setEvidenceFocusId(null); setPanel(null); }} wide>
       {!game.capabilities.evidence && <p className="notice">The instigator engine tables are not installed in this worktree yet. This panel will activate after integration.</p>}
       <div className="evidence-counts">{[
